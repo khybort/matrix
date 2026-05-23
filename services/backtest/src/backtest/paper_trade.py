@@ -1,39 +1,57 @@
-"""Paper-trade engine.
+"""Paper-trade engine, wallet-aware with risk-cap enforcement.
 
-Watches `predictions` table. For each open prediction with no PaperPosition,
-opens a synthetic position at the current best price for the symbol. When
-`close_by` passes, marks it out at the then-current price and writes Outcome.
+Lifecycle:
+    open_due_positions:
+        - find open predictions with no PaperPosition yet
+        - load default wallet
+        - enforce risk: circuit-breaker, max concurrent, max position pct
+        - reserve notional from wallet.cash → locked
+        - create PaperPosition
+    close_due_positions:
+        - find PaperPositions whose Prediction.close_by has passed
+        - mark out at current best price (with slippage)
+        - free locked notional, credit/debit pnl to cash
+        - write Outcome with normalized score
+    snapshot_wallet:
+        - on every tick, compute current equity (cash + locked + unrealized)
+        - write WalletSnapshot
+        - check daily-loss circuit breaker; trip if breached
 
-Pricing: uses the most recent `market_trades` row for the symbol/exchange.
-If no trade is available within FRESHNESS_S, the prediction is skipped
-(we'd be filling on stale data).
-
-This is intentionally tiny. Realism (slippage, fees, multiple fills,
-funding-rate accrual) is for later.
+The risk parameters on the wallet row are static. They are configured at
+seed time (or via explicit user/admin action) and are NEVER mutated by
+the reflection agent. See docs/TRADING.md.
 """
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from matrix_shared import session_scope
-from matrix_shared.models import MarketTrade, Outcome, PaperPosition, Prediction
+from matrix_shared.models import (
+    MarketTrade,
+    Outcome,
+    PaperPosition,
+    Prediction,
+    Wallet,
+    WalletSnapshot,
+)
 
-NOTIONAL_USD = Decimal("100")  # tiny fixed notional per signal
+DEFAULT_WALLET_ID = uuid.UUID("00000000-0000-0000-0000-00000000d0e1")
 FRESHNESS_S = 60
-SLIPPAGE_BPS = Decimal("2")  # 2 bps each side as a placeholder cost
+SLIPPAGE_BPS = Decimal("2")
+SCORE_CAP_PCT = Decimal("0.01")  # ±1% horizon caps the score at ±1
 
 
 async def _latest_price(symbol: str) -> Decimal | None:
-    """Return the most recent trade price within FRESHNESS_S seconds."""
     cutoff = datetime.now(UTC) - timedelta(seconds=FRESHNESS_S)
     async with session_scope() as session:
         stmt = (
-            select(MarketTrade.price, MarketTrade.trade_ts)
+            select(MarketTrade.price)
             .where(MarketTrade.symbol == symbol)
             .where(MarketTrade.trade_ts >= cutoff)
             .order_by(MarketTrade.trade_ts.desc())
@@ -44,54 +62,182 @@ async def _latest_price(symbol: str) -> Decimal | None:
 
 
 def _apply_slippage(price: Decimal, side: str, *, opening: bool) -> Decimal:
-    """Open: pay the spread. Close: pay the spread the other way."""
     bps = SLIPPAGE_BPS / Decimal("10000")
     if opening:
         return price * (Decimal("1") + bps) if side == "long" else price * (Decimal("1") - bps)
+    return price * (Decimal("1") - bps) if side == "long" else price * (Decimal("1") + bps)
+
+
+def _unrealized_pnl(pos: PaperPosition, mark: Decimal) -> Decimal:
+    if pos.side == "long":
+        pnl_pct = (mark - pos.opened_price) / pos.opened_price
     else:
-        return price * (Decimal("1") - bps) if side == "long" else price * (Decimal("1") + bps)
+        pnl_pct = (pos.opened_price - mark) / pos.opened_price
+    return pos.notional_usd * pnl_pct
+
+
+async def _check_and_maybe_reset_day(wallet: Wallet, equity_now: Decimal) -> None:
+    """If a new UTC day has begun, reset day_start values and (if previously
+    tripped due to daily loss) un-trip the circuit. Manual ops can override
+    this by editing the wallet row directly."""
+    now = datetime.now(UTC)
+    day_start = wallet.day_start_at
+    if day_start.tzinfo is None:
+        day_start = day_start.replace(tzinfo=UTC)
+    if now.date() != day_start.date():
+        wallet.day_start_at = now
+        wallet.day_start_equity = equity_now
+        # daily reset auto-untrips
+        if wallet.circuit_tripped_at is not None:
+            logger.info(f"wallet {wallet.name}: daily reset; circuit untripped")
+            wallet.circuit_tripped_at = None
+
+
+def _circuit_should_trip(wallet: Wallet, equity_now: Decimal) -> bool:
+    """Daily-loss circuit breaker. equity_now is current marked equity."""
+    day_start = wallet.day_start_equity
+    if day_start <= 0:
+        return False
+    drop = (day_start - equity_now) / day_start
+    return drop >= wallet.daily_loss_circuit_pct
+
+
+async def _current_equity(session, wallet: Wallet) -> tuple[Decimal, Decimal, int]:
+    """Returns (equity, unrealized_pnl, n_open_positions)."""
+    open_stmt = select(PaperPosition).where(
+        PaperPosition.wallet_id == wallet.id, PaperPosition.status == "open"
+    )
+    open_positions = list((await session.execute(open_stmt)).scalars())
+
+    unrealized = Decimal("0")
+    for pos in open_positions:
+        mark = await _latest_price(pos.symbol)
+        if mark is None:
+            continue
+        unrealized += _unrealized_pnl(pos, mark)
+
+    equity = wallet.cash_usd + wallet.locked_usd + unrealized
+    return equity, unrealized, len(open_positions)
+
+
+async def snapshot_wallet() -> None:
+    """Write WalletSnapshot for the default wallet; handle circuit breaker."""
+    async with session_scope() as session:
+        wallet = await session.get(Wallet, DEFAULT_WALLET_ID)
+        if wallet is None:
+            logger.warning("default wallet not found, cannot snapshot")
+            return
+
+        equity, unrealized, n_open = await _current_equity(session, wallet)
+        await _check_and_maybe_reset_day(wallet, equity)
+
+        realized = wallet.cash_usd + wallet.locked_usd - wallet.starting_capital_usd
+
+        session.add(
+            WalletSnapshot(
+                wallet_id=wallet.id,
+                snapshot_ts=datetime.now(UTC),
+                equity_usd=equity,
+                cash_usd=wallet.cash_usd,
+                locked_usd=wallet.locked_usd,
+                n_open_positions=n_open,
+                realized_pnl_usd=realized,
+                unrealized_pnl_usd=unrealized,
+            )
+        )
+
+        if wallet.circuit_tripped_at is None and _circuit_should_trip(wallet, equity):
+            wallet.circuit_tripped_at = datetime.now(UTC)
+            logger.warning(
+                f"DAILY LOSS CIRCUIT TRIPPED for wallet {wallet.name}: "
+                f"day_start={wallet.day_start_equity:.2f} equity={equity:.2f}"
+            )
 
 
 async def open_due_positions() -> int:
-    """Open positions for predictions that have none yet."""
+    """Open positions for predictions that have none yet, respecting risk caps."""
     async with session_scope() as session:
-        # find predictions without a position
-        stmt = (
+        wallet = await session.get(Wallet, DEFAULT_WALLET_ID)
+        if wallet is None:
+            logger.warning("default wallet missing")
+            return 0
+
+        if wallet.circuit_tripped_at is not None:
+            logger.debug("circuit tripped; opening blocked")
+            return 0
+
+        # count current open positions
+        open_count_stmt = (
+            select(func.count(PaperPosition.id))
+            .where(PaperPosition.wallet_id == wallet.id)
+            .where(PaperPosition.status == "open")
+        )
+        open_count = (await session.execute(open_count_stmt)).scalar_one()
+        slots_left = wallet.max_concurrent_positions - open_count
+        if slots_left <= 0:
+            return 0
+
+        equity, _unrealized, _n = await _current_equity(session, wallet)
+        max_notional = equity * wallet.max_position_pct
+
+        pred_stmt = (
             select(Prediction)
             .outerjoin(PaperPosition, PaperPosition.prediction_id == Prediction.id)
             .where(PaperPosition.id.is_(None))
             .where(Prediction.status == "open")
             .where(Prediction.side.in_(["long", "short"]))
+            .order_by(Prediction.generated_at.asc())
+            .limit(slots_left)
         )
-        rows = (await session.execute(stmt)).scalars().all()
+        candidates = list((await session.execute(pred_stmt)).scalars())
 
     opened = 0
-    for p in rows:
+    for p in candidates:
         last_px = await _latest_price(p.symbol)
         if last_px is None:
             logger.debug(f"skip {p.id}: no fresh price for {p.symbol}")
             continue
         entry = _apply_slippage(last_px, p.side, opening=True)
+
+        # Notional sized as max_position_pct of equity, optionally scaled by
+        # prediction confidence (within bounds). Never exceeds max_notional.
+        conf = max(Decimal("0.2"), min(Decimal("1.0"), p.confidence))
+        notional = max_notional * conf
+        notional = notional.quantize(Decimal("0.01"))
+
         async with session_scope() as session:
+            wallet = await session.get(Wallet, DEFAULT_WALLET_ID)
+            if wallet is None:
+                continue
+            if wallet.circuit_tripped_at is not None:
+                continue
+            if wallet.cash_usd < notional:
+                logger.info(f"skip {p.id}: insufficient cash ({wallet.cash_usd:.2f} < {notional})")
+                continue
+            wallet.cash_usd -= notional
+            wallet.locked_usd += notional
             session.add(
                 PaperPosition(
+                    wallet_id=wallet.id,
                     prediction_id=p.id,
                     symbol=p.symbol,
                     exchange=p.exchange,
                     side=p.side,
-                    notional_usd=NOTIONAL_USD,
+                    notional_usd=notional,
                     opened_at=datetime.now(UTC),
                     opened_price=entry,
                     status="open",
                 )
             )
         opened += 1
-        logger.info(f"opened paper {p.side} {p.symbol} @ {entry:.4f} (pred={p.id})")
+        logger.info(
+            f"opened {p.side} {p.symbol} notional={notional:.2f} entry={entry:.4f} "
+            f"(pred={p.id}, strat={p.strategy_id}v{p.strategy_version})"
+        )
     return opened
 
 
 async def close_due_positions() -> int:
-    """Close positions whose prediction horizon has elapsed."""
     now = datetime.now(UTC)
     async with session_scope() as session:
         stmt = (
@@ -106,20 +252,15 @@ async def close_due_positions() -> int:
     for pos, pred in rows:
         last_px = await _latest_price(pos.symbol)
         if last_px is None:
-            logger.debug(f"skip close {pos.id}: no fresh price for {pos.symbol}")
             continue
         exit_px = _apply_slippage(last_px, pos.side, opening=False)
-        # PnL for fixed notional
         if pos.side == "long":
             pnl_pct = (exit_px - pos.opened_price) / pos.opened_price
         else:
             pnl_pct = (pos.opened_price - exit_px) / pos.opened_price
         pnl_usd = pos.notional_usd * pnl_pct
-
-        # score: simple sigmoid-ish mapping of pnl_pct to [-1, 1]
-        # cap returns at +/-1% horizon to avoid one-outlier domination
-        capped_pct = max(min(pnl_pct, Decimal("0.01")), Decimal("-0.01"))
-        score = capped_pct / Decimal("0.01")  # in [-1, 1]
+        capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
+        score = capped / SCORE_CAP_PCT
 
         async with session_scope() as session:
             pos_db = await session.get(PaperPosition, pos.id)
@@ -130,6 +271,11 @@ async def close_due_positions() -> int:
 
             pred_db = await session.get(Prediction, pred.id)
             pred_db.status = "closed"
+
+            wallet = await session.get(Wallet, pos_db.wallet_id)
+            if wallet is not None:
+                wallet.locked_usd -= pos_db.notional_usd
+                wallet.cash_usd += pos_db.notional_usd + pnl_usd  # principal back + PnL
 
             session.add(
                 Outcome(
@@ -143,7 +289,7 @@ async def close_due_positions() -> int:
             )
         closed += 1
         logger.info(
-            f"closed paper {pos.side} {pos.symbol} entry={pos.opened_price:.4f} "
+            f"closed {pos.side} {pos.symbol} entry={pos.opened_price:.4f} "
             f"exit={exit_px:.4f} pnl={pnl_usd:.4f}USD ({pnl_pct*100:.3f}%) "
             f"score={score:.3f}"
         )
