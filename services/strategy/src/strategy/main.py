@@ -19,6 +19,8 @@ import sys
 from loguru import logger
 
 from strategy.base import PredictionDraft
+from strategy.modules.funding_reversion import FundingReversion
+from strategy.modules.oi_delta import OiDelta
 from strategy.modules.trade_flow_imbalance import TradeFlowImbalance
 from strategy.persist import persist_drafts
 
@@ -26,7 +28,7 @@ DEFAULT_INTERVAL_S = 30.0
 
 
 def _registered_strategies() -> list:
-    return [TradeFlowImbalance()]
+    return [TradeFlowImbalance(), FundingReversion(), OiDelta()]
 
 
 async def _tick() -> int:
