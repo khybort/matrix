@@ -19,7 +19,7 @@ import sys
 
 from loguru import logger
 
-from backtest.paper_trade import close_due_positions, open_due_positions
+from backtest.paper_trade import close_due_positions, open_due_positions, snapshot_wallet
 
 DEFAULT_INTERVAL_S = 10.0
 
@@ -27,6 +27,7 @@ DEFAULT_INTERVAL_S = 10.0
 async def _tick() -> tuple[int, int]:
     opened = await open_due_positions()
     closed = await close_due_positions()
+    await snapshot_wallet()
     return opened, closed
 
 
