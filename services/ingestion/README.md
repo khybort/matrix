@@ -2,33 +2,58 @@
 
 Market data, news, and filings ingestion. Pluggable per-source connectors.
 
-**Owner:** Machine A (Cortex)
 **Language:** Python 3.13
+**Tier:** Phase 1
 
-## Initial connectors (priority order)
+## Currently implemented
 
-1. **SEC EDGAR** — US filings (10-K, 10-Q, 8-K, 4). Free, rich, LLM-friendly.
-2. **News RSS aggregate** — Yahoo Finance / Seeking Alpha / Bloomberg headline feeds
-3. **Finnhub free tier** — earnings calendar, basic fundamentals
-4. **Crypto** — CoinGecko free + a public on-chain RPC (later phase)
+- **Bybit V5 public WebSocket** — testnet by default, streams `publicTrade.<SYMBOL>` for any USDT-perpetual
 
-## Contract
-
-Every connector implements:
-
-```python
-class Connector(Protocol):
-    name: str
-    async def discover(self, since: datetime) -> list[DocumentRef]: ...
-    async def fetch(self, ref: DocumentRef) -> RawDocument: ...
-```
-
-Outputs land in `raw_documents` table; `services/graph` picks them up async.
-
-## Setup (when scaffolded)
+## Setup
 
 ```bash
-cd services/ingestion
+# from repo root, first time only:
+docker compose up -d
+cd infra/db && uv sync && uv run alembic upgrade head
+
+# then in this service:
+cd ../../services/ingestion
 uv sync
+
+# run (defaults: BTCUSDT on testnet)
 uv run python -m ingestion.main
+# or with custom symbols
+uv run python -m ingestion.main BTCUSDT ETHUSDT SOLUSDT
 ```
+
+Press Ctrl+C to stop cleanly.
+
+## Verifying it works
+
+After running for ~30 seconds, check the DB:
+
+```bash
+docker compose exec postgres psql -U matrix -d matrix -c "
+  SELECT exchange, symbol, COUNT(*), MIN(trade_ts), MAX(trade_ts)
+  FROM market_trades
+  GROUP BY exchange, symbol;"
+```
+
+You should see rows from `bybit-testnet` for the symbols you subscribed to.
+
+## Architecture notes
+
+- `connectors/bybit.py` — pure data emitter, no DB knowledge. Yields `TradePrint` dataclass instances over an async generator.
+- `persist.py` — batches inserts (size or time triggered) and uses `ON CONFLICT DO NOTHING` so reconnect replays are idempotent.
+- `main.py` — wires connector → persistence, handles SIGINT/SIGTERM for clean shutdown.
+
+Future connectors (news RSS, SEC EDGAR, on-chain) follow the same pattern:
+emit normalized dataclasses → a generic persistence layer handles batching + dedup.
+
+## Roadmap
+
+- [ ] Order-book snapshot stream (`orderbook.50.<symbol>`)
+- [ ] Funding-rate + open-interest stream
+- [ ] Multi-symbol fan-out (currently single WS connection per process; will become job-queue-driven)
+- [ ] News RSS connector
+- [ ] On-chain (Ethereum/Solana) tx connector
