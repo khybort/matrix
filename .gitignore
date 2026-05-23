@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+.pnp.*
+.pnpm-store/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.python-version
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Build outputs
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Machine identity (per-machine, not committed)
+.matrix-machine
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Vercel
+.vercel
+
+# DB local data
+*.db
+*.sqlite
+data/
+
+# Misc
+.turbo/
+coverage/
+.cache/
