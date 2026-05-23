@@ -2,7 +2,7 @@
 # Base: apache/age PG16 — already has AGE compiled in.
 # We layer pgvector source build on top.
 
-FROM apache/age:PG16_latest
+FROM apache/age:release_PG16_1.6.0
 
 USER root
 
