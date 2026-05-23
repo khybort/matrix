@@ -68,6 +68,28 @@ export async function GET() {
       LIMIT 10
     `;
 
+    const labLeaderboard = await sql`
+      SELECT id, generation, n_evaluations, n_signals, n_wins,
+             total_score, fitness_score, status, params, created_at,
+             parent_a_id, parent_b_id
+      FROM lab_experiments
+      WHERE status = 'active'
+      ORDER BY fitness_score DESC NULLS LAST, n_evaluations DESC
+      LIMIT 10
+    `;
+
+    const labStats = await sql`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'active') AS active,
+        COUNT(*) FILTER (WHERE status = 'retired') AS retired,
+        COUNT(*) FILTER (WHERE status = 'promoted') AS promoted,
+        MAX(generation) AS max_gen,
+        (SELECT COUNT(*) FROM lab_evaluations WHERE status = 'open') AS evals_open,
+        (SELECT COUNT(*) FROM lab_evaluations WHERE status = 'scored') AS evals_scored,
+        (SELECT COUNT(*) FROM lab_evaluations WHERE status = 'stale') AS evals_stale
+      FROM lab_experiments
+    `;
+
     return NextResponse.json({
       ok: true,
       wallet: walletRow,
@@ -77,6 +99,8 @@ export async function GET() {
       recentOutcomes,
       strategyAgg,
       mutationProposals,
+      labLeaderboard,
+      labStats: labStats[0] ?? {},
       now: new Date().toISOString(),
     });
   } catch (e) {

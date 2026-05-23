@@ -12,6 +12,12 @@ type Dashboard = {
   recentOutcomes: any[];
   strategyAgg: any[];
   mutationProposals: any[];
+  labLeaderboard: any[];
+  labStats: {
+    active?: number; retired?: number; promoted?: number;
+    max_gen?: number; evals_open?: number; evals_scored?: number;
+    evals_stale?: number;
+  };
   now: string;
 };
 
@@ -84,6 +90,10 @@ export default function Page() {
           <OutcomesTable rows={data.recentOutcomes} />
         </Panel>
       </div>
+
+      <Panel title="Lab — evolutionary algorithm search" className="mt-4">
+        <LabPanel rows={data.labLeaderboard} stats={data.labStats} />
+      </Panel>
 
       <Panel title="Recent predictions" className="mt-4">
         <PredictionsTable rows={data.recentPredictions} />
@@ -298,4 +308,80 @@ function PredictionsTable({ rows }: { rows: any[] }) {
 
 function fmtUsd(n: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(n);
+}
+
+function LabPanel({ rows, stats }: { rows: any[]; stats: Dashboard["labStats"] }) {
+  const top = rows[0];
+  const topWeights: Record<string, string> = top?.params?.weights ?? {};
+  const weightEntries = Object.entries(topWeights);
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-3 md:grid-cols-7 gap-3 text-xs">
+        <Stat label="Generation" value={String(stats?.max_gen ?? 0)} />
+        <Stat label="Active" value={String(stats?.active ?? 0)} />
+        <Stat label="Retired" value={String(stats?.retired ?? 0)} />
+        <Stat label="Evals open" value={String(stats?.evals_open ?? 0)} />
+        <Stat label="Evals scored" value={String(stats?.evals_scored ?? 0)} />
+        <Stat label="Evals stale" value={String(stats?.evals_stale ?? 0)} />
+        <Stat label="Promoted" value={String(stats?.promoted ?? 0)} />
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="muted text-sm">No active experiments yet.</p>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <table className="matrix">
+            <thead><tr>
+              <th>ID</th><th>Gen</th><th>Evals</th><th>Wins</th>
+              <th>Fitness</th><th>Thr</th><th>Hor</th>
+            </tr></thead>
+            <tbody>
+              {rows.map((r) => {
+                const fit = Number(r.fitness_score);
+                return (
+                  <tr key={r.id}>
+                    <td className="mono">{r.id.slice(0, 6)}</td>
+                    <td className="mono">{r.generation}</td>
+                    <td className="mono">{r.n_evaluations}</td>
+                    <td className="mono">{r.n_wins}</td>
+                    <td className={`mono ${fit >= 0 ? "pos" : "neg"}`}>{fit.toFixed(4)}</td>
+                    <td className="mono">{Number(r.params?.signal_threshold ?? 0).toFixed(3)}</td>
+                    <td className="mono">{r.params?.horizon_seconds ?? "-"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          <div>
+            <div className="muted text-xs uppercase tracking-wide mb-2">
+              Best genome weights ({top ? top.id.slice(0, 6) : "—"})
+            </div>
+            {weightEntries.length === 0 ? (
+              <p className="muted text-sm">no weights</p>
+            ) : (
+              <div className="space-y-1">
+                {weightEntries.map(([k, v]) => {
+                  const pct = Math.round(Number(v) * 100);
+                  return (
+                    <div key={k} className="flex items-center gap-2 text-xs">
+                      <span className="mono w-28 muted">{k}</span>
+                      <div className="flex-1 bg-zinc-800 h-2 rounded overflow-hidden">
+                        <div
+                          className="h-full bg-cyan-400"
+                          style={{ width: `${Math.max(2, pct)}%` }}
+                        />
+                      </div>
+                      <span className="mono w-12 text-right">{pct}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

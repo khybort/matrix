@@ -1,5 +1,6 @@
 from matrix_shared.models.base import Base, TimestampMixin
 from matrix_shared.models.job import Job
+from matrix_shared.models.lab import LabEvaluation, LabExperiment
 from matrix_shared.models.market_orderbook import OrderBookSnapshot
 from matrix_shared.models.market_ticker import TickerSnapshot
 from matrix_shared.models.market_trade import MarketTrade
@@ -12,6 +13,8 @@ __all__ = [
     "Base",
     "TimestampMixin",
     "Job",
+    "LabEvaluation",
+    "LabExperiment",
     "MarketTrade",
     "MutationProposal",
     "OrderBookSnapshot",
