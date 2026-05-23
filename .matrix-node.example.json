@@ -1,0 +1,9 @@
+{
+  "node_id": "REPLACE-ME-eg-muhsin-mbp",
+  "roles": ["ingestion", "graph", "strategy", "backtest", "reflection", "execution", "web", "dev"],
+  "capacity": {
+    "max_concurrent_jobs": 4,
+    "gpu": false
+  },
+  "notes": "Copy this to .matrix-node.json on each PC. Edit node_id. Trim roles if the machine is specialized."
+}

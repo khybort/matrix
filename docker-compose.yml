@@ -1,0 +1,32 @@
+# Matrix local infra
+# Single command bootstrap:  docker compose up -d
+#
+# Provides: Postgres 16 with pgvector + Apache AGE extensions
+
+services:
+  postgres:
+    # Custom image: apache/age (PG16 + AGE preinstalled) + pgvector layered on top.
+    # See infra/db/Dockerfile.
+    build:
+      context: ./infra/db
+    image: matrix-postgres:local
+    container_name: matrix-postgres
+    environment:
+      POSTGRES_USER: matrix
+      POSTGRES_PASSWORD: matrix_dev_only
+      POSTGRES_DB: matrix
+    ports:
+      - "5432:5432"
+    volumes:
+      - matrix_pgdata:/var/lib/postgresql/data
+      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U matrix -d matrix"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  matrix_pgdata:
+    name: matrix_pgdata
