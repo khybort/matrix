@@ -15,7 +15,7 @@ import sys
 from loguru import logger
 
 from ingestion.connectors.bybit import BybitConnector
-from ingestion.persist import persist_trades
+from ingestion.persist import persist_events
 
 DEFAULT_SYMBOLS = ["BTCUSDT"]
 
@@ -34,13 +34,13 @@ async def run(symbols: list[str], *, testnet: bool) -> None:
         loop.add_signal_handler(sig, _handle_signal)
 
     async def _stream_with_stop():
-        async for trade in connector.stream():
+        async for event in connector.stream():
             if stop.is_set():
                 return
-            yield trade
+            yield event
 
     try:
-        await persist_trades(_stream_with_stop())
+        await persist_events(_stream_with_stop())
     except asyncio.CancelledError:
         pass
 
