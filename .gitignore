@@ -28,8 +28,9 @@ build/
 .env.*.local
 .env.production
 
-# Machine identity (per-machine, not committed)
+# Per-node identity & local config (not committed)
 .matrix-machine
+.matrix-node.json
 
 # IDE
 .vscode/
