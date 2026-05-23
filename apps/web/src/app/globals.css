@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0a0a0b;
+  --foreground: #e4e4e7;
+  --panel: #131316;
+  --border: #27272a;
+  --accent: #22d3ee;
+  --pos: #22c55e;
+  --neg: #ef4444;
+  --muted: #71717a;
+}
+
+html, body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-feature-settings: "ss01", "cv11";
+  margin: 0;
+}
+
+.mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.pos { color: var(--pos); }
+.neg { color: var(--neg); }
+.accent { color: var(--accent); }
+
+table.matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+table.matrix th, table.matrix td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+table.matrix th {
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+}
+table.matrix tr:last-child td { border-bottom: none; }
