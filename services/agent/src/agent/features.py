@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from sqlalchemy import desc, select
 
+from graph.queries import GraphAssetContext, base_token_to_asset, get_asset_context
 from matrix_shared import session_scope
 from matrix_shared.models import (
     MarketTrade,
@@ -41,6 +42,14 @@ class SymbolFeatures:
     # News (last 1h count + simple keyword-based polarity hint)
     n_news_1h: int = 0
     news_titles_sample: list[str] = field(default_factory=list)
+
+    # Graph-derived (24h window over context graph)
+    graph_mention_count: int = 0
+    graph_recency_weight: Decimal = Decimal("0")
+    graph_direct_polarity: Decimal = Decimal("0")
+    graph_contextual_polarity: Decimal = Decimal("0")
+    graph_related_companies: list[str] = field(default_factory=list)
+    graph_co_mentioned_assets: list[str] = field(default_factory=list)
 
 
 async def extract_symbol_features(symbol: str) -> SymbolFeatures:
@@ -138,6 +147,20 @@ async def extract_symbol_features(symbol: str) -> SymbolFeatures:
         ]
         f.n_news_1h = len(relevant)
         f.news_titles_sample = relevant[:5]
+
+    # Graph-derived features (queries AGE for asset's 24h context)
+    try:
+        asset = base_token_to_asset(symbol)
+        ctx: GraphAssetContext = await get_asset_context(asset, window_hours=24.0)
+        f.graph_mention_count = ctx.direct_mention_count
+        f.graph_recency_weight = ctx.recency_weighted_count
+        f.graph_direct_polarity = ctx.direct_polarity
+        f.graph_contextual_polarity = ctx.contextual_polarity
+        f.graph_related_companies = [c for c, _ in ctx.related_companies]
+        f.graph_co_mentioned_assets = [a for a, _ in ctx.co_mentioned_assets]
+    except Exception:
+        # graph queries should never break feature extraction; fall back silently
+        pass
 
     return f
 

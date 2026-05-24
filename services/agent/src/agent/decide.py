@@ -75,7 +75,30 @@ def _ob_imbalance_score(f: SymbolFeatures) -> Decimal:
 
 
 def _news_score(f: SymbolFeatures) -> Decimal:
-    """Naive sentiment: count of bullish/bearish keywords in last-hour titles."""
+    """Graph-driven news sentiment.
+
+    Blend of three graph-derived signals:
+      direct  — polarity of titles directly mentioning the asset
+      context — polarity of titles about companies 2-hop connected to it
+      recency — exponential-decay-weighted mention count, capped
+
+    When the graph has no coverage for this asset (early bootstrap),
+    falls back to naive title-keyword sentiment so the agent isn't blind.
+    """
+    has_graph = (
+        f.graph_mention_count > 0
+        or len(f.graph_related_companies) > 0
+        or len(f.graph_co_mentioned_assets) > 0
+    )
+    if has_graph:
+        direct = f.graph_direct_polarity
+        context = f.graph_contextual_polarity
+        blended = (direct * Decimal("0.7")) + (context * Decimal("0.3"))
+        # ramp 0..1 as recency-weighted count climbs to ~3
+        scale = min(Decimal("1"), f.graph_recency_weight / Decimal("3"))
+        return blended * scale
+
+    # Fallback when graph empty / asset uncovered
     if not f.news_titles_sample:
         return Decimal("0")
     bullish_kw = (
@@ -160,6 +183,14 @@ def _feature_dump(f: SymbolFeatures) -> dict[str, Any]:
         "oi_delta_pct_5m": str(f.oi_delta_pct_5m) if f.oi_delta_pct_5m else None,
         "n_news_1h": f.n_news_1h,
         "news_titles_sample": f.news_titles_sample,
+        "graph": {
+            "mention_count": f.graph_mention_count,
+            "recency_weight": str(f.graph_recency_weight),
+            "direct_polarity": str(f.graph_direct_polarity),
+            "contextual_polarity": str(f.graph_contextual_polarity),
+            "related_companies": f.graph_related_companies,
+            "co_mentioned_assets": f.graph_co_mentioned_assets,
+        },
     }
 
 
