@@ -65,28 +65,45 @@ Aşağıdakiler kod düzeyinde **enforce** edilir, opsiyon değil:
 
 Detay: `docs/TRADING.md`.
 
-## Sık kullanılan komutlar
+## Sık kullanılan komutlar (containerized stack)
 
 ```bash
 # Node identity check
-cat .matrix-node.json
+cat .env  # NODE_ID, NODE_ROLES, LOCAL_DATABASE_URL, SHARED_DATABASE_URL
 
-# Local DB ayağa kaldır
-docker compose up -d
-docker compose logs -f postgres
+# İlk kurulum
+cp .env.example .env       # düzenle: NODE_ID, varsa SHARED_DATABASE_URL
+make build                 # tüm image'ları build et
+make migrate               # alembic upgrade head
+make up-dev                # postgres + 7 servis + web; hot reload
+make dashboard             # http://localhost:3030 aç
 
-# Bağımlılık (root)
-pnpm install
+# Günlük kullanım
+make logs                  # bütün servislerin loglarını takip et
+make logs-agent            # sadece agent
+make stats                 # tablolardaki kayıt sayıları
+make psql                  # local DB'ye psql shell
+make ps                    # container durumu
 
-# Python servis
-cd services/<service> && uv sync && uv run python -m <service>.main
+# Lab ops
+make leaderboard           # top genome'ları yazdır
+make lab-scan              # promotion için tara
+make lab-apply-best        # son pending lab_promotion'u uygula
 
-# DB migration (sadece bir node bir seferde author'lar)
-cd infra/db && uv run alembic upgrade head
+# Geliştirme
+# Edit any .py/.tsx → ilgili servis watchfiles ile restart, web HMR ile reload
+# Bağımlılık değişti mi (pyproject.toml)? → make build (sadece o servis rebuild)
 
-# Web (Phase 6+)
-cd apps/web && pnpm dev
+# Kapatma
+make down                  # container'lar dur (data korunur)
+make nuke                  # data dahil her şeyi sil (geri dönüşsüz)
 ```
+
+## İki-PC modu
+
+Kısaca: `SHARED_DATABASE_URL` Neon'a işaret ediyorsa, predictions / wallet /
+lab gibi shared state Neon'a yazılır. `LOCAL_DATABASE_URL` her zaman lokal
+Docker Postgres (AGE + pgvector). Detay: `docs/MULTI_PC_SETUP.md`.
 
 ## Tools
 

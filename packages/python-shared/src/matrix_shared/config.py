@@ -31,11 +31,19 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # Database
+    # Database — two-tier (see docs/ARCHITECTURE.md for the split rationale).
+    # - LOCAL: hot path (market data, raw_documents, AGE graph) — always
+    #   a local Postgres container with AGE extension.
+    # - SHARED: cold path (predictions, wallet, lab, strategy_configs) —
+    #   can be Neon in multi-PC setups, defaults to local for single-PC.
+    # `database_url` (legacy) aliases local for backward compat until all
+    # services are explicitly tier-aware.
     database_url: str = Field(
         default="postgres://matrix:matrix_dev_only@localhost:5432/matrix",
-        description="Postgres async URL. Note: SQLAlchemy needs postgresql+asyncpg scheme.",
+        description="Legacy single-URL setting. Aliases local_database_url.",
     )
+    local_database_url: str | None = None
+    shared_database_url: str | None = None
 
     # LLM
     ai_gateway_api_key: str | None = None
@@ -61,15 +69,30 @@ class Settings(BaseSettings):
         description="Comma-separated role list (ingestion,graph,strategy,...)",
     )
 
-    @property
-    def sqlalchemy_url(self) -> str:
-        """SQLAlchemy expects postgresql+asyncpg://; normalize from common shorthand."""
-        url = self.database_url
+    @staticmethod
+    def _normalize(url: str) -> str:
+        """SQLAlchemy expects postgresql+asyncpg://; normalize common shorthand."""
         if url.startswith("postgres://"):
             url = "postgresql://" + url[len("postgres://") :]
         if url.startswith("postgresql://") and "+asyncpg" not in url:
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
         return url
+
+    @property
+    def sqlalchemy_url(self) -> str:
+        """Backward-compat: aliases local tier."""
+        return self.sqlalchemy_local_url
+
+    @property
+    def sqlalchemy_local_url(self) -> str:
+        """Local tier (market data, AGE graph, raw_documents)."""
+        return self._normalize(self.local_database_url or self.database_url)
+
+    @property
+    def sqlalchemy_shared_url(self) -> str:
+        """Shared tier (predictions, wallet, lab, strategy_configs).
+        Falls back to local if SHARED_DATABASE_URL is not set."""
+        return self._normalize(self.shared_database_url or self.local_database_url or self.database_url)
 
     def roles(self) -> set[str]:
         return {r.strip() for r in self.node_roles.split(",") if r.strip()}

@@ -1,0 +1,47 @@
+# Keep the build context lean.
+
+# Python cruft
+**/__pycache__
+**/*.pyc
+**/.venv
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/*.egg-info
+
+# Node cruft
+**/node_modules
+**/.next
+**/.turbo
+**/out
+**/dist
+**/build
+
+# Editor & OS
+.vscode
+.idea
+**/.DS_Store
+
+# Logs / local data
+logs/
+**/*.log
+
+# Env files — built images must not bake secrets
+.env
+.env.local
+.env.*.local
+.matrix-node.json
+.matrix-machine
+
+# VCS / docs that don't belong in image
+.git
+.gitignore
+.github
+.claude
+docs/
+
+# Compose files / Makefile — not needed inside containers
+Makefile
+docker-compose.yml
+docker-compose.dev.yml
+docker-compose.prod.yml
