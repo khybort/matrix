@@ -14,7 +14,7 @@ from agent.features import extract_symbol_features
 from loguru import logger
 from sqlalchemy import desc, select
 
-from matrix_shared import session_scope
+from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.models import LabEvaluation, LabExperiment, MarketTrade
 
 from labs.decide import decide_with_genome
@@ -30,7 +30,7 @@ MARK_WINDOW_S = 60
 
 async def emit_signals(symbols: list[str]) -> int:
     """For each active experiment × symbol, emit at most one fresh evaluation."""
-    async with session_scope() as session:
+    async with shared_session_scope() as session:
         stmt = (
             select(LabExperiment)
             .where(LabExperiment.status == "active")
@@ -62,7 +62,7 @@ async def emit_signals(symbols: list[str]) -> int:
                 continue
 
             close_at = now + timedelta(seconds=genome.horizon_seconds)
-            async with session_scope() as session:
+            async with shared_session_scope() as session:
                 session.add(
                     LabEvaluation(
                         experiment_id=exp.id,
@@ -88,7 +88,7 @@ async def _mark_price_near(symbol: str, target_ts: datetime) -> Decimal | None:
     window = timedelta(seconds=MARK_WINDOW_S)
     lo = target_ts - window
     hi = target_ts + window
-    async with session_scope() as session:
+    async with local_session_scope() as session:
         stmt = (
             select(MarketTrade.price, MarketTrade.trade_ts)
             .where(MarketTrade.symbol == symbol)
@@ -108,7 +108,7 @@ async def score_due_evaluations(stale_after_s: int = 600) -> tuple[int, int]:
     """Score evaluations whose close_at has passed. Returns (scored, stale)."""
     now = datetime.now(UTC)
     cutoff = now - timedelta(seconds=stale_after_s)
-    async with session_scope() as session:
+    async with shared_session_scope() as session:
         stmt = (
             select(LabEvaluation)
             .where(LabEvaluation.status == "open")
@@ -123,7 +123,7 @@ async def score_due_evaluations(stale_after_s: int = 600) -> tuple[int, int]:
         mark = await _mark_price_near(ev.symbol, ev.close_at)
         if mark is None:
             if ev.close_at < cutoff:
-                async with session_scope() as session:
+                async with shared_session_scope() as session:
                     ev_db = await session.get(LabEvaluation, ev.id)
                     if ev_db is not None:
                         ev_db.status = "stale"
@@ -137,7 +137,7 @@ async def score_due_evaluations(stale_after_s: int = 600) -> tuple[int, int]:
         capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
         score = capped / SCORE_CAP_PCT  # in [-1, 1]
 
-        async with session_scope() as session:
+        async with shared_session_scope() as session:
             ev_db = await session.get(LabEvaluation, ev.id)
             if ev_db is None:
                 continue

@@ -25,7 +25,7 @@ from decimal import Decimal
 from loguru import logger
 from sqlalchemy import desc, select
 
-from matrix_shared import session_scope
+from matrix_shared import shared_session_scope
 from matrix_shared.models import LabEvaluation, LabExperiment
 
 from labs.evaluate import emit_signals, score_due_evaluations
@@ -49,7 +49,7 @@ async def _eval_tick(symbols: list[str]) -> tuple[int, int, int]:
 
 
 async def _leaderboard(limit: int = 15) -> None:
-    async with session_scope() as session:
+    async with shared_session_scope() as session:
         stmt = (
             select(LabExperiment)
             .where(LabExperiment.status == "active")

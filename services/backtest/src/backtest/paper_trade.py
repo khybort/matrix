@@ -1,25 +1,14 @@
 """Paper-trade engine, wallet-aware with risk-cap enforcement.
 
-Lifecycle:
-    open_due_positions:
-        - find open predictions with no PaperPosition yet
-        - load default wallet
-        - enforce risk: circuit-breaker, max concurrent, max position pct
-        - reserve notional from wallet.cash → locked
-        - create PaperPosition
-    close_due_positions:
-        - find PaperPositions whose Prediction.close_by has passed
-        - mark out at current best price (with slippage)
-        - free locked notional, credit/debit pnl to cash
-        - write Outcome with normalized score
-    snapshot_wallet:
-        - on every tick, compute current equity (cash + locked + unrealized)
-        - write WalletSnapshot
-        - check daily-loss circuit breaker; trip if breached
+Tier routing:
+    LOCAL  — market_trades read (for entry/exit pricing + unrealized mark)
+    SHARED — wallets, paper_positions, predictions, outcomes
 
-The risk parameters on the wallet row are static. They are configured at
-seed time (or via explicit user/admin action) and are NEVER mutated by
-the reflection agent. See docs/TRADING.md.
+All decision/wallet state is shared across PCs via the SHARED tier so
+multi-PC agents trade against a single virtual cuzdan. Market price reads
+stay LOCAL because each PC ingests its own market feed.
+
+See docs/TRADING.md for the risk rules this engine enforces.
 """
 
 from __future__ import annotations
@@ -31,7 +20,7 @@ from decimal import Decimal
 from loguru import logger
 from sqlalchemy import func, select
 
-from matrix_shared import session_scope
+from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.models import (
     MarketTrade,
     Outcome,
@@ -49,7 +38,7 @@ SCORE_CAP_PCT = Decimal("0.01")  # ±1% horizon caps the score at ±1
 
 async def _latest_price(symbol: str) -> Decimal | None:
     cutoff = datetime.now(UTC) - timedelta(seconds=FRESHNESS_S)
-    async with session_scope() as session:
+    async with local_session_scope() as session:
         stmt = (
             select(MarketTrade.price)
             .where(MarketTrade.symbol == symbol)
@@ -77,9 +66,6 @@ def _unrealized_pnl(pos: PaperPosition, mark: Decimal) -> Decimal:
 
 
 async def _check_and_maybe_reset_day(wallet: Wallet, equity_now: Decimal) -> None:
-    """If a new UTC day has begun, reset day_start values and (if previously
-    tripped due to daily loss) un-trip the circuit. Manual ops can override
-    this by editing the wallet row directly."""
     now = datetime.now(UTC)
     day_start = wallet.day_start_at
     if day_start.tzinfo is None:
@@ -87,14 +73,12 @@ async def _check_and_maybe_reset_day(wallet: Wallet, equity_now: Decimal) -> Non
     if now.date() != day_start.date():
         wallet.day_start_at = now
         wallet.day_start_equity = equity_now
-        # daily reset auto-untrips
         if wallet.circuit_tripped_at is not None:
             logger.info(f"wallet {wallet.name}: daily reset; circuit untripped")
             wallet.circuit_tripped_at = None
 
 
 def _circuit_should_trip(wallet: Wallet, equity_now: Decimal) -> bool:
-    """Daily-loss circuit breaker. equity_now is current marked equity."""
     day_start = wallet.day_start_equity
     if day_start <= 0:
         return False
@@ -103,7 +87,11 @@ def _circuit_should_trip(wallet: Wallet, equity_now: Decimal) -> bool:
 
 
 async def _current_equity(session, wallet: Wallet) -> tuple[Decimal, Decimal, int]:
-    """Returns (equity, unrealized_pnl, n_open_positions)."""
+    """Reads paper_positions from the SHARED session passed in, but pulls
+    mark prices from the LOCAL tier (one query per open position).
+
+    Returns (equity, unrealized_pnl, n_open_positions).
+    """
     open_stmt = select(PaperPosition).where(
         PaperPosition.wallet_id == wallet.id, PaperPosition.status == "open"
     )
@@ -121,8 +109,8 @@ async def _current_equity(session, wallet: Wallet) -> tuple[Decimal, Decimal, in
 
 
 async def snapshot_wallet() -> None:
-    """Write WalletSnapshot for the default wallet; handle circuit breaker."""
-    async with session_scope() as session:
+    """Write a WalletSnapshot for the default wallet; handle circuit breaker."""
+    async with shared_session_scope() as session:
         wallet = await session.get(Wallet, DEFAULT_WALLET_ID)
         if wallet is None:
             logger.warning("default wallet not found, cannot snapshot")
@@ -155,18 +143,18 @@ async def snapshot_wallet() -> None:
 
 
 async def open_due_positions() -> int:
-    """Open positions for predictions that have none yet, respecting risk caps."""
-    async with session_scope() as session:
+    """Open positions for predictions that have none yet, respecting risk caps.
+
+    All wallet/prediction state lives in SHARED; entry pricing is read from
+    the LOCAL tier's market_trades."""
+    async with shared_session_scope() as session:
         wallet = await session.get(Wallet, DEFAULT_WALLET_ID)
         if wallet is None:
-            logger.warning("default wallet missing")
             return 0
-
         if wallet.circuit_tripped_at is not None:
             logger.debug("circuit tripped; opening blocked")
             return 0
 
-        # count current open positions
         open_count_stmt = (
             select(func.count(PaperPosition.id))
             .where(PaperPosition.wallet_id == wallet.id)
@@ -199,13 +187,11 @@ async def open_due_positions() -> int:
             continue
         entry = _apply_slippage(last_px, p.side, opening=True)
 
-        # Notional sized as max_position_pct of equity, optionally scaled by
-        # prediction confidence (within bounds). Never exceeds max_notional.
         conf = max(Decimal("0.2"), min(Decimal("1.0"), p.confidence))
         notional = max_notional * conf
         notional = notional.quantize(Decimal("0.01"))
 
-        async with session_scope() as session:
+        async with shared_session_scope() as session:
             wallet = await session.get(Wallet, DEFAULT_WALLET_ID)
             if wallet is None:
                 continue
@@ -239,7 +225,7 @@ async def open_due_positions() -> int:
 
 async def close_due_positions() -> int:
     now = datetime.now(UTC)
-    async with session_scope() as session:
+    async with shared_session_scope() as session:
         stmt = (
             select(PaperPosition, Prediction)
             .join(Prediction, Prediction.id == PaperPosition.prediction_id)
@@ -262,7 +248,7 @@ async def close_due_positions() -> int:
         capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
         score = capped / SCORE_CAP_PCT
 
-        async with session_scope() as session:
+        async with shared_session_scope() as session:
             pos_db = await session.get(PaperPosition, pos.id)
             pos_db.closed_at = now
             pos_db.closed_price = exit_px
@@ -275,7 +261,7 @@ async def close_due_positions() -> int:
             wallet = await session.get(Wallet, pos_db.wallet_id)
             if wallet is not None:
                 wallet.locked_usd -= pos_db.notional_usd
-                wallet.cash_usd += pos_db.notional_usd + pnl_usd  # principal back + PnL
+                wallet.cash_usd += pos_db.notional_usd + pnl_usd
 
             session.add(
                 Outcome(

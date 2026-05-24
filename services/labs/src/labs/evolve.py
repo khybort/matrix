@@ -23,7 +23,7 @@ from decimal import Decimal
 from loguru import logger
 from sqlalchemy import desc, select
 
-from matrix_shared import session_scope
+from matrix_shared import shared_session_scope
 from matrix_shared.models import LabExperiment
 
 from labs.genome import Genome, crossover, mutate, random_genome
@@ -43,14 +43,14 @@ class GenerationReport:
 
 
 async def _next_generation_number() -> int:
-    async with session_scope() as session:
+    async with shared_session_scope() as session:
         stmt = select(LabExperiment.generation).order_by(desc(LabExperiment.generation)).limit(1)
         row = (await session.execute(stmt)).first()
         return (row[0] if row else -1) + 1
 
 
 async def _active_experiments() -> list[LabExperiment]:
-    async with session_scope() as session:
+    async with shared_session_scope() as session:
         stmt = select(LabExperiment).where(LabExperiment.status == "active")
         return list((await session.execute(stmt)).scalars())
 
@@ -63,7 +63,7 @@ async def seed_initial_population(n: int = TARGET_POPULATION) -> int:
     rng = random.Random()
     for _ in range(n):
         g = random_genome(rng)
-        async with session_scope() as session:
+        async with shared_session_scope() as session:
             session.add(
                 LabExperiment(
                     generation=0,
@@ -114,7 +114,7 @@ async def run_evolution_cycle(
     retired_count = 0
     if losers:
         loser_ids = [e.id for e in losers]
-        async with session_scope() as session:
+        async with shared_session_scope() as session:
             for lid in loser_ids:
                 e_db = await session.get(LabExperiment, lid)
                 if e_db is None:
@@ -138,7 +138,7 @@ async def run_evolution_cycle(
                 f"gen {new_gen}: crossover of two top-{n_elite} elites, "
                 f"weights normalized, gaussian mutation"
             )
-            async with session_scope() as session:
+            async with shared_session_scope() as session:
                 # Find lineage IDs (find which experiments these elite_genomes came from)
                 # Cheap approach: just record any two elite IDs for provenance
                 parent_a = elites[rng.randrange(len(elites))].id

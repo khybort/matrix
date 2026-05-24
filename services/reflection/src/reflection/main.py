@@ -21,7 +21,7 @@ from decimal import Decimal
 from loguru import logger  # noqa: I001
 from sqlalchemy import select
 
-from matrix_shared import session_scope
+from matrix_shared import shared_session_scope
 from matrix_shared.models import MutationProposal, StrategyConfig
 
 from reflection.metrics import metrics_window
@@ -34,7 +34,7 @@ DEFAULT_WINDOW_HOURS = 24.0
 async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_trigger: float) -> int:
     """One reflection cycle. Returns number of proposals written."""
     proposals_written = 0
-    async with session_scope() as session:
+    async with shared_session_scope() as session:
         stmt = select(StrategyConfig).where(StrategyConfig.status == "active")
         active_configs = list((await session.execute(stmt)).scalars())
 
@@ -66,7 +66,7 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
 
         # Avoid spamming duplicate proposals: if a pending exists for the
         # same from_version, skip.
-        async with session_scope() as session:
+        async with shared_session_scope() as session:
             existing_stmt = select(MutationProposal).where(
                 MutationProposal.strategy_id == cfg.strategy_id,
                 MutationProposal.from_version == cfg.version,

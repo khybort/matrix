@@ -17,7 +17,7 @@ from decimal import Decimal
 from loguru import logger
 from sqlalchemy import select
 
-from matrix_shared import session_scope
+from matrix_shared import shared_session_scope
 from matrix_shared.models import StrategyConfig
 
 CACHE_TTL_S = 10.0  # tick interval is ~15s, so this triggers fresh read each tick
@@ -55,7 +55,7 @@ async def load_agent_config(strategy_id: str = "matrix_agent") -> AgentConfig:
     if cached and now - cached[0] < CACHE_TTL_S:
         return cached[1]
 
-    async with session_scope() as session:
+    async with shared_session_scope() as session:
         stmt = (
             select(StrategyConfig)
             .where(StrategyConfig.strategy_id == strategy_id)
