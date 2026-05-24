@@ -37,9 +37,11 @@ from graph.age import (
     upsert_entity,
 )
 from graph.extract import extract_entities
+from graph.publish import DEFAULT_ASSETS, publish_all
 
 DEFAULT_INTERVAL_S = 60.0
 DEFAULT_BATCH = 25
+DEFAULT_PUBLISH_INTERVAL_S = 120.0  # publish federated aggregates twice / 60s extract loop
 PROCESSED_KEY = "graph_processed_at"
 
 
@@ -101,7 +103,12 @@ async def _tick(limit: int, reprocess: bool) -> int:
     return processed
 
 
-async def run(interval_s: float, limit: int) -> None:
+async def run(
+    interval_s: float,
+    limit: int,
+    publish_interval_s: float = DEFAULT_PUBLISH_INTERVAL_S,
+    assets: tuple[str, ...] = DEFAULT_ASSETS,
+) -> None:
     stop = asyncio.Event()
 
     def _handle_signal(*_: object) -> None:
@@ -112,13 +119,25 @@ async def run(interval_s: float, limit: int) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _handle_signal)
 
+    last_publish = 0.0
     while not stop.is_set():
+        loop_started = asyncio.get_event_loop().time()
         try:
             n = await _tick(limit, reprocess=False)
             if n:
                 logger.info(f"tick: processed {n} documents")
         except Exception as e:
             logger.exception(f"tick failed: {e}")
+
+        if loop_started - last_publish >= publish_interval_s:
+            try:
+                published = await publish_all(assets)
+                if published:
+                    logger.info(f"publish: {published} asset signal(s) flushed to shared tier")
+            except Exception as e:
+                logger.exception(f"publish failed: {e}")
+            last_publish = loop_started
+
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval_s)
         except TimeoutError:
@@ -128,10 +147,22 @@ async def run(interval_s: float, limit: int) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Matrix graph extraction")
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_S)
+    parser.add_argument(
+        "--publish-interval", type=float, default=DEFAULT_PUBLISH_INTERVAL_S,
+        help=f"Seconds between graph_signals publishes (default {DEFAULT_PUBLISH_INTERVAL_S})",
+    )
+    parser.add_argument(
+        "--assets", nargs="*", default=list(DEFAULT_ASSETS),
+        help="Asset canonical tickers to publish (BTC ETH SOL ...)",
+    )
     parser.add_argument("--limit", type=int, default=DEFAULT_BATCH)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--reprocess", action="store_true")
     parser.add_argument("--summary", action="store_true", help="Print graph counts and exit")
+    parser.add_argument(
+        "--publish-once", action="store_true",
+        help="Run one publish cycle (computes & flushes asset signals) and exit",
+    )
     args = parser.parse_args()
 
     logger.remove()
@@ -145,11 +176,21 @@ def main() -> None:
         asyncio.run(_s())
         return
 
-    logger.info(f"graph start: limit={args.limit} once={args.once} reprocess={args.reprocess}")
+    if args.publish_once:
+        async def _p():
+            n = await publish_all(args.assets)
+            logger.info(f"publish-once: {n} non-empty signals flushed")
+        asyncio.run(_p())
+        return
+
+    logger.info(
+        f"graph start: limit={args.limit} once={args.once} reprocess={args.reprocess} "
+        f"publish_interval={args.publish_interval}s assets={args.assets}"
+    )
     if args.once:
         asyncio.run(_tick(args.limit, args.reprocess))
     else:
-        asyncio.run(run(args.interval, args.limit))
+        asyncio.run(run(args.interval, args.limit, args.publish_interval, tuple(args.assets)))
 
 
 if __name__ == "__main__":
