@@ -1,0 +1,96 @@
+# Dev overrides — hot-reload every Python service + Next.js HMR for web.
+#
+# Source dirs are bind-mounted INTO the image at the same path they live in
+# the build context. Each editable-installed package's .venv (created during
+# image build) stays intact because it lives at .venv/, not src/. As a result,
+# any Python file change triggers watchfiles to restart the process — no
+# rebuild required.
+#
+# The web service swaps to the `dev` stage in apps/web/Dockerfile, which
+# runs `pnpm dev` for full HMR.
+
+services:
+  # Python services — common pattern: mount src dirs + wrap CMD with watchfiles
+  ingestion-market:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m ingestion.main BTCUSDT ETHUSDT --mainnet"
+      - "/workspace/services/ingestion/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/ingestion/src:/workspace/services/ingestion/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
+  ingestion-news:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m ingestion.news --interval 300"
+      - "/workspace/services/ingestion/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/ingestion/src:/workspace/services/ingestion/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
+  graph:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m graph.main --interval 60"
+      - "/workspace/services/graph/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/graph/src:/workspace/services/graph/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
+  agent:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m agent.main --interval 15"
+      - "/workspace/services/agent/src"
+      - "/workspace/services/graph/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/agent/src:/workspace/services/agent/src
+      - ./services/graph/src:/workspace/services/graph/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
+  backtest:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m backtest.main --interval 5"
+      - "/workspace/services/backtest/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/backtest/src:/workspace/services/backtest/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
+  reflection:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m reflection.main --interval 600 --no-llm"
+      - "/workspace/services/reflection/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/reflection/src:/workspace/services/reflection/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
+  labs:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m labs.main --eval-interval 20 --evolve-interval 300 --promote-scan-interval 600"
+      - "/workspace/services/labs/src"
+      - "/workspace/services/agent/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/labs/src:/workspace/services/labs/src
+      - ./services/agent/src:/workspace/services/agent/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
+  web:
+    build:
+      target: dev
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./apps/web/src:/app/apps/web/src
+      - ./apps/web/public:/app/apps/web/public
+      - ./apps/web/next.config.ts:/app/apps/web/next.config.ts

@@ -1,12 +1,34 @@
-# Matrix local infra
-# Single command bootstrap:  docker compose up -d
+# Matrix base compose — defines the topology and the prod-ish baseline.
 #
-# Provides: Postgres 16 with pgvector + Apache AGE extensions
+# Use:
+#   make up-dev     → adds docker-compose.dev.yml (hot reload, source mounts)
+#   make up-prod    → adds docker-compose.prod.yml (built images, restart policies)
+#   docker compose up postgres   → just the DB
+#
+# Env via .env at repo root (gitignored). See .env.example.
+
+name: matrix
+
+x-python-build: &python-build
+  context: .
+  dockerfile: Dockerfile
+
+x-python-env: &python-env
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  LOCAL_DATABASE_URL: ${LOCAL_DATABASE_URL:-postgres://matrix:matrix_dev_only@postgres:5432/matrix}
+  SHARED_DATABASE_URL: ${SHARED_DATABASE_URL:-postgres://matrix:matrix_dev_only@postgres:5432/matrix}
+  DATABASE_URL: ${LOCAL_DATABASE_URL:-postgres://matrix:matrix_dev_only@postgres:5432/matrix}
+  AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
+  NODE_ID: ${NODE_ID:-default-node}
+  NODE_ROLES: ${NODE_ROLES:-dev,ingestion,graph,strategy,backtest,reflection,labs}
+  MAX_POSITION_PCT: ${MAX_POSITION_PCT:-2.0}
+  DAILY_LOSS_CIRCUIT_PCT: ${DAILY_LOSS_CIRCUIT_PCT:-5.0}
+  LIVE_CAPITAL_CAP_USD: ${LIVE_CAPITAL_CAP_USD:-2000}
+  LIVE_EXECUTION_ENABLED: "false"
 
 services:
   postgres:
-    # Custom image: apache/age (PG16 + AGE preinstalled) + pgvector layered on top.
-    # See infra/db/Dockerfile.
     build:
       context: ./infra/db
     image: matrix-postgres:local
@@ -24,9 +46,161 @@ services:
       test: ["CMD-SHELL", "pg_isready -U matrix -d matrix"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
+    restart: unless-stopped
+
+  # One-shot Alembic migration runner. Used via `make migrate`.
+  migrate:
+    build:
+      context: .
+      dockerfile: infra/db/Dockerfile.migrate
+    image: matrix-migrate:local
+    profiles: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *python-env
+
+  ingestion-market:
+    build:
+      <<: *python-build
+      target: runtime
+      args:
+        SERVICE: ingestion
+    image: matrix-ingestion:local
+    container_name: matrix-ingestion-market
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *python-env
+    command: ["ingestion.main", "BTCUSDT", "ETHUSDT", "--mainnet"]
+    restart: unless-stopped
+
+  ingestion-news:
+    image: matrix-ingestion:local
+    container_name: matrix-ingestion-news
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ingestion-market:
+        condition: service_started
+    environment:
+      <<: *python-env
+    command: ["ingestion.news", "--interval", "300"]
+    restart: unless-stopped
+
+  graph:
+    build:
+      <<: *python-build
+      target: runtime
+      args:
+        SERVICE: graph
+    image: matrix-graph:local
+    container_name: matrix-graph
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *python-env
+    command: ["graph.main", "--interval", "60"]
+    restart: unless-stopped
+
+  agent:
+    build:
+      <<: *python-build
+      target: runtime
+      args:
+        SERVICE: agent
+    image: matrix-agent:local
+    container_name: matrix-agent
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *python-env
+    command: ["agent.main", "--interval", "15"]
+    restart: unless-stopped
+
+  backtest:
+    build:
+      <<: *python-build
+      target: runtime
+      args:
+        SERVICE: backtest
+    image: matrix-backtest:local
+    container_name: matrix-backtest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *python-env
+    command: ["backtest.main", "--interval", "5"]
+    restart: unless-stopped
+
+  reflection:
+    build:
+      <<: *python-build
+      target: runtime
+      args:
+        SERVICE: reflection
+    image: matrix-reflection:local
+    container_name: matrix-reflection
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *python-env
+    command: ["reflection.main", "--interval", "600", "--no-llm"]
+    restart: unless-stopped
+
+  labs:
+    build:
+      <<: *python-build
+      target: runtime
+      args:
+        SERVICE: labs
+    image: matrix-labs:local
+    container_name: matrix-labs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *python-env
+    command:
+      - "labs.main"
+      - "--eval-interval"
+      - "20"
+      - "--evolve-interval"
+      - "300"
+      - "--promote-scan-interval"
+      - "600"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: runner
+    image: matrix-web:local
+    container_name: matrix-web
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: "3030"
+      HOSTNAME: "0.0.0.0"
+      DATABASE_URL: ${SHARED_DATABASE_URL:-postgres://matrix:matrix_dev_only@postgres:5432/matrix}
+    ports:
+      - "3030:3030"
     restart: unless-stopped
 
 volumes:
   matrix_pgdata:
     name: matrix_pgdata
+
+networks:
+  default:
+    name: matrix-net

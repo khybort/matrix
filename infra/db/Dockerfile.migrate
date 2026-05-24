@@ -1,0 +1,18 @@
+# Tiny Alembic runner for `make migrate`. Separate from the Postgres image.
+FROM python:3.13-slim
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv
+
+WORKDIR /workspace
+
+COPY packages/python-shared /workspace/packages/python-shared
+COPY infra/db /workspace/infra/db
+
+WORKDIR /workspace/infra/db
+RUN uv sync --frozen
+
+ENTRYPOINT ["uv", "run", "alembic"]
+CMD ["upgrade", "head"]

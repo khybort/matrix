@@ -1,0 +1,29 @@
+# Prod overrides — built images only, restart-always, no source mounts.
+#
+# Use real production credentials via .env on the host. Critically:
+#   SHARED_DATABASE_URL=postgres://<neon-host>/... (when ready to migrate)
+#   LIVE_EXECUTION_ENABLED=false  (NEVER true until docs/TRADING.md Phase 5 gate)
+
+services:
+  postgres:
+    restart: always
+
+  ingestion-market:
+    restart: always
+  ingestion-news:
+    restart: always
+  graph:
+    restart: always
+  agent:
+    restart: always
+  backtest:
+    restart: always
+  reflection:
+    restart: always
+  labs:
+    restart: always
+
+  web:
+    restart: always
+    environment:
+      NODE_ENV: production
