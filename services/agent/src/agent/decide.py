@@ -15,21 +15,14 @@ from typing import Any
 
 from loguru import logger
 
+from agent.config import AgentConfig, FALLBACK
 from agent.features import SymbolFeatures
 from agent.llm import call_llm_decision, llm_enabled
 
-# Rule-based scoring weights — agent's strategy_version increments when
-# reflection mutates these.
-WEIGHTS: dict[str, Decimal] = {
-    "trade_flow": Decimal("0.35"),
-    "funding": Decimal("0.20"),
-    "oi_delta": Decimal("0.20"),
-    "ob_imbalance": Decimal("0.15"),
-    "news": Decimal("0.10"),
-}
-
-# Threshold for emitting a non-hold decision (rule path)
-RULE_SIGNAL_THRESHOLD = Decimal("0.18")
+# Defaults kept only for stand-alone / test invocations; the live loop loads
+# the current AgentConfig from DB and passes it explicitly.
+WEIGHTS: dict[str, Decimal] = dict(FALLBACK.weights)
+RULE_SIGNAL_THRESHOLD = FALLBACK.signal_threshold
 
 
 @dataclass(slots=True)
@@ -104,7 +97,11 @@ def _news_score(f: SymbolFeatures) -> Decimal:
     return Decimal(pos - neg) / Decimal(pos + neg)
 
 
-def rule_decide(f: SymbolFeatures, weights: dict[str, Decimal] = WEIGHTS) -> Decision:
+def rule_decide(
+    f: SymbolFeatures,
+    weights: dict[str, Decimal] = WEIGHTS,
+    signal_threshold: Decimal = RULE_SIGNAL_THRESHOLD,
+) -> Decision:
     """Linear-combine signals, threshold to decide side."""
     sub = {
         "trade_flow": _trade_flow_score(f),
@@ -115,10 +112,10 @@ def rule_decide(f: SymbolFeatures, weights: dict[str, Decimal] = WEIGHTS) -> Dec
     }
     total = sum((weights.get(k, Decimal("0")) * v for k, v in sub.items()), Decimal("0"))
 
-    if total >= RULE_SIGNAL_THRESHOLD:
+    if total >= signal_threshold:
         side = "long"
         conf = min(Decimal("1"), total)
-    elif total <= -RULE_SIGNAL_THRESHOLD:
+    elif total <= -signal_threshold:
         side = "short"
         conf = min(Decimal("1"), abs(total))
     else:
@@ -184,13 +181,16 @@ def _llm_prompt(f: SymbolFeatures) -> str:
     return "\n".join(parts)
 
 
-async def decide(f: SymbolFeatures) -> Decision:
+async def decide(f: SymbolFeatures, cfg: AgentConfig | None = None) -> Decision:
     """Top-level decision: rule-based by default; LLM if enabled.
 
     The LLM result, when present, overrides the rule decision but the rule
     decision is still computed and stored in feature_dump for audit.
     """
-    rule = rule_decide(f)
+    if cfg is not None:
+        rule = rule_decide(f, cfg.weights, cfg.signal_threshold)
+    else:
+        rule = rule_decide(f)
     if not llm_enabled():
         return rule
 

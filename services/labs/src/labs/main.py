@@ -30,10 +30,16 @@ from matrix_shared.models import LabEvaluation, LabExperiment
 
 from labs.evaluate import emit_signals, score_due_evaluations
 from labs.evolve import seed_initial_population, run_evolution_cycle
+from labs.promote import (
+    apply_best_pending,
+    apply_proposal,
+    scan_for_promotions,
+)
 
 DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT")
 DEFAULT_EVAL_INTERVAL_S = 20.0
 DEFAULT_EVOLVE_INTERVAL_S = 300.0
+DEFAULT_PROMOTE_SCAN_INTERVAL_S = 180.0
 
 
 async def _eval_tick(symbols: list[str]) -> tuple[int, int, int]:
@@ -80,6 +86,8 @@ async def run(
     eval_interval_s: float,
     evolve_interval_s: float,
     min_evals: int = 5,
+    promote_scan_interval_s: float = DEFAULT_PROMOTE_SCAN_INTERVAL_S,
+    auto_apply: bool = False,
 ) -> None:
     await seed_initial_population()
 
@@ -94,6 +102,7 @@ async def run(
         loop.add_signal_handler(sig, _handle_signal)
 
     last_evolve = 0.0
+    last_promote_scan = 0.0
     while not stop.is_set():
         loop_started = asyncio.get_event_loop().time()
         try:
@@ -118,6 +127,20 @@ async def run(
                 logger.exception(f"evolution failed: {e}")
             last_evolve = loop_started
 
+        if loop_started - last_promote_scan >= promote_scan_interval_s:
+            try:
+                pid = await scan_for_promotions()
+                if pid is not None:
+                    logger.info(f"promotion proposed: {pid}")
+                    if auto_apply:
+                        ok = await apply_proposal(pid)
+                        logger.info(
+                            f"auto-apply: proposal {pid} {'applied' if ok else 'failed'}"
+                        )
+            except Exception as e:
+                logger.exception(f"promotion scan failed: {e}")
+            last_promote_scan = loop_started
+
         try:
             await asyncio.wait_for(stop.wait(), timeout=eval_interval_s)
         except TimeoutError:
@@ -136,6 +159,26 @@ def main() -> None:
         "--min-evals", type=int, default=5,
         help="Min evaluations per genome to be eligible in evolution (default 5)",
     )
+    parser.add_argument(
+        "--promote-scan-interval", type=float, default=DEFAULT_PROMOTE_SCAN_INTERVAL_S,
+        help=f"Seconds between promotion scans (default {DEFAULT_PROMOTE_SCAN_INTERVAL_S})",
+    )
+    parser.add_argument(
+        "--auto-apply", action="store_true",
+        help="Auto-apply detected promotions (default: only writes proposal)",
+    )
+    parser.add_argument(
+        "--scan-once", action="store_true",
+        help="One-shot: scan for a promotion proposal and exit",
+    )
+    parser.add_argument(
+        "--apply", metavar="UUID",
+        help="Apply a specific pending proposal by id and exit",
+    )
+    parser.add_argument(
+        "--apply-best", action="store_true",
+        help="Apply the most recent pending lab_promotion proposal and exit",
+    )
     args = parser.parse_args()
 
     logger.remove()
@@ -147,6 +190,39 @@ def main() -> None:
 
     if args.seed_only:
         asyncio.run(seed_initial_population())
+        return
+
+    if args.scan_once:
+        async def _scan():
+            pid = await scan_for_promotions()
+            if pid:
+                logger.info(f"proposal written: {pid}")
+                if args.auto_apply:
+                    ok = await apply_proposal(pid)
+                    logger.info(f"auto-apply: {'success' if ok else 'failed'}")
+            else:
+                logger.info("no candidate qualifies")
+        asyncio.run(_scan())
+        return
+
+    if args.apply:
+        import uuid as _uuid
+        async def _apply():
+            try:
+                pid = _uuid.UUID(args.apply)
+            except ValueError:
+                logger.error(f"invalid UUID: {args.apply}")
+                return
+            ok = await apply_proposal(pid)
+            logger.info(f"apply: {'success' if ok else 'failed'}")
+        asyncio.run(_apply())
+        return
+
+    if args.apply_best:
+        async def _apply_best():
+            pid = await apply_best_pending()
+            logger.info(f"apply-best: {pid if pid else 'no pending proposal'}")
+        asyncio.run(_apply_best())
         return
 
     if args.once:
@@ -164,10 +240,18 @@ def main() -> None:
 
     logger.info(
         f"labs start: symbols={args.symbols} eval={args.eval_interval}s "
-        f"evolve={args.evolve_interval}s min_evals={args.min_evals}"
+        f"evolve={args.evolve_interval}s min_evals={args.min_evals} "
+        f"promote_scan={args.promote_scan_interval}s auto_apply={args.auto_apply}"
     )
     asyncio.run(
-        run(args.symbols, args.eval_interval, args.evolve_interval, args.min_evals)
+        run(
+            args.symbols,
+            args.eval_interval,
+            args.evolve_interval,
+            args.min_evals,
+            args.promote_scan_interval,
+            args.auto_apply,
+        )
     )
 
 
