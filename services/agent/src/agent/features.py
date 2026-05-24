@@ -9,6 +9,7 @@ from decimal import Decimal
 from sqlalchemy import desc, select
 
 from graph.queries import GraphAssetContext, base_token_to_asset, get_asset_context
+from graph.read import get_remote_graph_signal, merge_contexts
 from matrix_shared import session_scope
 from matrix_shared.models import (
     MarketTrade,
@@ -148,10 +149,23 @@ async def extract_symbol_features(symbol: str) -> SymbolFeatures:
         f.n_news_1h = len(relevant)
         f.news_titles_sample = relevant[:5]
 
-    # Graph-derived features (queries AGE for asset's 24h context)
+    # Graph-derived features.
+    # Federated read: local AGE first, then supplement with the freshest
+    # remote aggregate any PC published into graph_signals. Local data
+    # always wins when both are non-empty; remote fills coverage gaps.
     try:
         asset = base_token_to_asset(symbol)
-        ctx: GraphAssetContext = await get_asset_context(asset, window_hours=24.0)
+        local_ctx: GraphAssetContext = await get_asset_context(asset, window_hours=24.0)
+        ctx = local_ctx
+        # Only consult remote if local is thin — saves a Neon round-trip when
+        # we already have rich coverage.
+        if (
+            local_ctx.direct_mention_count < 3
+            or len(local_ctx.related_companies) < 2
+        ):
+            remote_ctx = await get_remote_graph_signal(asset, max_age_minutes=30.0)
+            if remote_ctx is not None:
+                ctx = merge_contexts(local_ctx, remote_ctx)
         f.graph_mention_count = ctx.direct_mention_count
         f.graph_recency_weight = ctx.recency_weighted_count
         f.graph_direct_polarity = ctx.direct_polarity
