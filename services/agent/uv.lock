@@ -196,6 +196,27 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "loguru" },
+    { name = "matrix-graph" },
+    { name = "matrix-shared" },
+    { name = "orjson" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.0" },
+    { name = "loguru", specifier = ">=0.7.3" },
+    { name = "matrix-graph", editable = "../graph" },
+    { name = "matrix-shared", editable = "../../packages/python-shared" },
+    { name = "orjson", specifier = ">=3.10.0" },
+]
+
+[[package]]
+name = "matrix-graph"
+version = "0.0.1"
+source = { editable = "../graph" }
+dependencies = [
+    { name = "httpx" },
+    { name = "loguru" },
     { name = "matrix-shared" },
     { name = "orjson" },
 ]
