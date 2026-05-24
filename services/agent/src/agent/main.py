@@ -29,12 +29,11 @@ from loguru import logger
 from matrix_shared import session_scope
 from matrix_shared.models import Prediction
 
+from agent.config import load_agent_config
 from agent.decide import decide
 from agent.features import extract_symbol_features
 
 AGENT_STRATEGY_ID = "matrix_agent"
-AGENT_STRATEGY_VERSION = 1
-HORIZON_S = 120  # 2-minute horizon
 
 DEFAULT_INTERVAL_S = 15.0
 DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
@@ -42,11 +41,12 @@ DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 
 async def _tick(symbols: list[str]) -> int:
     """Run one decision cycle. Returns number of non-hold predictions persisted."""
+    cfg = await load_agent_config(AGENT_STRATEGY_ID)
     persisted = 0
     for symbol in symbols:
         try:
             features = await extract_symbol_features(symbol)
-            decision = await decide(features)
+            decision = await decide(features, cfg)
         except Exception as e:
             logger.exception(f"agent error for {symbol}: {e}")
             continue
@@ -63,23 +63,23 @@ async def _tick(symbols: list[str]) -> int:
             session.add(
                 Prediction(
                     strategy_id=AGENT_STRATEGY_ID,
-                    strategy_version=AGENT_STRATEGY_VERSION,
+                    strategy_version=cfg.version,
                     generated_at=now,
                     symbol=symbol,
                     exchange="bybit",  # agent operates on whatever ingestion provides
                     side=decision.side,
                     confidence=decision.confidence,
-                    horizon_seconds=HORIZON_S,
-                    close_by=now + timedelta(seconds=HORIZON_S),
+                    horizon_seconds=cfg.horizon_seconds,
+                    close_by=now + timedelta(seconds=cfg.horizon_seconds),
                     entry_price_ref=decision.last_price,
                     thesis=decision.thesis,
-                    context=decision.feature_dump,
+                    context={**decision.feature_dump, "agent_version": cfg.version},
                     status="open",
                 )
             )
         persisted += 1
         logger.info(
-            f"{symbol}: {decision.side.upper()} conf={decision.confidence:.3f} "
+            f"{symbol} v{cfg.version}: {decision.side.upper()} conf={decision.confidence:.3f} "
             f"method={decision.method} | {decision.thesis[:120]}"
         )
 
