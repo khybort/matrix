@@ -26,7 +26,7 @@ from decimal import Decimal
 
 from loguru import logger
 
-from matrix_shared import session_scope
+from matrix_shared import shared_session_scope
 from matrix_shared.models import Prediction
 
 from agent.config import load_agent_config
@@ -59,7 +59,7 @@ async def _tick(symbols: list[str]) -> int:
             continue
 
         now = datetime.now(UTC)
-        async with session_scope() as session:
+        async with shared_session_scope() as session:
             session.add(
                 Prediction(
                     strategy_id=AGENT_STRATEGY_ID,

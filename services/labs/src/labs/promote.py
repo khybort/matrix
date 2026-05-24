@@ -34,7 +34,7 @@ from typing import Any
 from loguru import logger
 from sqlalchemy import and_, desc, exists, select
 
-from matrix_shared import session_scope
+from matrix_shared import shared_session_scope
 from matrix_shared.models import LabExperiment, MutationProposal, StrategyConfig
 
 # Eligibility thresholds — promotion is *consequential*, so defaults are strict.
@@ -78,7 +78,7 @@ async def scan_for_promotions(
     Returns the new proposal id, or None if no candidate qualifies or a
     pending proposal already exists.
     """
-    async with session_scope() as session:
+    async with shared_session_scope() as session:
         # Best eligible lab candidate
         cand_stmt = (
             select(LabExperiment)
@@ -206,7 +206,7 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
         4. Insert new StrategyConfig at to_version with after_params, active.
         5. Mark proposal applied, mark lab experiment promoted.
     """
-    async with session_scope() as session:
+    async with shared_session_scope() as session:
         proposal = await session.get(MutationProposal, proposal_id)
         if proposal is None:
             logger.error(f"apply: proposal {proposal_id} not found")
@@ -264,7 +264,7 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
 async def apply_best_pending(strategy_id: str = "matrix_agent") -> uuid.UUID | None:
     """Convenience: apply the pending lab_promotion proposal with highest
     expected gain (here: most recent, since we suppress duplicates)."""
-    async with session_scope() as session:
+    async with shared_session_scope() as session:
         stmt = (
             select(MutationProposal)
             .where(MutationProposal.strategy_id == strategy_id)

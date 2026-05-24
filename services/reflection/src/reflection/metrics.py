@@ -8,7 +8,7 @@ from decimal import Decimal
 
 from sqlalchemy import case, func, select
 
-from matrix_shared import session_scope
+from matrix_shared import shared_session_scope
 from matrix_shared.models import Outcome, Prediction
 
 
@@ -27,7 +27,7 @@ async def metrics_window(
     strategy_id: str, version: int, *, window_hours: float = 24.0
 ) -> StrategyMetrics:
     since = datetime.now(UTC) - timedelta(hours=window_hours)
-    async with session_scope() as session:
+    async with shared_session_scope() as session:
         # Aggregate
         agg_stmt = (
             select(
