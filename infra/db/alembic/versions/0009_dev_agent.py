@@ -28,12 +28,12 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    # The pgvector + AGE extensions live in ag_catalog (see infra/db/init/01-extensions.sql).
-    # The default search_path does not include it, so bare `vector(N)` doesn't resolve.
-    # Set it on the connection for this migration AND persist it at the database level
-    # so all future connections (alembic, dev_agent, psql) see vector and agtype directly.
-    op.execute("SET search_path = ag_catalog, \"$user\", public")
-    op.execute("ALTER DATABASE matrix SET search_path = ag_catalog, \"$user\", public")
+    # The pgvector type lives in ag_catalog (alongside Apache AGE). Setting
+    # search_path for this transaction is enough for the CREATE TABLE
+    # statements below; for runtime queries we use schema-qualified types
+    # (ag_catalog.vector) so future Python code doesn't depend on whatever
+    # session search_path the connection happens to inherit.
+    op.execute('SET search_path = public, ag_catalog')
 
     # --- enums -------------------------------------------------------------
     op.execute("""
