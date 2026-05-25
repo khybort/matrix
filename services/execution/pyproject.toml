@@ -5,6 +5,7 @@ description = "Live-execution gateway. Phase 0 skeleton: gates only, no broker i
 requires-python = ">=3.13"
 dependencies = [
     "matrix-shared",
+    "httpx>=0.28.0",
     "loguru>=0.7.3",
 ]
 
