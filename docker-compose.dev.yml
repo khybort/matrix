@@ -85,6 +85,18 @@ services:
       - ./services/agent/src:/workspace/services/agent/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
+  synthesis:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m synthesis.main --interval 3600 --hours 6"
+      - "/workspace/services/synthesis/src"
+      - "/workspace/services/graph/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/synthesis/src:/workspace/services/synthesis/src
+      - ./services/graph/src:/workspace/services/graph/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
   web:
     build:
       target: dev

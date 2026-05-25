@@ -22,6 +22,8 @@ services:
     restart: always
   labs:
     restart: always
+  synthesis:
+    restart: always
 
   web:
     restart: always

@@ -33,6 +33,7 @@ from matrix_shared.models import RawDocument
 from graph.age import (
     graph_summary,
     link_mentions,
+    link_typed_edge,
     upsert_document,
     upsert_entity,
 )
@@ -73,7 +74,7 @@ async def _tick(limit: int, reprocess: bool) -> int:
     processed = 0
     for doc in batch:
         try:
-            entities, source = await extract_entities(doc.title, doc.body)
+            entities, relations, source = await extract_entities(doc.title, doc.body)
         except Exception as e:
             logger.exception(f"extract failed for {doc.id}: {e}")
             continue
@@ -91,13 +92,27 @@ async def _tick(limit: int, reprocess: bool) -> int:
             for ent in entities:
                 await upsert_entity(ent.type, ent.canonical, ent.display)
                 await link_mentions(doc.id, ent.type, ent.canonical)
+            # Typed edges between entities (LLM-only; heuristic returns [])
+            for rel in relations:
+                try:
+                    await link_typed_edge(
+                        rel.source_type,
+                        rel.source_canonical,
+                        rel.edge_type,
+                        rel.target_type,
+                        rel.target_canonical,
+                        source_doc_id=doc.id,
+                    )
+                except Exception as e:
+                    logger.warning(f"relation upsert failed: {e}")
         except Exception as e:
             logger.exception(f"graph upsert failed for {doc.id}: {e}")
             continue
         await _mark_processed(doc.id, source)
         processed += 1
         logger.info(
-            f"processed {doc.id} ({doc.source}): {len(entities)} entities (src={source})"
+            f"processed {doc.id} ({doc.source}): {len(entities)} entities, "
+            f"{len(relations)} relations (src={source})"
         )
 
     return processed

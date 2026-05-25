@@ -38,6 +38,21 @@ class Entity:
     props: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class Relation:
+    """A typed edge between two extracted entities.
+
+    The graph layer's MENTIONS edges (Document -> Entity) are still
+    produced for every entity. Relations are *between* entities and
+    encode the semantic link the LLM inferred from the document.
+    """
+    source_type: str
+    source_canonical: str
+    edge_type: str  # IMPACTS | EMPLOYS | ANNOUNCES | OWNS | REGULATES | RELATED_TO
+    target_type: str
+    target_canonical: str
+
+
 # Canonical asset map: lowercase keyword → canonical ticker
 ASSET_KEYWORDS: dict[str, str] = {
     "bitcoin": "BTC",
@@ -107,31 +122,59 @@ def heuristic_extract(title: str | None, body: str | None) -> list[Entity]:
     return out
 
 
-async def llm_extract(title: str | None, body: str | None) -> list[Entity] | None:
-    """LLM-driven extraction; returns None if gateway unavailable/error."""
+ALLOWED_ENTITY_TYPES = ("Asset", "Company", "Person", "Event", "Concept")
+ALLOWED_EDGE_TYPES = (
+    "IMPACTS",      # something affects an asset/company (most common)
+    "EMPLOYS",      # Company → Person
+    "ANNOUNCES",    # Company/Person → Event
+    "OWNS",         # Company/Person → Asset/Company
+    "REGULATES",    # Company (regulator) → Company/Asset
+    "PARTNERS_WITH",
+    "COMPETES_WITH",
+    "PARTICIPATES_IN",  # Person/Company → Event
+    "RELATED_TO",   # generic fallback
+)
+
+
+async def llm_extract(
+    title: str | None, body: str | None
+) -> tuple[list[Entity], list[Relation]] | None:
+    """LLM-driven extraction; returns (entities, relations) or None on error.
+
+    Relations are inter-entity edges (Company EMPLOYS Person, Event IMPACTS
+    Asset, etc.). The Document→MENTIONS edges remain implicit and are written
+    by the graph upsert layer for every emitted entity.
+    """
     api_key = get_settings().ai_gateway_api_key
     if not api_key:
         return None
 
     user = f"TITLE: {title or ''}\n\nBODY: {(body or '')[:4000]}"
+    edge_list = ", ".join(ALLOWED_EDGE_TYPES)
     body_payload = {
         "model": LLM_MODEL,
         "messages": [
             {
                 "role": "system",
                 "content": (
-                    "Extract entities from this financial news article. Return ONLY a JSON "
-                    "object: {\"entities\":[{\"type\":\"Asset|Company|Person|Event|Concept\","
-                    "\"canonical\":\"...\",\"display\":\"...\"}, ...]}. "
-                    "Asset = canonical ticker (BTC, ETH, ...). Company = legal entity name. "
-                    "Person = full name. Event = high-level category like 'ETF approval', "
-                    "'hack', 'regulatory enforcement'. Concept = abstract theme. "
-                    "Max 12 entities. Skip if uncertain."
+                    "Extract entities AND typed relations from this financial news article. "
+                    "Return ONLY a JSON object with two keys:\n"
+                    '  "entities": [{"type":"Asset|Company|Person|Event|Concept",'
+                    '"canonical":"<stable key>","display":"<readable>"}],\n'
+                    '  "relations": [{"source":{"type":"...","canonical":"..."},'
+                    f'"edge":"<one of {edge_list}>",'
+                    '"target":{"type":"...","canonical":"..."}}].\n'
+                    "Use canonical tickers for Asset (BTC, ETH, ...). Legal names for "
+                    "Company. Full names for Person. Events are categories like "
+                    "'ETF approval', 'security exploit'. Concepts are abstract themes "
+                    "like 'institutional adoption'.\n"
+                    "Only emit a relation when the article clearly supports it; do not "
+                    "speculate. Max 12 entities and 12 relations."
                 ),
             },
             {"role": "user", "content": user},
         ],
-        "max_tokens": 700,
+        "max_tokens": 1100,
         "temperature": 0.1,
     }
     try:
@@ -162,28 +205,74 @@ async def llm_extract(title: str | None, body: str | None) -> list[Entity] | Non
         parsed = orjson.loads(text)
     except orjson.JSONDecodeError:
         return None
+
+    # Entities
     raw_ents = parsed.get("entities") or []
-    out: list[Entity] = []
+    entities: list[Entity] = []
+    seen_keys: set[tuple[str, str]] = set()
     for e in raw_ents[:12]:
         if not isinstance(e, dict):
             continue
         t = str(e.get("type", "")).strip()
-        if t not in ("Asset", "Company", "Person", "Event", "Concept"):
+        if t not in ALLOWED_ENTITY_TYPES:
             continue
         canonical = str(e.get("canonical", "")).strip()[:128]
         display = str(e.get("display", canonical))[:200]
         if not canonical:
             continue
-        out.append(Entity(type=t, canonical=canonical, display=display))
-    return out
+        if (t, canonical) in seen_keys:
+            continue
+        seen_keys.add((t, canonical))
+        entities.append(Entity(type=t, canonical=canonical, display=display))
+
+    # Relations — both endpoints must be entities we actually emitted
+    raw_rels = parsed.get("relations") or []
+    relations: list[Relation] = []
+    for r in raw_rels[:12]:
+        if not isinstance(r, dict):
+            continue
+        edge = str(r.get("edge", "")).strip().upper()
+        if edge not in ALLOWED_EDGE_TYPES:
+            continue
+        src = r.get("source") or {}
+        tgt = r.get("target") or {}
+        if not isinstance(src, dict) or not isinstance(tgt, dict):
+            continue
+        st = str(src.get("type", "")).strip()
+        sc = str(src.get("canonical", "")).strip()[:128]
+        tt = str(tgt.get("type", "")).strip()
+        tc = str(tgt.get("canonical", "")).strip()[:128]
+        if st not in ALLOWED_ENTITY_TYPES or tt not in ALLOWED_ENTITY_TYPES:
+            continue
+        if not sc or not tc:
+            continue
+        if (st, sc) not in seen_keys or (tt, tc) not in seen_keys:
+            # Drop relations referencing entities we didn't extract — keeps
+            # the graph honest. LLM sometimes hallucinates endpoints.
+            continue
+        relations.append(
+            Relation(
+                source_type=st,
+                source_canonical=sc,
+                edge_type=edge,
+                target_type=tt,
+                target_canonical=tc,
+            )
+        )
+
+    return entities, relations
 
 
-async def extract_entities(title: str | None, body: str | None) -> tuple[list[Entity], str]:
-    """Top-level entry. Tries LLM first, falls back to heuristic.
+async def extract_entities(
+    title: str | None, body: str | None
+) -> tuple[list[Entity], list[Relation], str]:
+    """Top-level entry. Tries LLM first (entities + relations), falls back
+    to heuristic (entities only, no inter-entity relations).
 
-    Returns (entities, source) where source is 'llm' or 'heuristic'.
+    Returns (entities, relations, source) where source is 'llm' or 'heuristic'.
     """
     llm_result = await llm_extract(title, body)
-    if llm_result is not None and llm_result:
-        return llm_result, "llm"
-    return heuristic_extract(title, body), "heuristic"
+    if llm_result is not None and llm_result[0]:
+        entities, relations = llm_result
+        return entities, relations, "llm"
+    return heuristic_extract(title, body), [], "heuristic"
