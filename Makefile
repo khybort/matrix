@@ -286,6 +286,19 @@ install-hooks: ## Install git hooks (pre-push: blocks dev-agent/* branches)
 	chmod +x .git/hooks/pre-push
 	@echo "✓ pre-push hook installed"
 
+##@ Backtest
+
+.PHONY: backtest-historical
+backtest-historical: ## Historical replay. Vars: STRATEGY SYMBOL DAYS N_GRIDS BAND HORIZON
+	$(DC) $(DC_BASE) exec backtest uv run matrix-backtest-historical \
+		--strategy=$${STRATEGY:-grid} \
+		--symbol=$${SYMBOL:-BTCUSDT} \
+		--asset-class=$${ASSET_CLASS:-crypto} \
+		--days=$${DAYS:-7} \
+		--n-grids=$${N_GRIDS:-10} \
+		--price-band-pct=$${BAND:-0.02} \
+		--horizon-s=$${HORIZON:-300}
+
 ##@ Cleanup
 
 .PHONY: clean
