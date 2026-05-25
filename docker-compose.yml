@@ -231,6 +231,35 @@ services:
     restart: unless-stopped
     logging: *default_logging
 
+  dev_agent:
+    build:
+      <<: *python-build
+      target: runtime
+      args:
+        SERVICE: dev_agent
+    image: matrix-dev_agent:local
+    container_name: matrix-dev-agent
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *python-env
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEV_AGENT_PARALLEL: ${DEV_AGENT_PARALLEL:-2}
+      DEV_AGENT_DAILY_COST_CAP_USD: ${DEV_AGENT_DAILY_COST_CAP_USD:-50}
+      DEV_AGENT_TASK_COST_CAP_USD: ${DEV_AGENT_TASK_COST_CAP_USD:-5}
+      DEV_AGENT_REPO_ROOT: /workspace
+      DEV_AGENT_WORKTREE_ROOT: /workspace/worktrees/dev-agent
+    ports:
+      - "8009:8009"
+    volumes:
+      # Repo root RW-mounted so dev_agent can create worktrees on the host filesystem.
+      - .:/workspace
+      - ./worktrees:/workspace/worktrees
+    command: ["dev_agent.main"]
+    restart: unless-stopped
+    logging: *default_logging
+
   web:
     build:
       context: .
