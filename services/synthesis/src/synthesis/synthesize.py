@@ -14,19 +14,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-import httpx
-import orjson
 from loguru import logger
 from sqlalchemy import desc, select
 
-from matrix_shared import get_settings, local_session_scope
+from matrix_shared import call_claude_json, local_session_scope
 from matrix_shared.models import RawDocument
 
 from graph.age import link_typed_edge, upsert_entity
 
-GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
-LLM_MODEL = "anthropic/claude-haiku-4-5"
-HTTP_TIMEOUT_S = 45.0
+LLM_MODEL = "claude-haiku-4-5"
 
 MAX_DOCS_PER_RUN = 60       # context budget cap
 TITLE_CHARS = 200
@@ -65,64 +61,23 @@ def _pack_corpus(docs: list[RawDocument]) -> str:
 
 
 async def _call_llm(corpus: str, hours: float) -> list[Theme] | None:
-    api_key = get_settings().ai_gateway_api_key
-    if not api_key:
-        return None
-
-    body_payload = {
-        "model": LLM_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a financial-news synthesis agent. Given a recent "
-                    "corpus of headlines + body snippets, identify 3-8 *emerging "
-                    "themes* — concepts that span multiple documents and would "
-                    "matter to a trader. For each theme, list the assets and "
-                    "companies it impacts (canonical tickers/names only). Skip "
-                    "themes supported by fewer than 2 distinct documents.\n\n"
-                    "Return ONLY a JSON object: "
-                    '{"themes":[{"canonical":"<slug>","display":"<short name>",'
-                    '"summary":"<1-2 sentences>","impacted_assets":["BTC",...],'
-                    '"impacted_companies":["BlackRock",...]}]}'
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"Window: last {hours:.0f}h. Documents:\n\n{corpus}",
-            },
-        ],
-        "max_tokens": 1500,
-        "temperature": 0.2,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as client:
-            resp = await client.post(
-                GATEWAY_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                content=orjson.dumps(body_payload),
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except (httpx.HTTPError, httpx.TimeoutException) as e:
-        logger.warning(f"synthesis gateway error: {e}")
-        return None
-
-    try:
-        text = data["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError):
-        return None
-    if text.startswith("```"):
-        text = "\n".join(
-            ln for ln in text.splitlines() if not ln.strip().startswith("```")
-        ).strip()
-    try:
-        parsed = orjson.loads(text)
-    except orjson.JSONDecodeError:
-        logger.warning(f"synthesis: bad JSON: {text[:200]}")
+    system = (
+        "You are a financial-news synthesis agent. Given a recent "
+        "corpus of headlines + body snippets, identify 3-8 *emerging "
+        "themes* — concepts that span multiple documents and would "
+        "matter to a trader. For each theme, list the assets and "
+        "companies it impacts (canonical tickers/names only). Skip "
+        "themes supported by fewer than 2 distinct documents.\n\n"
+        "Return ONLY a JSON object: "
+        '{"themes":[{"canonical":"<slug>","display":"<short name>",'
+        '"summary":"<1-2 sentences>","impacted_assets":["BTC",...],'
+        '"impacted_companies":["BlackRock",...]}]}'
+    )
+    user = f"Window: last {hours:.0f}h. Documents:\n\n{corpus}"
+    parsed = await call_claude_json(
+        system=system, user=user, model=LLM_MODEL, max_tokens=1500, temperature=0.2,
+    )
+    if parsed is None:
         return None
 
     raw_themes = parsed.get("themes") or []

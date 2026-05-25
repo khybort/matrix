@@ -10,6 +10,7 @@ from matrix_shared.db import (
     session_scope,
     shared_session_scope,
 )
+from matrix_shared.llm import call_claude, call_claude_json, llm_enabled
 
 __all__ = [
     "Settings",
@@ -23,4 +24,7 @@ __all__ = [
     "local_session_scope",
     "session_scope",
     "shared_session_scope",
+    "call_claude",
+    "call_claude_json",
+    "llm_enabled",
 ]

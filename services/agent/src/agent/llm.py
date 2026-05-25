@@ -1,95 +1,48 @@
-"""Optional LLM-based decision engine via Vercel AI Gateway.
+"""Optional LLM-based decision engine via Anthropic Messages API.
 
-If AI_GATEWAY_API_KEY is unset, callers fall back to rule-based decisions.
-The gateway accepts an OpenAI-compatible chat-completions interface; model
-strings are of the form "anthropic/claude-haiku-4-5".
+Routes through `matrix_shared.llm.call_claude_json`. When no key is
+configured (or the call fails), callers fall back to rule-based decisions.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-import httpx
-import orjson
 from loguru import logger
 
-from matrix_shared import get_settings
+from matrix_shared import call_claude_json, llm_enabled as _llm_enabled
 
-GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
-DEFAULT_MODEL = "anthropic/claude-haiku-4-5"
-HTTP_TIMEOUT_S = 25.0
+DEFAULT_MODEL = "claude-haiku-4-5"
 
 
 @dataclass(slots=True)
 class LLMDecision:
-    side: str  # long | short | hold
+    side: str        # long | short | hold
     confidence: float  # 0..1
     reasoning: str
 
 
 def llm_enabled() -> bool:
-    return bool(get_settings().ai_gateway_api_key)
+    return _llm_enabled()
 
 
 async def call_llm_decision(prompt_user: str, *, model: str = DEFAULT_MODEL) -> LLMDecision | None:
-    """Send prompt; expect JSON object with side/confidence/reasoning.
+    """Send the decision prompt; expect JSON with side/confidence/reasoning.
 
     Returns None on any failure — caller falls back to rule-based.
     """
-    api_key = get_settings().ai_gateway_api_key
-    if not api_key:
-        return None
-
-    body = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a quantitative trading agent for short-horizon crypto "
-                    "perpetual trades. Given the current state, decide LONG, SHORT, "
-                    "or HOLD. Respond with ONLY a JSON object: "
-                    '{"side":"long|short|hold","confidence":0.0-1.0,"reasoning":"..."}. '
-                    "Be cautious — bias toward HOLD when signals conflict. Confidence "
-                    "should reflect signal strength, not enthusiasm."
-                ),
-            },
-            {"role": "user", "content": prompt_user},
-        ],
-        "max_tokens": 200,
-        "temperature": 0.2,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as client:
-            resp = await client.post(
-                GATEWAY_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                content=orjson.dumps(body),
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except (httpx.HTTPError, httpx.TimeoutException) as e:
-        logger.warning(f"llm gateway error: {e}")
-        return None
-
-    try:
-        text = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError) as e:
-        logger.warning(f"llm response unexpected shape: {e}")
-        return None
-
-    text = text.strip()
-    if text.startswith("```"):
-        # tolerate code-fenced JSON
-        lines = [ln for ln in text.splitlines() if not ln.strip().startswith("```")]
-        text = "\n".join(lines).strip()
-    try:
-        parsed = orjson.loads(text)
-    except orjson.JSONDecodeError:
-        logger.warning(f"llm response not valid JSON: {text[:200]}")
+    system = (
+        "You are a quantitative trading agent for short-horizon crypto "
+        "perpetual trades. Given the current state, decide LONG, SHORT, "
+        "or HOLD. Respond with ONLY a JSON object: "
+        '{"side":"long|short|hold","confidence":0.0-1.0,"reasoning":"..."}. '
+        "Be cautious — bias toward HOLD when signals conflict. Confidence "
+        "should reflect signal strength, not enthusiasm."
+    )
+    parsed = await call_claude_json(
+        system=system, user=prompt_user, model=model, max_tokens=500, temperature=0.2,
+    )
+    if parsed is None:
         return None
 
     side = str(parsed.get("side", "hold")).lower()
