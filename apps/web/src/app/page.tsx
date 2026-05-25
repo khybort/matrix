@@ -42,6 +42,10 @@ type Dashboard = {
 
 const REFRESH_MS = 5000;
 
+function formatTime(date: Date): string {
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}`;
+}
+
 export default function Page() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -89,6 +93,9 @@ export default function Page() {
         </h1>
         <span className="muted text-xs mono">{new Date(data.now).toLocaleTimeString()}</span>
       </header>
+      <div className="muted text-xs mb-4">
+        Last refresh: {formatTime(new Date(data.now))}
+      </div>
 
       <WalletCard wallet={data.wallet} curve={data.equityCurve} />
 
