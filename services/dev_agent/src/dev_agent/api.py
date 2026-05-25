@@ -21,7 +21,7 @@ class TaskCreate(BaseModel):
     auto_pr: bool = False
     run_tests: bool = True
     max_turns: int = 50
-    model: str = "claude-opus-4-7"
+    model: str = "claude-haiku-4-5"
     base_branch: str = "main"
     commit_message: str | None = None
     cost_cap_usd: float = 5.00
@@ -122,5 +122,18 @@ def build_app(pool: asyncpg.Pool) -> FastAPI:
         from dev_agent.runtime import resume
         await resume(pool)
         return {"paused": "false"}
+
+    @app.post("/lessons/{lesson_id}/approve")
+    async def lesson_approve(lesson_id: int, body: dict[str, Any]) -> dict[str, str]:
+        from dev_agent.memory import approve_lesson
+        await approve_lesson(pool, lesson_id=lesson_id, by=body.get("by", "user"))
+        return {"status": "active"}
+
+    @app.get("/lessons")
+    async def list_lessons(status: str = Query("active")) -> list[dict[str, Any]]:
+        from dev_agent.memory import list_active_lessons, list_draft_lessons
+        if status == "draft":
+            return await list_draft_lessons(pool)
+        return await list_active_lessons(pool)
 
     return app

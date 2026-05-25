@@ -86,3 +86,33 @@ async def test_runtime_pause_resume(pg_pool):
         assert r.status_code == 200
     paused = await pg_pool.fetchval("SELECT paused FROM dev_agent_runtime WHERE id=TRUE")
     assert paused is False
+
+
+async def test_lesson_approve_endpoint_promotes_draft(pg_pool):
+    from dev_agent.memory import write_lesson_draft
+    lid = await write_lesson_draft(
+        pg_pool, source="failure", topic="t", summary="s",
+        anti_pattern=None, correct_approach="ca",
+        relevant_paths=[], origin_task_id=None,
+    )
+    app = build_app(pool=pg_pool)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.post(f"/lessons/{lid}/approve", json={"by": "user"})
+        assert r.status_code == 200, r.text
+    status = await pg_pool.fetchval("SELECT status FROM dev_agent_lessons WHERE id=$1", lid)
+    assert status == "active"
+
+
+async def test_lessons_list_filter_by_status(pg_pool):
+    from dev_agent.memory import write_lesson_draft
+    await write_lesson_draft(
+        pg_pool, source="failure", topic="t1", summary="s",
+        anti_pattern=None, correct_approach="ca",
+        relevant_paths=[], origin_task_id=None,
+    )
+    app = build_app(pool=pg_pool)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.get("/lessons?status=draft")
+        assert r.status_code == 200
+        items = r.json()
+        assert any(l["topic"] == "t1" for l in items)
