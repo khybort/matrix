@@ -25,10 +25,27 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # `IF NOT EXISTS` because tests/conftest.py seeds the column on the LOCAL
+    # tier directly so the unit suite can run without applying alembic; that
+    # leaves the column present but alembic_version at 0009. The IF NOT EXISTS
+    # also makes the check constraint conditional via DO block.
+    op.execute(
+        "ALTER TABLE dev_tasks ADD COLUMN IF NOT EXISTS review_mode "
+        "TEXT NOT NULL DEFAULT 'auto'"
+    )
     op.execute("""
-        ALTER TABLE dev_tasks
-        ADD COLUMN review_mode TEXT NOT NULL DEFAULT 'auto'
-            CHECK (review_mode IN ('auto', 'manual'))
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'dev_tasks_review_mode_check'
+            ) THEN
+                ALTER TABLE dev_tasks
+                ADD CONSTRAINT dev_tasks_review_mode_check
+                CHECK (review_mode IN ('auto', 'manual'));
+            END IF;
+        END
+        $$
     """)
 
 
