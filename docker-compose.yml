@@ -173,6 +173,26 @@ services:
       <<: *python-env
     command: ["agent.main", "--interval", "15"]
     restart: unless-stopped
+
+  # Rule-based strategy generator pool. Each module emits PredictionDraft rows
+  # alongside matrix-agent's LLM predictions; reflection scores them together
+  # and proposes mutations per strategy_id. Paper-trade only — execution gate
+  # in services/execution still enforces no-live-without-paper-cert.
+  strategy:
+    build:
+      <<: *python-build
+      target: runtime
+      args:
+        SERVICE: strategy
+    image: matrix-strategy:local
+    container_name: matrix-strategy
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *python-env
+    command: ["strategy.main", "--interval", "30"]
+    restart: unless-stopped
     logging: *default_logging
 
   backtest:
