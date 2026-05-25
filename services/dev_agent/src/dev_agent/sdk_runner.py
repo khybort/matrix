@@ -76,6 +76,14 @@ async def run_task_with_query(
 
     try:
         async for ev in iterator:
+            # Cancel switch — checked between every event.
+            cancel = await pool.fetchval(
+                "SELECT cancel_requested FROM dev_tasks WHERE id=$1", task_id
+            )
+            if cancel:
+                failure_reason = "user_killed"
+                break
+
             ev_type = ev.type
             ev_payload = ev.payload
 
