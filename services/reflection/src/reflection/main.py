@@ -107,7 +107,60 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
             f"({draft.proposal_type}, source={draft.source})"
         )
 
+    # Auto-grant pass — independent of mutation logic. A strategy version
+    # that hits eligibility thresholds gets a paper_trade_certificate so
+    # Phase 5 execution can unblock without manual SQL. Failures here MUST
+    # NOT crash the tick.
+    try:
+        from matrix_shared import maybe_grant_certificate
+        for cfg in active_configs:
+            try:
+                ok, _, reason = await maybe_grant_certificate(
+                    cfg.strategy_id, cfg.asset_class, cfg.version,
+                )
+                if ok:
+                    logger.info(
+                        f"auto-granted cert: {cfg.strategy_id}/{cfg.asset_class}/v{cfg.version}"
+                    )
+                else:
+                    logger.debug(
+                        f"cert skip {cfg.strategy_id}/v{cfg.version}: {reason}"
+                    )
+            except Exception:
+                logger.exception(
+                    f"auto-grant failed for {cfg.strategy_id} v{cfg.version}"
+                )
+    except Exception:
+        logger.exception("auto-grant pass failed (non-fatal)")
+
     return proposals_written
+
+
+async def scan_grants_once() -> int:
+    """Run maybe_grant_certificate across every active StrategyConfig once.
+    Returns count granted. For the `make cert-scan` operator workflow."""
+    from matrix_shared import maybe_grant_certificate
+    granted = 0
+    async with shared_session_scope() as session:
+        stmt = select(StrategyConfig).where(StrategyConfig.status == "active")
+        configs = list((await session.execute(stmt)).scalars())
+    for cfg in configs:
+        try:
+            ok, _, reason = await maybe_grant_certificate(
+                cfg.strategy_id, cfg.asset_class, cfg.version,
+            )
+            if ok:
+                granted += 1
+                logger.info(
+                    f"granted cert: {cfg.strategy_id}/{cfg.asset_class}/v{cfg.version}"
+                )
+            else:
+                logger.info(
+                    f"skip {cfg.strategy_id}/{cfg.asset_class}/v{cfg.version}: {reason}"
+                )
+        except Exception:
+            logger.exception(f"grant failed for {cfg.strategy_id} v{cfg.version}")
+    return granted
 
 
 async def run(
@@ -162,6 +215,10 @@ def main() -> None:
         help="Trigger mutation when avg_score below this (default -0.05)",
     )
     parser.add_argument("--once", action="store_true")
+    parser.add_argument(
+        "--scan-grants", action="store_true",
+        help="Scan active strategies; auto-grant paper_trade_certificate if eligible. Exits.",
+    )
     args = parser.parse_args()
 
     logger.remove()
@@ -172,7 +229,10 @@ def main() -> None:
     )
 
     use_llm = not args.no_llm
-    if args.once:
+    if args.scan_grants:
+        n = asyncio.run(scan_grants_once())
+        logger.info(f"scan-grants: granted {n} cert(s)")
+    elif args.once:
         asyncio.run(_tick(args.window_hours, use_llm, args.min_outcomes, args.score_trigger))
     else:
         asyncio.run(

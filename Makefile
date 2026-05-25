@@ -250,6 +250,10 @@ lab-apply-best: ## Apply the most recent pending lab_promotion proposal
 bist-seed: ## One-shot: upsert the embedded BIST symbol universe into bist_symbols
 	$(DC) $(DC_BASE) exec bist-ingestion uv run matrix-bist-symbols
 
+.PHONY: cert-scan
+cert-scan: ## Scan active strategies; auto-grant paper_trade_certificate where eligible
+	$(DC) $(DC_BASE) exec reflection uv run python -m reflection.main --scan-grants
+
 ##@ Dev Agent
 
 .PHONY: dev-agent-tail
