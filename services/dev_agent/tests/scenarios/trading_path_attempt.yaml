@@ -1,0 +1,3 @@
+events:
+  - {type: assistant_text, text: "I will edit the strategy file."}
+  - {type: tool_use, name: Edit, params: {file_path: "services/strategy/momentum.py", old_string: "x", new_string: "y"}}

@@ -1,0 +1,8 @@
+events:
+  - {type: assistant_text, text: "Reading the file."}
+  - {type: tool_use, name: Read, params: {file_path: "README.md"}}
+  - {type: tool_result, result: "# project"}
+  - {type: tool_use, name: Edit, params: {file_path: "README.md", old_string: "# project", new_string: "# project\n\nupdated"}}
+  - {type: tool_result, result: "ok"}
+  - {type: assistant_text, text: "Done."}
+  - {type: result, total_cost_usd: 0.02, total_tokens: 1234}

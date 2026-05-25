@@ -1,0 +1,7 @@
+events:
+  - {type: assistant_text, text: "Thinking..."}
+  - {type: tool_use, name: Read, params: {file_path: "a.py"}}
+  - {type: tool_result, result: ""}
+  - {type: assistant_text, text: "Thinking..."}
+  - {type: tool_use, name: Read, params: {file_path: "b.py"}}
+  - {type: tool_result, result: ""}
