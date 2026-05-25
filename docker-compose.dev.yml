@@ -108,6 +108,12 @@ services:
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
   dev_agent:
+    # Dev safety: force the spawned `claude` CLI onto subscription auth so a
+    # prod ANTHROPIC_API_KEY in .env can never burn API credits during local
+    # iteration. Prod compose leaves both env vars passthrough — operator
+    # picks via .env.
+    environment:
+      ANTHROPIC_API_KEY: ""
     entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
     command:
       - "python -m dev_agent.main"

@@ -55,17 +55,33 @@ async def maybe_synthesize_lesson_for_failure(
 
 
 async def real_haiku_llm(**kwargs: Any) -> dict[str, Any]:
-    """Phase 0 real LLM call. Imported lazily so tests don't need the SDK."""
-    import anthropic
+    """Phase 0 real LLM call via the `claude` CLI (Claude Code subscription).
+
+    We deliberately do NOT use the Anthropic API SDK here: dev_agent runs
+    entirely on the user's Claude Code subscription, not API-key billing.
+    The `claude` CLI is already installed in the dev_agent image and
+    authenticates via CLAUDE_CODE_OAUTH_TOKEN (set in compose).
+    """
+    import asyncio
     import json
-    client = anthropic.AsyncAnthropic()
+
     user_prompt = _build_prompt(**kwargs)
-    msg = await client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=512,
-        messages=[{"role": "user", "content": user_prompt}],
+    proc = await asyncio.create_subprocess_exec(
+        "claude",
+        "-p", user_prompt,
+        "--output-format", "json",
+        "--model", "claude-haiku-4-5",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
-    text = msg.content[0].text  # type: ignore[attr-defined]
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"claude CLI failed: {stderr.decode(errors='replace')}")
+
+    envelope = json.loads(stdout.decode())
+    if envelope.get("is_error"):
+        raise RuntimeError(f"claude CLI returned error: {envelope}")
+    text = envelope["result"]
     return json.loads(text[text.find("{"): text.rfind("}") + 1])
 
 

@@ -22,7 +22,6 @@ def test_forbidden_paths_are_hardcoded():
 
 def test_load_config_from_env(monkeypatch):
     monkeypatch.setenv("LOCAL_DATABASE_URL", "postgres://x:y@db:5432/m")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("DEV_AGENT_PARALLEL", "3")
     monkeypatch.setenv("DEV_AGENT_DAILY_COST_CAP_USD", "100")
     cfg = load_config()
@@ -30,12 +29,10 @@ def test_load_config_from_env(monkeypatch):
     assert cfg.parallel == 3
     assert cfg.daily_cost_cap_usd == 100.0
     assert cfg.database_url.startswith("postgres://")
-    assert cfg.anthropic_api_key == "sk-test"
 
 
 def test_load_config_defaults(monkeypatch):
     monkeypatch.setenv("LOCAL_DATABASE_URL", "postgres://x:y@db:5432/m")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.delenv("DEV_AGENT_PARALLEL", raising=False)
     monkeypatch.delenv("DEV_AGENT_DAILY_COST_CAP_USD", raising=False)
     cfg = load_config()
