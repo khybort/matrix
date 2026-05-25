@@ -83,6 +83,16 @@ services:
       - ./services/strategy/src:/workspace/services/strategy/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
+  execution:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m execution.main --heartbeat 60"
+      - "/workspace/services/execution/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/execution/src:/workspace/services/execution/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
   backtest:
     entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
     command:
