@@ -126,6 +126,20 @@ async def process_one_task(
         final_status, result.failure_reason, result.total_cost_usd, result.total_tokens,
         result.event_count, run_id,
     )
+
+    if final_status == "failed":
+        try:
+            from dev_agent.lesson_synth import (
+                maybe_synthesize_lesson_for_failure,
+                real_haiku_llm,
+            )
+            await maybe_synthesize_lesson_for_failure(
+                pool, task_id=task_id, llm=real_haiku_llm,
+            )
+        except Exception:
+            from loguru import logger
+            logger.exception("lesson synth failed (non-fatal)")
+
     return True
 
 

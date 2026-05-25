@@ -28,6 +28,7 @@ x-python-env: &python-env
   LOCAL_DATABASE_URL: ${LOCAL_DATABASE_URL:-postgres://matrix:matrix_dev_only@postgres:5432/matrix}
   SHARED_DATABASE_URL: ${SHARED_DATABASE_URL:-postgres://matrix:matrix_dev_only@postgres:5432/matrix}
   DATABASE_URL: ${LOCAL_DATABASE_URL:-postgres://matrix:matrix_dev_only@postgres:5432/matrix}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
   NODE_ID: ${NODE_ID:-default-node}
   NODE_ROLES: ${NODE_ROLES:-dev,ingestion,graph,strategy,backtest,reflection,labs}
