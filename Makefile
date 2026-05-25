@@ -254,6 +254,16 @@ bist-seed: ## One-shot: upsert the embedded BIST symbol universe into bist_symbo
 cert-scan: ## Scan active strategies; auto-grant paper_trade_certificate where eligible
 	$(DC) $(DC_BASE) exec reflection uv run python -m reflection.main --scan-grants
 
+.PHONY: suggest
+suggest: ## AI param suggester. Args: STRATEGY (default grid) SYMBOL DAYS RISK SAMPLES TOP_K
+	$(DC) $(DC_BASE) exec backtest uv run matrix-backtest-suggester \
+		--strategy=$${STRATEGY:-grid} \
+		--symbol=$${SYMBOL:-BTCUSDT} \
+		--days=$${DAYS:-7} \
+		--risk=$${RISK:-balanced} \
+		$${SAMPLES:+--samples $${SAMPLES}} \
+		--top-k=$${TOP_K:-5}
+
 ##@ Dev Agent
 
 .PHONY: dev-agent-tail
