@@ -20,6 +20,7 @@ packages = ["src/backtest"]
 
 [project.scripts]
 matrix-backtest = "backtest.main:main"
+matrix-backtest-historical = "backtest.historical:main"
 
 [tool.ruff]
 line-length = 100
