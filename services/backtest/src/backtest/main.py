@@ -19,16 +19,25 @@ import sys
 
 from loguru import logger
 
-from backtest.paper_trade import close_due_positions, open_due_positions, snapshot_wallet
+from backtest.paper_trade import (
+    close_due_positions,
+    expire_stale_predictions,
+    open_due_positions,
+    snapshot_wallet,
+)
 
 DEFAULT_INTERVAL_S = 10.0
 
 
-async def _tick() -> tuple[int, int]:
-    opened = await open_due_positions()
+async def _tick() -> tuple[int, int, int]:
+    # Order matters: expire stale predictions first so they're not seen as
+    # candidates by open_due_positions. Then close due open positions
+    # (frees slots), then fill freed slots with fresh candidates.
+    expired = await expire_stale_predictions()
     closed = await close_due_positions()
+    opened = await open_due_positions()
     await snapshot_wallet()
-    return opened, closed
+    return opened, closed, expired
 
 
 async def run(interval_s: float) -> None:
@@ -44,9 +53,9 @@ async def run(interval_s: float) -> None:
 
     while not stop.is_set():
         try:
-            opened, closed = await _tick()
-            if opened or closed:
-                logger.info(f"tick: opened={opened} closed={closed}")
+            opened, closed, expired = await _tick()
+            if opened or closed or expired:
+                logger.info(f"tick: opened={opened} closed={closed} expired={expired}")
         except Exception as e:
             logger.exception(f"tick error: {e}")
         try:
