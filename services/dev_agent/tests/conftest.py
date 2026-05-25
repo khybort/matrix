@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS dev_tasks (
   base_branch TEXT NOT NULL DEFAULT 'main',
   commit_message TEXT,
   cost_cap_usd NUMERIC(10,4) NOT NULL DEFAULT 5.00,
+  review_mode TEXT NOT NULL DEFAULT 'auto',
   worktree_path TEXT,
   branch_name TEXT,
   cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
@@ -127,6 +128,10 @@ CREATE TABLE IF NOT EXISTS dev_agent_runtime (
   paused_by TEXT
 );
 INSERT INTO dev_agent_runtime (id) VALUES (TRUE) ON CONFLICT DO NOTHING;
+
+-- Idempotent additions for test DBs that already have dev_tasks from a prior
+-- session and missed the column above. Migration 0010 added review_mode.
+ALTER TABLE dev_tasks ADD COLUMN IF NOT EXISTS review_mode TEXT NOT NULL DEFAULT 'auto';
 
 -- pgvector lives in ag_catalog. Use schema-qualified type to avoid
 -- search_path gymnastics (ag_catalog.vector is always resolvable).

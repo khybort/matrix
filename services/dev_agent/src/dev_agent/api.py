@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 import asyncpg
 from fastapi import FastAPI, HTTPException, Query
@@ -25,6 +25,10 @@ class TaskCreate(BaseModel):
     base_branch: str = "main"
     commit_message: str | None = None
     cost_cap_usd: float = 5.00
+    # 'auto'  → worker marks successful tasks 'merged' directly (reviewed_by='auto')
+    # 'manual'→ successful tasks land in 'awaiting_review' for human accept/discard
+    # Failed tasks ignore this and stay 'failed' either way.
+    review_mode: Literal["auto", "manual"] = "auto"
     conversation_snapshot: dict[str, Any] | None = None
 
 
@@ -47,16 +51,16 @@ def build_app(pool: asyncpg.Pool) -> FastAPI:
             INSERT INTO dev_tasks (
               source, description, priority, acceptance, touches_files, exclusive,
               auto_commit, auto_pr, run_tests, max_turns, model, base_branch,
-              commit_message, cost_cap_usd, conversation_snapshot
+              commit_message, cost_cap_usd, review_mode, conversation_snapshot
             )
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb)
             RETURNING id, status
             """,
             payload.source, payload.description, payload.priority, payload.acceptance,
             payload.touches_files, payload.exclusive,
             payload.auto_commit, payload.auto_pr, payload.run_tests, payload.max_turns,
             payload.model, payload.base_branch, payload.commit_message,
-            payload.cost_cap_usd, snapshot_json,
+            payload.cost_cap_usd, payload.review_mode, snapshot_json,
         )
         return {"id": row["id"], "status": row["status"]}
 
