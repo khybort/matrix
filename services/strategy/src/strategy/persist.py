@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from loguru import logger
 
-from matrix_shared import session_scope
+from matrix_shared import shared_session_scope
 from matrix_shared.models import Prediction
 
 from strategy.base import PredictionDraft
@@ -16,7 +16,10 @@ from strategy.base import PredictionDraft
 async def persist_drafts(drafts: Sequence[PredictionDraft]) -> int:
     if not drafts:
         return 0
-    async with session_scope() as session:
+    # Predictions live in the SHARED tier — backtest/reflection/wallet all
+    # read from there. matrix-agent already does this; strategy modules
+    # were inadvertently writing to LOCAL.
+    async with shared_session_scope() as session:
         for d in drafts:
             session.add(
                 Prediction(

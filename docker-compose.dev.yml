@@ -73,6 +73,16 @@ services:
       - ./services/graph/src:/workspace/services/graph/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
+  strategy:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m strategy.main --interval 30"
+      - "/workspace/services/strategy/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/strategy/src:/workspace/services/strategy/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
   backtest:
     entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
     command:
@@ -99,10 +109,12 @@ services:
       - "python -m labs.main --eval-interval 20 --evolve-interval 300 --promote-scan-interval 600"
       - "/workspace/services/labs/src"
       - "/workspace/services/agent/src"
+      - "/workspace/services/graph/src"
       - "/workspace/packages/python-shared/src"
     volumes:
       - ./services/labs/src:/workspace/services/labs/src
       - ./services/agent/src:/workspace/services/agent/src
+      - ./services/graph/src:/workspace/services/graph/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
   synthesis:
