@@ -18,6 +18,12 @@ type Dashboard = {
     max_gen?: number; evals_open?: number; evals_scored?: number;
     evals_stale?: number;
   };
+  graphSignals: any[];
+  graphSignalsStats: {
+    total_signals?: number; contributing_nodes?: number;
+    distinct_assets?: number; latest_publish?: string;
+    avg_compute_ms?: number;
+  };
   now: string;
 };
 
@@ -93,6 +99,10 @@ export default function Page() {
 
       <Panel title="Lab — evolutionary algorithm search" className="mt-4">
         <LabPanel rows={data.labLeaderboard} stats={data.labStats} />
+      </Panel>
+
+      <Panel title="Context graph — federated signals (per asset)" className="mt-4">
+        <GraphSignalsPanel rows={data.graphSignals} stats={data.graphSignalsStats} />
       </Panel>
 
       <Panel title="Recent predictions" className="mt-4">
@@ -308,6 +318,98 @@ function PredictionsTable({ rows }: { rows: any[] }) {
 
 function fmtUsd(n: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(n);
+}
+
+function GraphSignalsPanel({
+  rows, stats,
+}: { rows: any[]; stats: Dashboard["graphSignalsStats"] }) {
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+        <Stat label="Signals (24h)" value={String(stats?.total_signals ?? 0)} />
+        <Stat label="Contributing nodes" value={String(stats?.contributing_nodes ?? 0)} />
+        <Stat label="Assets covered" value={String(stats?.distinct_assets ?? 0)} />
+        <Stat
+          label="Avg compute"
+          value={`${stats?.avg_compute_ms ?? 0}ms`}
+        />
+        <Stat
+          label="Latest publish"
+          value={stats?.latest_publish ? new Date(stats.latest_publish).toLocaleTimeString() : "—"}
+        />
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="muted text-sm">
+          No graph signals yet. The graph service publishes federated aggregates
+          every 120s when raw_documents exist for each tracked asset.
+        </p>
+      ) : (
+        <table className="matrix">
+          <thead>
+            <tr>
+              <th>Asset</th><th>Node</th><th>Mentions</th>
+              <th>Polarity (direct / ctx)</th>
+              <th>Related companies</th>
+              <th>Co-mentioned assets</th>
+              <th>At</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const dpol = Number(r.direct_polarity);
+              const cpol = Number(r.contextual_polarity);
+              const companies: string[] = r.related_companies || [];
+              const coAssets: string[] = r.co_mentioned_assets || [];
+              return (
+                <tr key={`${r.asset}-${r.node_id}`}>
+                  <td className="mono font-medium">{r.asset}</td>
+                  <td className="mono muted text-xs">{r.node_id}</td>
+                  <td className="mono">{r.direct_mention_count}</td>
+                  <td className="mono">
+                    <span className={dpol >= 0 ? "pos" : "neg"}>{dpol.toFixed(2)}</span>
+                    <span className="muted"> / </span>
+                    <span className={cpol >= 0 ? "pos" : "neg"}>{cpol.toFixed(2)}</span>
+                  </td>
+                  <td className="text-xs">
+                    {companies.length === 0 ? (
+                      <span className="muted">—</span>
+                    ) : (
+                      companies.slice(0, 4).map((c) => (
+                        <span
+                          key={c}
+                          className="inline-block mono mr-1 px-1.5 py-0.5 bg-zinc-800 rounded text-xs"
+                        >
+                          {c}
+                        </span>
+                      ))
+                    )}
+                  </td>
+                  <td className="text-xs">
+                    {coAssets.length === 0 ? (
+                      <span className="muted">—</span>
+                    ) : (
+                      coAssets.slice(0, 4).map((a) => (
+                        <span
+                          key={a}
+                          className="inline-block mono mr-1 px-1.5 py-0.5 bg-zinc-800 rounded text-xs"
+                        >
+                          {a}
+                        </span>
+                      ))
+                    )}
+                  </td>
+                  <td className="mono muted text-xs">
+                    {new Date(r.computed_at).toLocaleTimeString()}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
 }
 
 function LabPanel({ rows, stats }: { rows: any[]; stats: Dashboard["labStats"] }) {

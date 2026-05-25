@@ -16,8 +16,10 @@ DC          := docker compose
 DC_BASE     := -f docker-compose.yml
 DC_DEV      := $(DC_BASE) -f docker-compose.dev.yml
 DC_PROD     := $(DC_BASE) -f docker-compose.prod.yml
+DC_LOCAL    := $(DC_BASE) -f docker-compose.dev.yml -f docker-compose.local.yml
 
 PSQL        := $(DC) exec postgres psql -U matrix -d matrix
+PSQL_SHARED := $(DC) exec postgres-shared psql -U matrix -d matrix_shared
 
 .DEFAULT_GOAL := help
 
@@ -33,16 +35,30 @@ help:
 ##@ Lifecycle
 
 .PHONY: build
-build: ## Build all images (postgres + services + web)
+build: ## Build all images for the base topology (prod target)
 	$(DC) $(DC_BASE) build
+
+.PHONY: build-dev
+build-dev: ## Build images with dev targets (web → 'dev' stage with HMR)
+	$(DC) $(DC_DEV) build
+
+.PHONY: disk
+disk: ## Show docker disk usage (run this BEFORE long build iterations)
+	@docker system df
+	@echo ""
+	@echo "If 'RECLAIMABLE' is >30GB, run: docker builder prune -f && docker image prune -f"
 
 .PHONY: up
 up: ## Start the base stack (no overrides)
 	$(DC) $(DC_BASE) up -d
 
 .PHONY: up-dev
-up-dev: ## Start everything in dev mode (hot reload)
+up-dev: ## Start everything in dev mode (hot reload, SHARED → .env URL)
 	$(DC) $(DC_DEV) up -d
+
+.PHONY: up-dev-local
+up-dev-local: ## Dev mode + local postgres-shared (no Neon needed; full offline)
+	$(DC) $(DC_LOCAL) up -d
 
 .PHONY: up-prod
 up-prod: ## Start everything in prod mode (built images, restart=always)
@@ -62,11 +78,27 @@ restart: down up-dev ## Down then up-dev
 ##@ DB
 
 .PHONY: migrate
-migrate: ## Run alembic upgrade head via one-shot migrate container
+migrate: ## Run alembic upgrade head on LOCAL tier (always rebuilds migrate image)
+	$(DC) $(DC_BASE) --profile migrate build migrate
 	$(DC) $(DC_BASE) --profile migrate run --rm migrate upgrade head
 
+.PHONY: migrate-local-shared
+migrate-local-shared: ## Apply migrations to the local postgres-shared (fake Neon)
+	$(DC) $(DC_LOCAL) --profile migrate build migrate
+	$(DC) $(DC_LOCAL) --profile migrate run --rm \
+		-e DATABASE_URL=postgres://matrix:matrix_dev_only@postgres-shared:5432/matrix_shared \
+		-e LOCAL_DATABASE_URL=postgres://matrix:matrix_dev_only@postgres-shared:5432/matrix_shared \
+		migrate upgrade head
+
+.PHONY: migrate-shared
+migrate-shared: ## Apply migrations to SHARED tier as set in .env (use this for Neon)
+	$(DC) $(DC_BASE) --profile migrate run --rm \
+		-e DATABASE_URL=$${SHARED_DATABASE_URL} \
+		-e LOCAL_DATABASE_URL=$${SHARED_DATABASE_URL} \
+		migrate upgrade head
+
 .PHONY: migrate-down
-migrate-down: ## Roll back the most recent migration
+migrate-down: ## Roll back the most recent migration (LOCAL)
 	$(DC) $(DC_BASE) --profile migrate run --rm migrate downgrade -1
 
 .PHONY: migrate-new
@@ -74,8 +106,12 @@ migrate-new: ## Create a new migration: make migrate-new MSG="add foo table"
 	$(DC) $(DC_BASE) --profile migrate run --rm migrate revision --autogenerate -m "$(MSG)"
 
 .PHONY: psql
-psql: ## Open a psql shell on the local postgres
+psql: ## Open a psql shell on the LOCAL postgres
 	$(PSQL)
+
+.PHONY: psql-shared
+psql-shared: ## Open a psql shell on the local SHARED postgres (port 5433)
+	$(PSQL_SHARED)
 
 .PHONY: db-reset
 db-reset: ## Truncate dynamic tables (predictions, paper_positions, outcomes, snapshots, lab_*)
