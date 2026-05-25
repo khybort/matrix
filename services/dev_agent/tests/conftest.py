@@ -47,6 +47,13 @@ BEGIN
           'system','user','assistant_text','tool_use','tool_result',
           'thinking','error','status_change');
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'dev_lesson_source') THEN
+        CREATE TYPE dev_lesson_source AS ENUM (
+          'failure','needs_changes','self_reflection','user_correction','pnl_feedback');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'dev_lesson_status') THEN
+        CREATE TYPE dev_lesson_status AS ENUM ('draft','active','archived');
+    END IF;
 END
 $$;
 
@@ -120,6 +127,29 @@ CREATE TABLE IF NOT EXISTS dev_agent_runtime (
   paused_by TEXT
 );
 INSERT INTO dev_agent_runtime (id) VALUES (TRUE) ON CONFLICT DO NOTHING;
+
+-- pgvector lives in ag_catalog. Use schema-qualified type to avoid
+-- search_path gymnastics (ag_catalog.vector is always resolvable).
+CREATE TABLE IF NOT EXISTS dev_agent_lessons (
+  id BIGSERIAL PRIMARY KEY,
+  status dev_lesson_status NOT NULL DEFAULT 'draft',
+  source dev_lesson_source NOT NULL,
+  topic TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  anti_pattern TEXT,
+  correct_approach TEXT NOT NULL,
+  example_code TEXT,
+  relevant_paths TEXT[] NOT NULL DEFAULT '{}',
+  origin_task_id BIGINT REFERENCES dev_tasks(id),
+  embedding ag_catalog.vector(1536),
+  hit_count INTEGER NOT NULL DEFAULT 0,
+  helpful_count INTEGER NOT NULL DEFAULT 0,
+  superseded_by BIGINT REFERENCES dev_agent_lessons(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  approved_at TIMESTAMPTZ,
+  approved_by TEXT
+);
 """
 
 
@@ -141,7 +171,7 @@ async def pg_pool(_ensure_schema):
         # Truncate everything, restart sequences. dev_agent_runtime is a
         # singleton — reset its mutable columns, don't delete the row.
         await c.execute("""
-            TRUNCATE TABLE dev_task_events, dev_task_runs, dev_tasks
+            TRUNCATE TABLE dev_agent_lessons, dev_task_events, dev_task_runs, dev_tasks
             RESTART IDENTITY CASCADE
         """)
         await c.execute("""
