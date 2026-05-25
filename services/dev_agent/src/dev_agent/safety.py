@@ -3,6 +3,7 @@ the SDK runner catches to abort the task with a specific failure_reason."""
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import PurePosixPath
 
@@ -81,3 +82,36 @@ class CostCap:
         self.total += delta_usd
         if self.total > self.cap:
             raise CostCapError(self.total, self.cap)
+
+
+class ToolLoopError(SafetyError):
+    reason = "tool_loop"
+
+    def __init__(self, tool_name: str, params: dict, count: int) -> None:
+        super().__init__(f"tool loop detected: {tool_name} called {count} times with identical params")
+        self.tool_name = tool_name
+        self.params = params
+        self.count = count
+
+
+class ToolLoopDetector:
+    """Detects N consecutive identical tool calls and raises ToolLoopError."""
+
+    def __init__(self, threshold: int = 5) -> None:
+        self.threshold = threshold
+        self._last_key: str | None = None
+        self._streak = 0
+
+    def record(self, tool_name: str, params: dict) -> None:
+        key = self._fingerprint(tool_name, params)
+        if key == self._last_key:
+            self._streak += 1
+        else:
+            self._last_key = key
+            self._streak = 1
+        if self._streak >= self.threshold:
+            raise ToolLoopError(tool_name, params, self._streak)
+
+    @staticmethod
+    def _fingerprint(tool_name: str, params: dict) -> str:
+        return f"{tool_name}:{json.dumps(params, sort_keys=True, default=str)}"
