@@ -245,7 +245,13 @@ services:
         condition: service_healthy
     environment:
       <<: *python-env
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # dev_agent's spawned `claude` CLI picks its auth mode from env:
+      #   - CLAUDE_CODE_OAUTH_TOKEN set → Claude Code subscription (dev default)
+      #   - ANTHROPIC_API_KEY set       → Anthropic API billing (prod default)
+      # Operator chooses by setting one in .env. (ANTHROPIC_API_KEY is already
+      # inherited via *python-env.) Set CLAUDE_CODE_OAUTH_TOKEN with the value
+      # produced by running `claude setup-token` on the host.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       DEV_AGENT_PARALLEL: ${DEV_AGENT_PARALLEL:-2}
       DEV_AGENT_DAILY_COST_CAP_USD: ${DEV_AGENT_DAILY_COST_CAP_USD:-50}
       DEV_AGENT_TASK_COST_CAP_USD: ${DEV_AGENT_TASK_COST_CAP_USD:-5}

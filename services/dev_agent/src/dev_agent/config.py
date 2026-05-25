@@ -22,7 +22,6 @@ FORBIDDEN_PATHS: tuple[str, ...] = (
 @dataclass(frozen=True)
 class Config:
     database_url: str
-    anthropic_api_key: str
     parallel: int
     daily_cost_cap_usd: float
     task_cost_cap_usd: float
@@ -32,9 +31,11 @@ class Config:
 
 
 def load_config() -> Config:
+    # No ANTHROPIC_API_KEY here: dev_agent runs the `claude` CLI under the
+    # user's Claude Code subscription. Auth flows via CLAUDE_CODE_OAUTH_TOKEN
+    # (set in compose), which the spawned CLI reads itself.
     return Config(
         database_url=_require_env("LOCAL_DATABASE_URL"),
-        anthropic_api_key=_require_env("ANTHROPIC_API_KEY"),
         parallel=int(os.environ.get("DEV_AGENT_PARALLEL", "2")),
         daily_cost_cap_usd=float(os.environ.get("DEV_AGENT_DAILY_COST_CAP_USD", "50")),
         task_cost_cap_usd=float(os.environ.get("DEV_AGENT_TASK_COST_CAP_USD", "5")),
