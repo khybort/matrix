@@ -45,6 +45,10 @@ class Prediction(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="open"
     )  # open | closed | expired
+    # Optional per-trade close-early thresholds. NULL → rely on horizon only.
+    # See migration 0013 for sign semantics.
+    tp_pct: Mapped[Decimal | None] = mapped_column(DECIMAL(8, 6))
+    sl_pct: Mapped[Decimal | None] = mapped_column(DECIMAL(8, 6))
 
 
 class PaperPosition(Base, TimestampMixin):
