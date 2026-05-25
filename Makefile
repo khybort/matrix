@@ -246,6 +246,10 @@ lab-scan: ## Scan for a promotion proposal
 lab-apply-best: ## Apply the most recent pending lab_promotion proposal
 	$(DC) $(DC_BASE) exec labs uv run python -m labs.main --apply-best
 
+.PHONY: bist-seed
+bist-seed: ## One-shot: upsert the embedded BIST symbol universe into bist_symbols
+	$(DC) $(DC_BASE) exec bist-ingestion uv run matrix-bist-symbols
+
 ##@ Dev Agent
 
 .PHONY: dev-agent-tail
