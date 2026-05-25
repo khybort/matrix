@@ -64,9 +64,13 @@ async def run_task_with_query(
         class _Opts:
             can_use_tool = staticmethod(_can_use)
         iterator = query_fn(prompt, _Opts(), scenario)
+    elif options is None:
+        # query_fn provided directly (e.g. lifecycle tests / prod worker).
+        # Build a minimal options shim so safety hooks still fire.
+        class _ProdOpts:
+            can_use_tool = staticmethod(_can_use)
+        iterator = query_fn(prompt, _ProdOpts())
     else:
-        if options is None:
-            raise ValueError("options required for prod runs")
         options.can_use_tool = _can_use
         iterator = query_fn(prompt=prompt, options=options)
 
