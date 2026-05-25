@@ -31,6 +31,16 @@ services:
       - ./services/ingestion/src:/workspace/services/ingestion/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
+  bars-aggregator:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m ingestion.bars --interval 60 --lookback-minutes 5"
+      - "/workspace/services/ingestion/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/ingestion/src:/workspace/services/ingestion/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
   bist-ingestion:
     entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
     command:
