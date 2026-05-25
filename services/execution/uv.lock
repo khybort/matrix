@@ -203,6 +203,7 @@ name = "matrix-execution"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx" },
     { name = "loguru" },
     { name = "matrix-shared" },
 ]
@@ -215,6 +216,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.28.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "matrix-shared", editable = "../../packages/python-shared" },
 ]

@@ -25,6 +25,7 @@ import sys
 
 from loguru import logger
 
+from execution.bybit_connector import BybitConnector
 from execution.safety import _env_live_enabled
 
 DEFAULT_HEARTBEAT_S = 60.0
@@ -41,24 +42,42 @@ async def run(heartbeat_s: float) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _handle_signal)
 
-    while not stop.is_set():
-        live = _env_live_enabled()
-        cap = os.environ.get("LIVE_CAPITAL_CAP_USD", "(unset)")
-        # Banner makes a misconfiguration obvious in `docker logs`.
-        if live:
-            logger.warning(
-                f"LIVE_EXECUTION_ENABLED=true; LIVE_CAPITAL_CAP_USD={cap}. "
-                "Broker connector is NOT wired yet — no orders will leave this process."
-            )
-        else:
-            logger.info(
-                f"gate CLOSED (LIVE_EXECUTION_ENABLED=false). "
-                "Ready and idle; no orders will be submitted."
-            )
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=heartbeat_s)
-        except TimeoutError:
-            pass
+    # One connector for the lifetime of the daemon. Read-only, dry-run.
+    # Even when LIVE_EXECUTION_ENABLED flips to true, this loop never
+    # places orders — it just reports reachability so Phase 5 readiness
+    # is visible in `docker logs matrix-execution`.
+    testnet = os.environ.get("BYBIT_TESTNET", "true").strip().lower() != "false"
+    connector = BybitConnector(testnet=testnet)
+    try:
+        while not stop.is_set():
+            live = _env_live_enabled()
+            cap = os.environ.get("LIVE_CAPITAL_CAP_USD", "(unset)")
+            # Banner makes a misconfiguration obvious in `docker logs`.
+            if live:
+                logger.warning(
+                    f"LIVE_EXECUTION_ENABLED=true; LIVE_CAPITAL_CAP_USD={cap}. "
+                    "Order submission still requires per-strategy cert + gate green."
+                )
+                # Second heartbeat line: broker reachability (dry-run).
+                # If creds are missing this returns the dry-run stub
+                # without touching the network — exactly what we want
+                # while no live keys are configured.
+                bal = await connector.get_wallet_balance(dry_run=True)
+                logger.info(
+                    "broker reachable: dry-run testnet={} payload_keys={}",
+                    testnet, list(bal.keys()),
+                )
+            else:
+                logger.info(
+                    f"gate CLOSED (LIVE_EXECUTION_ENABLED=false). "
+                    "Ready and idle; no orders will be submitted."
+                )
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=heartbeat_s)
+            except TimeoutError:
+                pass
+    finally:
+        await connector.aclose()
 
 
 def main() -> None:
