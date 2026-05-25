@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Blocks pushes of dev-agent/* branches. Defense in depth against the agent
+# performing a push it shouldn't. Agent code should never push to anything,
+# but worktrees inherit git config — this is a belt-and-suspenders catch.
+#
+# Install with: make install-hooks
+
+while read -r local_ref local_sha remote_ref remote_sha ; do
+    if [[ "$local_ref" == refs/heads/dev-agent/* ]]; then
+        echo "✘ pushing dev-agent/* branches is blocked by infra/hooks/pre-push" >&2
+        echo "  branch: $local_ref" >&2
+        echo "  if you really mean to push this, bypass with: git push --no-verify" >&2
+        exit 1
+    fi
+done
+exit 0
