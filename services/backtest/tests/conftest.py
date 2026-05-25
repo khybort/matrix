@@ -17,13 +17,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-import pytest
 import pytest_asyncio
 from sqlalchemy import delete
 
 from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.models import (
-    MarketBar,
     MarketTrade,
     PaperPosition,
     Prediction,
@@ -153,79 +151,7 @@ async def seed_recent_trades():
             )
 
 
-# --- historical-engine fixtures (pure Python, no DB) ---------------------
-
-def make_bar(
-    *,
-    ts: datetime,
-    close: Decimal,
-    symbol: str = "BTCUSDT",
-    asset_class: str = "crypto",
-    interval: str = "1m",
-    open_: Decimal | None = None,
-    high: Decimal | None = None,
-    low: Decimal | None = None,
-    volume: Decimal = Decimal("1"),
-) -> MarketBar:
-    """Construct a detached MarketBar (no session). Defaults OHLC = close."""
-    return MarketBar(
-        id=uuid.uuid4(),
-        symbol=symbol,
-        asset_class=asset_class,
-        interval=interval,
-        ts=ts,
-        open=open_ if open_ is not None else close,
-        high=high if high is not None else close,
-        low=low if low is not None else close,
-        close=close,
-        volume=volume,
-        source="synthetic",
-        created_at=ts,
-    )
-
-
-@pytest.fixture
-def flat_bars() -> list[MarketBar]:
-    """1500 bars at a constant price → no grid crossover should fire."""
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    return [
-        make_bar(ts=base + timedelta(minutes=i), close=Decimal("50000"))
-        for i in range(1500)
-    ]
-
-
-@pytest.fixture
-def swinging_bars() -> list[MarketBar]:
-    """1500 warm-up bars at 50000 + 200 more bars sweeping through a wide
-    band (49000 → 51000 and back). Guarantees the rolling-window mid
-    settles near 50000 and the sweep crosses grid lines."""
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    bars = [
-        make_bar(ts=base + timedelta(minutes=i), close=Decimal("50000"))
-        for i in range(1500)
-    ]
-    for i in range(100):
-        px = Decimal("50000") - Decimal(i * 10)  # 50000 → 49010
-        bars.append(make_bar(ts=base + timedelta(minutes=1500 + i), close=px))
-    for i in range(100):
-        px = Decimal("49010") + Decimal(i * 10)  # 49010 → 50000
-        bars.append(make_bar(ts=base + timedelta(minutes=1600 + i), close=px))
-    return bars
-
-
-@pytest.fixture
-def dip_then_uptrend_bars() -> list[MarketBar]:
-    """Warm-up flat at 50000, then ONE sharp dip-bar that crosses several
-    grid lines simultaneously, then immediate recovery well above entry.
-    horizon_s=300 → 5 bars, so recovery must arrive inside that window."""
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    bars = [
-        make_bar(ts=base + timedelta(minutes=i), close=Decimal("50000"))
-        for i in range(1500)
-    ]
-    bars.append(make_bar(ts=base + timedelta(minutes=1500), close=Decimal("49500")))
-    for i in range(20):
-        bars.append(
-            make_bar(ts=base + timedelta(minutes=1501 + i), close=Decimal("50500"))
-        )
-    return bars
+# Historical-engine synthetic-bar fixtures live in tests/historical/conftest.py
+# to keep them isolated from the live-DB fixtures here. Mixing pytest-asyncio's
+# session loop with the sync historical tests gets the cached engine into a
+# "different loop" state — splitting the test trees avoids it cleanly.
