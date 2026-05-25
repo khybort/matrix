@@ -19,15 +19,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-import httpx
-import orjson
 from loguru import logger
 
-from matrix_shared import get_settings
+from matrix_shared import call_claude_json
 
-GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
-LLM_MODEL = "anthropic/claude-haiku-4-5"
-HTTP_TIMEOUT_S = 30.0
+LLM_MODEL = "claude-haiku-4-5"
 
 
 @dataclass(slots=True)
@@ -145,65 +141,27 @@ async def llm_extract(
     Asset, etc.). The Document→MENTIONS edges remain implicit and are written
     by the graph upsert layer for every emitted entity.
     """
-    api_key = get_settings().ai_gateway_api_key
-    if not api_key:
-        return None
-
     user = f"TITLE: {title or ''}\n\nBODY: {(body or '')[:4000]}"
     edge_list = ", ".join(ALLOWED_EDGE_TYPES)
-    body_payload = {
-        "model": LLM_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "Extract entities AND typed relations from this financial news article. "
-                    "Return ONLY a JSON object with two keys:\n"
-                    '  "entities": [{"type":"Asset|Company|Person|Event|Concept",'
-                    '"canonical":"<stable key>","display":"<readable>"}],\n'
-                    '  "relations": [{"source":{"type":"...","canonical":"..."},'
-                    f'"edge":"<one of {edge_list}>",'
-                    '"target":{"type":"...","canonical":"..."}}].\n'
-                    "Use canonical tickers for Asset (BTC, ETH, ...). Legal names for "
-                    "Company. Full names for Person. Events are categories like "
-                    "'ETF approval', 'security exploit'. Concepts are abstract themes "
-                    "like 'institutional adoption'.\n"
-                    "Only emit a relation when the article clearly supports it; do not "
-                    "speculate. Max 12 entities and 12 relations."
-                ),
-            },
-            {"role": "user", "content": user},
-        ],
-        "max_tokens": 1100,
-        "temperature": 0.1,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as client:
-            resp = await client.post(
-                GATEWAY_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                content=orjson.dumps(body_payload),
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except (httpx.HTTPError, httpx.TimeoutException) as e:
-        logger.warning(f"llm extract gateway error: {e}")
-        return None
-
-    try:
-        text = data["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError):
-        return None
-    if text.startswith("```"):
-        text = "\n".join(
-            ln for ln in text.splitlines() if not ln.strip().startswith("```")
-        ).strip()
-    try:
-        parsed = orjson.loads(text)
-    except orjson.JSONDecodeError:
+    system = (
+        "Extract entities AND typed relations from this financial news article. "
+        "Return ONLY a JSON object with two keys:\n"
+        '  "entities": [{"type":"Asset|Company|Person|Event|Concept",'
+        '"canonical":"<stable key>","display":"<readable>"}],\n'
+        '  "relations": [{"source":{"type":"...","canonical":"..."},'
+        f'"edge":"<one of {edge_list}>",'
+        '"target":{"type":"...","canonical":"..."}}].\n'
+        "Use canonical tickers for Asset (BTC, ETH, ...). Legal names for "
+        "Company. Full names for Person. Events are categories like "
+        "'ETF approval', 'security exploit'. Concepts are abstract themes "
+        "like 'institutional adoption'.\n"
+        "Only emit a relation when the article clearly supports it; do not "
+        "speculate. Max 12 entities and 12 relations."
+    )
+    parsed = await call_claude_json(
+        system=system, user=user, model=LLM_MODEL, max_tokens=1100, temperature=0.1,
+    )
+    if parsed is None:
         return None
 
     # Entities

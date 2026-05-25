@@ -14,17 +14,14 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-import httpx
 import orjson
 from loguru import logger
 
-from matrix_shared import get_settings
+from matrix_shared import call_claude_json
 
 from reflection.metrics import StrategyMetrics
 
-GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
-LLM_MODEL = "anthropic/claude-haiku-4-5"
-HTTP_TIMEOUT_S = 25.0
+LLM_MODEL = "claude-haiku-4-5"
 
 # Mutation triggers
 NEG_AVG_SCORE_TRIGGER = Decimal("-0.05")  # below this avg score → propose mutation
@@ -118,11 +115,7 @@ def rule_propose(
 async def llm_propose(
     strategy_id: str, current_params: dict[str, Any], m: StrategyMetrics
 ) -> MutationDraft | None:
-    """LLM-driven proposal. Falls back to None if gateway unreachable."""
-    api_key = get_settings().ai_gateway_api_key
-    if not api_key:
-        return None
-
+    """LLM-driven proposal. Falls back to None if LLM unreachable."""
     user_prompt = (
         f"Strategy: {strategy_id}\n"
         f"Current params: {orjson.dumps(current_params).decode()}\n"
@@ -140,53 +133,15 @@ async def llm_propose(
         '"rationale":"..."} '
         "or {} if no change recommended."
     )
-
-    body = {
-        "model": LLM_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a quantitative research assistant proposing parameter "
-                    "adjustments for a trading strategy. Be conservative and explicit "
-                    "in your reasoning. Never touch risk caps."
-                ),
-            },
-            {"role": "user", "content": user_prompt},
-        ],
-        "max_tokens": 400,
-        "temperature": 0.3,
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as client:
-            resp = await client.post(
-                GATEWAY_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                content=orjson.dumps(body),
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except (httpx.HTTPError, httpx.TimeoutException) as e:
-        logger.warning(f"llm gateway error: {e}")
-        return None
-
-    try:
-        text = data["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError):
-        return None
-
-    if text.startswith("```"):
-        text = "\n".join(
-            ln for ln in text.splitlines() if not ln.strip().startswith("```")
-        ).strip()
-    try:
-        parsed = orjson.loads(text)
-    except orjson.JSONDecodeError:
-        return None
+    system = (
+        "You are a quantitative research assistant proposing parameter "
+        "adjustments for a trading strategy. Be conservative and explicit "
+        "in your reasoning. Never touch risk caps."
+    )
+    parsed = await call_claude_json(
+        system=system, user=user_prompt, model=LLM_MODEL,
+        max_tokens=400, temperature=0.3,
+    )
     if not parsed:
         return None
 

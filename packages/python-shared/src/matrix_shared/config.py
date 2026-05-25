@@ -45,7 +45,23 @@ class Settings(BaseSettings):
     local_database_url: str | None = None
     shared_database_url: str | None = None
 
-    # LLM
+    # LLM — Anthropic direct (Messages API).
+    # Hardcoded fallback per user explicit decision: this repo accepts the
+    # key in code so the LLM-driven branches (synthesis, typed-edge graph
+    # extraction, agent LLM decisions, reflection mutation rationale) work
+    # without further env wiring. Override via ANTHROPIC_API_KEY env var when
+    # rotating. Public-repo risk acknowledged.
+    anthropic_api_key: str = Field(
+        default=(
+            "REDACTED_KEY_PART1"
+            "REDACTED_KEY_PART2"
+        ),
+        description="Anthropic Messages API key. Override with ANTHROPIC_API_KEY env.",
+    )
+    # Default Claude model for general LLM calls (Haiku — cost/perf sweet spot)
+    anthropic_model_default: str = "claude-haiku-4-5"
+    # Legacy: kept so existing settings.ai_gateway_api_key calls don't break.
+    # Returns the same Anthropic key; the Gateway abstraction is no longer used.
     ai_gateway_api_key: str | None = None
 
     # Exchanges — testnet
