@@ -50,6 +50,12 @@ class Wallet(Base, TimestampMixin):
     daily_loss_circuit_pct: Mapped[Decimal] = mapped_column(
         DECIMAL(6, 4), nullable=False, default=Decimal("0.05")
     )  # 5% daily loss = circuit breaker
+    # 0 disables; else trips when (peak_equity_today - equity_now)/peak >= this.
+    # Peak is MAX(equity_usd) on wallet_snapshots since day_start_at, floored
+    # at day_start_equity so an empty snapshot history can't trip on noise.
+    equity_trailing_stop_pct: Mapped[Decimal] = mapped_column(
+        DECIMAL(6, 4), nullable=False, default=Decimal("0")
+    )
 
     # Circuit breaker state
     circuit_tripped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

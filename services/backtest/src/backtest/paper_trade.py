@@ -108,6 +108,32 @@ def _circuit_should_trip(wallet: Wallet, equity_now: Decimal) -> bool:
     return drop >= wallet.daily_loss_circuit_pct
 
 
+async def _peak_equity_today(session, wallet: Wallet) -> Decimal:
+    """Highest equity_usd snapshot since day_start_at, floored at
+    day_start_equity. The floor matters when the day just rolled and no
+    snapshot exists yet — we don't want a one-tick wobble to trip the
+    trailing stop against a phantom 'peak' below day_start."""
+    stmt = (
+        select(func.max(WalletSnapshot.equity_usd))
+        .where(WalletSnapshot.wallet_id == wallet.id)
+        .where(WalletSnapshot.snapshot_ts >= wallet.day_start_at)
+    )
+    peak = (await session.execute(stmt)).scalar()
+    if peak is None:
+        return Decimal(wallet.day_start_equity)
+    return max(Decimal(peak), Decimal(wallet.day_start_equity))
+
+
+def _trailing_stop_should_trip(
+    wallet: Wallet, peak_equity: Decimal, equity_now: Decimal
+) -> bool:
+    pct = Decimal(wallet.equity_trailing_stop_pct)
+    if pct <= 0 or peak_equity <= 0:
+        return False
+    drop = (peak_equity - equity_now) / peak_equity
+    return drop >= pct
+
+
 async def _current_equity(session, wallet: Wallet) -> tuple[Decimal, Decimal, int]:
     """Reads paper_positions from the SHARED session passed in, but pulls
     mark prices from the LOCAL tier (one query per open position).
@@ -156,12 +182,22 @@ async def snapshot_wallet() -> None:
             )
         )
 
-        if wallet.circuit_tripped_at is None and _circuit_should_trip(wallet, equity):
-            wallet.circuit_tripped_at = datetime.now(UTC)
-            logger.warning(
-                f"DAILY LOSS CIRCUIT TRIPPED for wallet {wallet.name}: "
-                f"day_start={wallet.day_start_equity:.2f} equity={equity:.2f}"
-            )
+        if wallet.circuit_tripped_at is None:
+            if _circuit_should_trip(wallet, equity):
+                wallet.circuit_tripped_at = datetime.now(UTC)
+                logger.warning(
+                    f"DAILY LOSS CIRCUIT TRIPPED for wallet {wallet.name}: "
+                    f"day_start={wallet.day_start_equity:.2f} equity={equity:.2f}"
+                )
+            else:
+                peak = await _peak_equity_today(session, wallet)
+                if _trailing_stop_should_trip(wallet, peak, equity):
+                    wallet.circuit_tripped_at = datetime.now(UTC)
+                    logger.warning(
+                        f"EQUITY TRAILING STOP TRIPPED for wallet {wallet.name}: "
+                        f"peak={peak:.2f} equity={equity:.2f} "
+                        f"stop_pct={wallet.equity_trailing_stop_pct}"
+                    )
 
 
 async def expire_stale_predictions() -> int:
@@ -291,19 +327,79 @@ async def open_due_positions() -> int:
     return opened
 
 
+def _tp_sl_reason(pos: PaperPosition, pred: Prediction, mark: Decimal) -> str | None:
+    """Return 'hit_tp' / 'hit_sl' if the current mark crosses the prediction's
+    take-profit or stop-loss threshold for this position's side. None if no
+    threshold trips. TP wins ties — strategies set tp_pct expecting profit
+    realization, so when both fire on the same tick we honor the favorable
+    side."""
+    tp = pred.tp_pct
+    sl = pred.sl_pct
+    if tp is None and sl is None:
+        return None
+    if pos.side == "long":
+        move = (mark - pos.opened_price) / pos.opened_price
+        if tp is not None and move >= tp:
+            return "hit_tp"
+        if sl is not None and -move >= sl:
+            return "hit_sl"
+    else:  # short
+        move = (pos.opened_price - mark) / pos.opened_price
+        if tp is not None and move >= tp:
+            return "hit_tp"
+        if sl is not None and -move >= sl:
+            return "hit_sl"
+    return None
+
+
 async def close_due_positions() -> int:
     now = datetime.now(UTC)
     async with shared_session_scope() as session:
-        stmt = (
+        # Two close paths share the same write-side code below:
+        #   1) tp/sl: any open position whose prediction has tp_pct or sl_pct
+        #      set AND the current mark crosses the threshold (sign-aware).
+        #   2) horizon: prediction's close_by has elapsed.
+        # We compute path 1 first because it can fire BEFORE close_by, and a
+        # position that hits TP should not also be counted on the horizon
+        # query in the same call.
+        tpsl_stmt = (
+            select(PaperPosition, Prediction)
+            .join(Prediction, Prediction.id == PaperPosition.prediction_id)
+            .where(PaperPosition.status == "open")
+            .where(
+                (Prediction.tp_pct.isnot(None)) | (Prediction.sl_pct.isnot(None))
+            )
+        )
+        tpsl_rows = (await session.execute(tpsl_stmt)).all()
+
+        horizon_stmt = (
             select(PaperPosition, Prediction)
             .join(Prediction, Prediction.id == PaperPosition.prediction_id)
             .where(PaperPosition.status == "open")
             .where(Prediction.close_by <= now)
         )
-        rows = (await session.execute(stmt)).all()
+        horizon_rows = (await session.execute(horizon_stmt)).all()
+
+    # Evaluate tp/sl first; remember the position ids we already handled so the
+    # horizon pass doesn't double-close them.
+    work: list[tuple[PaperPosition, Prediction, str]] = []
+    handled_ids: set[uuid.UUID] = set()
+    for pos, pred in tpsl_rows:
+        mark = await _latest_price(pos.symbol, pos.asset_class)
+        if mark is None:
+            continue
+        reason = _tp_sl_reason(pos, pred, mark)
+        if reason is None:
+            continue
+        work.append((pos, pred, reason))
+        handled_ids.add(pos.id)
+    for pos, pred in horizon_rows:
+        if pos.id in handled_ids:
+            continue
+        work.append((pos, pred, "hit_horizon"))
 
     closed = 0
-    for pos, pred in rows:
+    for pos, pred, reason in work:
         last_px = await _latest_price(pos.symbol, pos.asset_class)
         if last_px is None:
             continue
@@ -339,12 +435,12 @@ async def close_due_positions() -> int:
                     pnl_usd=pnl_usd,
                     pnl_pct=pnl_pct,
                     score=score,
-                    reason="hit_horizon",
+                    reason=reason,
                 )
             )
         closed += 1
         logger.info(
-            f"closed {pos.side} {pos.symbol} entry={pos.opened_price:.4f} "
+            f"closed[{reason}] {pos.side} {pos.symbol} entry={pos.opened_price:.4f} "
             f"exit={exit_px:.4f} pnl={pnl_usd:.4f}USD ({pnl_pct*100:.3f}%) "
             f"score={score:.3f}"
         )

@@ -26,6 +26,7 @@ from matrix_shared.models import (
     PaperPosition,
     Prediction,
     Wallet,
+    WalletSnapshot,
 )
 
 # Match dev_agent's localhost approach; both DBs are exposed via docker.
@@ -66,6 +67,7 @@ async def wallet_id() -> uuid.UUID:
         # constraint. Belt-and-suspenders cleanup in case of partial test
         # state.
         await session.execute(delete(PaperPosition).where(PaperPosition.wallet_id == wid))
+        await session.execute(delete(WalletSnapshot).where(WalletSnapshot.wallet_id == wid))
         await session.execute(delete(Wallet).where(Wallet.id == wid))
 
 
