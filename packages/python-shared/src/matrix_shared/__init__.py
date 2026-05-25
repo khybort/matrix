@@ -11,6 +11,12 @@ from matrix_shared.db import (
     shared_session_scope,
 )
 from matrix_shared.llm import call_claude, call_claude_json, llm_enabled
+from matrix_shared.trading_safety import (
+    LIVE_EXECUTION_REQUIRES_CERT,
+    EligibilityVerdict,
+    evaluate_eligibility,
+    has_valid_certificate,
+)
 
 __all__ = [
     "Settings",
@@ -27,4 +33,8 @@ __all__ = [
     "call_claude",
     "call_claude_json",
     "llm_enabled",
+    "LIVE_EXECUTION_REQUIRES_CERT",
+    "EligibilityVerdict",
+    "evaluate_eligibility",
+    "has_valid_certificate",
 ]

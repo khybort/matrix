@@ -7,6 +7,7 @@ from matrix_shared.models.market_bar import MarketBar
 from matrix_shared.models.market_orderbook import OrderBookSnapshot
 from matrix_shared.models.market_ticker import TickerSnapshot
 from matrix_shared.models.market_trade import MarketTrade
+from matrix_shared.models.paper_trade_certificate import PaperTradeCertificate
 from matrix_shared.models.prediction import Outcome, PaperPosition, Prediction
 from matrix_shared.models.raw_document import RawDocument
 from matrix_shared.models.strategy_config import MutationProposal, StrategyConfig
@@ -26,6 +27,7 @@ __all__ = [
     "OrderBookSnapshot",
     "Outcome",
     "PaperPosition",
+    "PaperTradeCertificate",
     "Prediction",
     "RawDocument",
     "StrategyConfig",
