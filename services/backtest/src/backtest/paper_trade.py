@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from loguru import logger
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.models import (
@@ -164,6 +164,34 @@ async def snapshot_wallet() -> None:
             )
 
 
+async def expire_stale_predictions() -> int:
+    """Mark predictions whose close_by has passed without ever being traded.
+
+    Without this, a backlog (e.g. after a backtest crash) accumulates as
+    perpetually-'open' rows in `predictions` that no longer represent live
+    signals. We don't write an Outcome — these predictions were never
+    actually traded, so they shouldn't influence reflection metrics.
+    """
+    now = datetime.now(UTC)
+    async with shared_session_scope() as session:
+        # The `id NOT IN ...` subquery is fine here because the candidate set
+        # is small (only open predictions); for >100k rows we'd switch to a
+        # LEFT JOIN, but at current scale this stays readable.
+        result = await session.execute(
+            text(
+                "UPDATE predictions SET status='expired' "
+                "WHERE status='open' AND close_by < :now "
+                "  AND id NOT IN (SELECT prediction_id FROM paper_positions) "
+                "RETURNING id"
+            ),
+            {"now": now},
+        )
+        ids = list(result.scalars())
+    if ids:
+        logger.info(f"expired {len(ids)} stale predictions (never traded)")
+    return len(ids)
+
+
 async def open_due_positions() -> int:
     """Open positions for predictions that have none yet, respecting risk caps.
 
@@ -190,12 +218,20 @@ async def open_due_positions() -> int:
         equity, _unrealized, _n = await _current_equity(session, wallet)
         max_notional = equity * wallet.max_position_pct
 
+        # Skip predictions whose horizon already lapsed before we could open
+        # them. Without this filter, a backlog (e.g. after a crash or queue
+        # drain) causes backtest to open and immediately close stale
+        # predictions on the very next tick — guaranteed slippage loss with
+        # no real signal evaluation. Such predictions are flagged 'expired'
+        # below instead, so they're scored once and removed from the queue.
+        now = datetime.now(UTC)
         pred_stmt = (
             select(Prediction)
             .outerjoin(PaperPosition, PaperPosition.prediction_id == Prediction.id)
             .where(PaperPosition.id.is_(None))
             .where(Prediction.status == "open")
             .where(Prediction.side.in_(["long", "short"]))
+            .where(Prediction.close_by > now)
             .order_by(Prediction.generated_at.asc())
             .limit(slots_left)
         )
