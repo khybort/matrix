@@ -46,22 +46,13 @@ class Settings(BaseSettings):
     shared_database_url: str | None = None
 
     # LLM — Anthropic direct (Messages API).
-    # Hardcoded fallback per user explicit decision: this repo accepts the
-    # key in code so the LLM-driven branches (synthesis, typed-edge graph
-    # extraction, agent LLM decisions, reflection mutation rationale) work
-    # without further env wiring. Override via ANTHROPIC_API_KEY env var when
-    # rotating. Public-repo risk acknowledged.
-    anthropic_api_key: str = Field(
-        default=(
-            "REDACTED_KEY_PART1"
-            "REDACTED_KEY_PART2"
-        ),
-        description="Anthropic Messages API key. Override with ANTHROPIC_API_KEY env.",
-    )
-    # Default Claude model for general LLM calls (Haiku — cost/perf sweet spot)
+    # Key comes from env (.env / ANTHROPIC_API_KEY) only. Source code never
+    # carries secrets. Unset = LLM call sites fall back to deterministic
+    # rule/heuristic paths.
+    anthropic_api_key: str | None = None
     anthropic_model_default: str = "claude-haiku-4-5"
-    # Legacy: kept so existing settings.ai_gateway_api_key calls don't break.
-    # Returns the same Anthropic key; the Gateway abstraction is no longer used.
+    # Legacy field kept so existing settings.ai_gateway_api_key calls don't
+    # crash; the Vercel AI Gateway abstraction is no longer used.
     ai_gateway_api_key: str | None = None
 
     # Exchanges — testnet
