@@ -12,6 +12,16 @@ type Dashboard = {
   recentOutcomes: any[];
   strategyAgg: any[];
   mutationProposals: any[];
+  certificates: {
+    strategy_id: string; asset_class: string; version: number;
+    cert_id: string | null; cert_status: string | null;
+    n_outcomes: number | null; observation_days: number | null;
+    win_rate: string | null; total_pnl_usd: string | null;
+    max_drawdown_pct: string | null;
+    granted_at: string | null; granted_by: string | null;
+    validity_until: string | null; revoked_reason: string | null;
+    gate_verdict: "valid" | "no_cert" | "not_granted" | "expired";
+  }[];
   labLeaderboard: any[];
   labStats: {
     active?: number; retired?: number; promoted?: number;
@@ -107,6 +117,10 @@ export default function Page() {
           <ProposalsTable rows={data.mutationProposals} />
         </Panel>
       </div>
+
+      <Panel title="Live-execution gate — paper_trade_certificate per active version" className="mt-4">
+        <CertificatesTable rows={data.certificates} />
+      </Panel>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
         <Panel title={`Open positions (${data.openPositions.length})`}>
@@ -330,6 +344,64 @@ function ProposalsTable({ rows }: { rows: any[] }) {
             <td className={r.status === "applied" ? "accent" : "muted"}>{r.status}</td>
           </tr>
         ))}
+      </tbody>
+    </table>
+  );
+}
+
+function CertificatesTable({ rows }: { rows: Dashboard["certificates"] }) {
+  if (!rows.length) {
+    return <p className="muted text-sm">No active strategy versions to certify.</p>;
+  }
+  // Visual: gate verdict is the ONLY thing an operator needs at a glance.
+  // 'valid' green, anything else red — there is no middle ground for a
+  // gate. Detail metrics shown so the reason is obvious without a query.
+  return (
+    <table className="matrix">
+      <thead><tr>
+        <th>Strategy</th><th>Cls</th><th>Ver</th>
+        <th>Gate</th>
+        <th>n_outcomes</th><th>Obs days</th>
+        <th>Win rate</th><th>Total PnL</th><th>Max DD%</th>
+        <th>Granted</th><th>Valid until</th>
+      </tr></thead>
+      <tbody>
+        {rows.map((r) => {
+          const isValid = r.gate_verdict === "valid";
+          const verdictLabel: Record<typeof r.gate_verdict, string> = {
+            valid: "ALLOW",
+            no_cert: "NO CERT",
+            not_granted: r.cert_status ? r.cert_status.toUpperCase() : "PENDING",
+            expired: "EXPIRED",
+          };
+          return (
+            <tr key={`${r.strategy_id}-${r.asset_class}-${r.version}`}>
+              <td className="mono">{r.strategy_id}</td>
+              <td><AssetClassBadge cls={r.asset_class} /></td>
+              <td className="mono">v{r.version}</td>
+              <td className={isValid ? "pos mono" : "neg mono"}>
+                {verdictLabel[r.gate_verdict]}
+              </td>
+              <td className="mono">{r.n_outcomes ?? "—"}</td>
+              <td className="mono">{r.observation_days ?? "—"}</td>
+              <td className="mono">
+                {r.win_rate != null ? (Number(r.win_rate) * 100).toFixed(1) + "%" : "—"}
+              </td>
+              <td className={r.total_pnl_usd != null && Number(r.total_pnl_usd) >= 0 ? "pos mono" : "neg mono"}>
+                {r.total_pnl_usd != null ? "$" + Number(r.total_pnl_usd).toFixed(2) : "—"}
+              </td>
+              <td className="mono">
+                {r.max_drawdown_pct != null ? (Number(r.max_drawdown_pct) * 100).toFixed(2) + "%" : "—"}
+              </td>
+              <td className="mono">
+                {r.granted_at ? new Date(r.granted_at).toLocaleDateString() : "—"}
+              </td>
+              <td className="mono">
+                {r.validity_until ? new Date(r.validity_until).toLocaleDateString() : "—"}
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );

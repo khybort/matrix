@@ -96,6 +96,37 @@ export async function GET() {
       LIMIT 10
     `;
 
+    // Phase 5 live-execution gate visibility. Joins to strategy_configs so we
+    // can flag rows where an active strategy version has NO cert at all
+    // (gate would deny). `now()` comparison flips an expired-validity cert
+    // into the same denial bucket as missing, matching what
+    // matrix_shared.trading_safety.has_valid_certificate does at runtime.
+    const certificates = await sql`
+      WITH active_versions AS (
+        SELECT strategy_id, asset_class, version
+        FROM strategy_configs WHERE status = 'active'
+      )
+      SELECT
+        av.strategy_id, av.asset_class, av.version,
+        c.id              AS cert_id,
+        c.status          AS cert_status,
+        c.n_outcomes, c.observation_days,
+        c.win_rate, c.total_pnl_usd, c.max_drawdown_pct,
+        c.granted_at, c.granted_by, c.validity_until, c.revoked_reason,
+        CASE
+          WHEN c.id IS NULL THEN 'no_cert'
+          WHEN c.status <> 'granted' THEN 'not_granted'
+          WHEN c.validity_until IS NOT NULL AND c.validity_until < NOW() THEN 'expired'
+          ELSE 'valid'
+        END AS gate_verdict
+      FROM active_versions av
+      LEFT JOIN paper_trade_certificate c
+        ON  c.strategy_id  = av.strategy_id
+        AND c.asset_class  = av.asset_class
+        AND c.version      = av.version
+      ORDER BY av.strategy_id, av.asset_class, av.version
+    `;
+
     const labLeaderboard = await sql`
       SELECT id, asset_class, generation, n_evaluations, n_signals, n_wins,
              total_score, fitness_score, status, params, created_at,
@@ -247,6 +278,7 @@ export async function GET() {
       recentOutcomes,
       strategyAgg,
       mutationProposals,
+      certificates,
       labLeaderboard,
       labStats: labStats[0] ?? {},
       graphSignals,
