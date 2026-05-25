@@ -104,6 +104,24 @@ services:
     restart: unless-stopped
     logging: *default_logging
 
+  # 1-minute OHLCV aggregator: market_trades → market_bars. Runs as its own
+  # process so a connector restart doesn't pause bar generation, and the
+  # other way around. The SQL is idempotent (UPSERT on (symbol,interval,ts)),
+  # so the 5-minute re-aggregation window safely handles late-arriving trades.
+  bars-aggregator:
+    image: matrix-ingestion:local
+    container_name: matrix-bars-aggregator
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ingestion-market:
+        condition: service_started
+    environment:
+      <<: *python-env
+    command: ["ingestion.bars", "--interval", "60", "--lookback-minutes", "5"]
+    restart: unless-stopped
+    logging: *default_logging
+
   # BIST (Borsa Istanbul) equities, paper-only. Yahoo Finance delayed feed.
   # No live execution path — research universe only.
   bist-ingestion:
