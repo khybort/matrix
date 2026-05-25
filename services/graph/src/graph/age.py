@@ -98,6 +98,52 @@ async def link_mentions(
         await _exec_cypher(session, cypher)
 
 
+async def link_typed_edge(
+    source_type: str,
+    source_canonical: str,
+    edge_type: str,
+    target_type: str,
+    target_canonical: str,
+    *,
+    source_doc_id: uuid.UUID | None = None,
+) -> None:
+    """MERGE a typed relationship between two existing entities.
+
+    Optional source_doc_id stamps the edge with provenance — handy when we
+    want to know WHICH document supported this claim. Stored as a property
+    on the edge so multiple supporting documents accumulate naturally.
+    """
+    src_label = "".join(c for c in source_type if c.isalpha()) or "Entity"
+    tgt_label = "".join(c for c in target_type if c.isalpha()) or "Entity"
+    edge_label = "".join(c for c in edge_type if c.isalnum() or c == "_").upper() or "RELATED_TO"
+    src_can = _cypher_str(source_canonical)
+    tgt_can = _cypher_str(target_canonical)
+
+    if source_doc_id is None:
+        cypher = (
+            f"SELECT * FROM cypher('matrix_graph', $$ "
+            f"MATCH (s:{src_label} {{canonical: '{src_can}'}}), "
+            f"      (t:{tgt_label} {{canonical: '{tgt_can}'}}) "
+            f"MERGE (s)-[r:{edge_label}]->(t) "
+            f"RETURN r "
+            f"$$) AS (r agtype)"
+        )
+    else:
+        cypher = (
+            f"SELECT * FROM cypher('matrix_graph', $$ "
+            f"MATCH (s:{src_label} {{canonical: '{src_can}'}}), "
+            f"      (t:{tgt_label} {{canonical: '{tgt_can}'}}) "
+            f"MERGE (s)-[r:{edge_label}]->(t) "
+            f"ON CREATE SET r.first_seen = '{source_doc_id}', r.support_count = 1 "
+            f"ON MATCH SET r.support_count = coalesce(r.support_count, 0) + 1, "
+            f"             r.last_seen = '{source_doc_id}' "
+            f"RETURN r "
+            f"$$) AS (r agtype)"
+        )
+    async with session_scope() as session:
+        await _exec_cypher(session, cypher)
+
+
 async def graph_summary() -> dict[str, int]:
     """Quick counts of node labels + edge count, for smoketest."""
     queries = {

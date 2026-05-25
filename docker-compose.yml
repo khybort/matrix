@@ -178,6 +178,22 @@ services:
       - "600"
     restart: unless-stopped
 
+  synthesis:
+    build:
+      <<: *python-build
+      target: runtime
+      args:
+        SERVICE: synthesis
+    image: matrix-synthesis:local
+    container_name: matrix-synthesis
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *python-env
+    command: ["synthesis.main", "--interval", "3600", "--hours", "6"]
+    restart: unless-stopped
+
   web:
     build:
       context: .
