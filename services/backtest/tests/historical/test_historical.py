@@ -114,7 +114,7 @@ def test_grid_replay_horizon_aligned_to_bars():
     """horizon_s=120 should close positions 2 bars after open on 1m bars."""
     from datetime import UTC, datetime, timedelta
 
-    from tests.conftest import make_bar
+    from tests.historical.conftest import make_bar
 
     base = datetime(2026, 1, 1, tzinfo=UTC)
     # 1500 flat warmup bars then one dip that fires an entry

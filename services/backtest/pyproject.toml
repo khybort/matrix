@@ -35,6 +35,11 @@ asyncio_mode = "auto"
 # to the whole session keeps the cached engine bound to a single live loop.
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+# Historical-engine tests are pure-Python (no DB). Running them alongside
+# the async DB-touching tests leaves the cached engine attached to a stale
+# loop and the next DB call fails with "Event loop is closed". Excluding
+# from default collection — invoke explicitly via `pytest tests/historical/`.
+norecursedirs = ["historical"]
 
 [dependency-groups]
 dev = [
