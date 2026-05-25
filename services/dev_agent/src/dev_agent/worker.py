@@ -89,6 +89,48 @@ async def process_one_task(
 
     await beat_heartbeat(pool, task_id)
 
+    # --- build prompt with retrieved lessons ---
+    from dev_agent.memory import search_lessons_text
+    from dev_agent.prompt import build_system_prompt
+
+    lessons = await search_lessons_text(
+        pool,
+        query=task["description"],
+        top_k=5,
+        paths=list(task["touches_files"] or []),
+    )
+
+    snapshot = task.get("conversation_snapshot") if isinstance(task, dict) else task["conversation_snapshot"]
+    if isinstance(snapshot, str):
+        import json
+        snapshot = json.loads(snapshot)
+
+    system_prompt = build_system_prompt(
+        task_description=task["description"],
+        lessons=lessons,
+        codebase_ctx="",
+        auto_commit=task["auto_commit"],
+        auto_pr=task["auto_pr"],
+        run_tests=task["run_tests"],
+        max_turns=task["max_turns"],
+        handoff_snapshot=snapshot,
+        touches_files=list(task["touches_files"] or []),
+    )
+
+    # Real-SDK path constructs ClaudeAgentOptions; fake path passes scenario directly.
+    try:
+        from claude_agent_sdk import ClaudeAgentOptions
+        options = ClaudeAgentOptions(
+            cwd=str(wt.path) if wt else None,
+            system_prompt=system_prompt,
+            allowed_tools=["Bash", "Read", "Edit", "Write", "Grep", "Glob"],
+            permission_mode="acceptEdits",
+            max_turns=task["max_turns"],
+            model=task["model"],
+        )
+    except ImportError:
+        options = None
+
     result = await run_task_with_query(
         pool=pool,
         task_id=task_id,
@@ -99,6 +141,7 @@ async def process_one_task(
         scenario=None,
         query_fn=query_fn or _empty_query,
         prompt=task["description"],
+        options=options,
     )
 
     if wt is not None:
