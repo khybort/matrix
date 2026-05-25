@@ -22,7 +22,9 @@ from strategy.base import PredictionDraft
 from strategy.modules.bist.gap_fade import BistGapFade
 from strategy.modules.bist.news_event import BistNewsEvent
 from strategy.modules.bist.volume_breakout import BistVolumeBreakout
+from strategy.modules.dca import Dca
 from strategy.modules.funding_reversion import FundingReversion
+from strategy.modules.grid import Grid
 from strategy.modules.oi_delta import OiDelta
 from strategy.modules.trade_flow_imbalance import TradeFlowImbalance
 from strategy.persist import persist_drafts
@@ -36,6 +38,8 @@ def _registered_strategies() -> list:
         TradeFlowImbalance(),
         FundingReversion(),
         OiDelta(),
+        Grid(),
+        Dca(),
         # ---- bist (only emit while in TR session; modules self-gate) ----
         BistGapFade(),
         BistVolumeBreakout(),
