@@ -94,3 +94,6 @@ services:
       - ./apps/web/src:/app/apps/web/src
       - ./apps/web/public:/app/apps/web/public
       - ./apps/web/next.config.ts:/app/apps/web/next.config.ts
+      - ./apps/web/tsconfig.json:/app/apps/web/tsconfig.json
+      - ./apps/web/next-env.d.ts:/app/apps/web/next-env.d.ts
+      - ./apps/web/postcss.config.js:/app/apps/web/postcss.config.js

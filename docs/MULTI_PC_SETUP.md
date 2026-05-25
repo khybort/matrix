@@ -11,21 +11,40 @@
 
 Single-PC users can leave `SHARED_DATABASE_URL` blank — it falls back to the local Postgres. Switch to multi-PC by changing one env var.
 
-## Single-PC workflow (default)
+## Single-PC workflow — fully offline (default)
+
+The default `.env` brings up **two local Postgres instances**: `postgres`
+(LOCAL tier — market data + AGE graph) and `postgres-shared` (a local
+stand-in for Neon — wallet, predictions, lab, graph_signals). Internet
+is not required.
 
 ```bash
 cp .env.example .env
 # edit .env: at minimum, set NODE_ID
 
-make build         # build all images (~5 min first time)
-make up-dev        # postgres + 7 services + web, hot reload everywhere
-make migrate       # bring schema to latest
-make dashboard     # opens http://localhost:3030
-make logs          # tail everything
-make stats         # quick counts per table
+make build                  # build all images (~5 min first time)
+make up-dev-local           # 8 services + postgres + postgres-shared
+make migrate                # migrate LOCAL tier
+make migrate-local-shared   # migrate the fake-Neon tier
+make dashboard              # opens http://localhost:3030
+
+make stats                  # LOCAL counts
+make psql                   # psql shell to LOCAL
+make psql-shared            # psql shell to the fake-Neon (port 5433)
+make logs                   # tail everything
 ```
 
 Hot reload: edit any `.py` file in `services/*/src/` or `packages/python-shared/src/` and the relevant service restarts in a few seconds. Edit any `.tsx` in `apps/web/src/` and Next.js HMR updates in the browser.
+
+### Switching to real Neon later
+
+When you want a multi-PC setup, swap one env var:
+
+1. In `.env`: comment the `postgres-shared` line, uncomment the Neon line
+2. `make down && make up-dev` (no `-local`)
+3. `make migrate-shared` to ensure Neon's schema is current
+
+The same data flows; only `SHARED_DATABASE_URL` changed.
 
 ## Multi-PC workflow
 

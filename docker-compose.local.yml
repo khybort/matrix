@@ -1,0 +1,94 @@
+# Local-only "fake Neon" overlay.
+#
+# Adds a second local Postgres container (matrix-postgres-shared) that
+# stands in for Neon during offline development. All services that touch
+# the SHARED tier get redirected at this container instead of the public
+# Neon URL.
+#
+# Use with:
+#   make up-dev-local            (dev + local-only)
+#   make migrate-local-shared    (apply migrations to local-shared)
+#
+# Swap back to Neon: leave .env's SHARED_DATABASE_URL pointing at Neon
+# and use plain `make up-dev` (no -local).
+
+name: matrix
+
+x-shared-local-url: &shared_local_url
+  SHARED_DATABASE_URL: postgres://matrix:matrix_dev_only@postgres-shared:5432/matrix_shared
+
+services:
+  postgres-shared:
+    build:
+      context: ./infra/db
+    image: matrix-postgres:local
+    container_name: matrix-postgres-shared
+    environment:
+      POSTGRES_USER: matrix
+      POSTGRES_PASSWORD: matrix_dev_only
+      POSTGRES_DB: matrix_shared
+    ports:
+      - "5433:5432"  # host port 5433 → container 5432 (LOCAL keeps 5432)
+    volumes:
+      - matrix_pgdata_shared:/var/lib/postgresql/data
+      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U matrix -d matrix_shared"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # Re-route every SHARED-touching service away from Neon.
+  ingestion-market:
+    environment: *shared_local_url
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-shared:
+        condition: service_healthy
+  ingestion-news:
+    environment: *shared_local_url
+  graph:
+    environment: *shared_local_url
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-shared:
+        condition: service_healthy
+  agent:
+    environment: *shared_local_url
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-shared:
+        condition: service_healthy
+  backtest:
+    environment: *shared_local_url
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-shared:
+        condition: service_healthy
+  reflection:
+    environment: *shared_local_url
+    depends_on:
+      postgres-shared:
+        condition: service_healthy
+  labs:
+    environment: *shared_local_url
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-shared:
+        condition: service_healthy
+  web:
+    environment:
+      DATABASE_URL: postgres://matrix:matrix_dev_only@postgres-shared:5432/matrix_shared
+    depends_on:
+      postgres-shared:
+        condition: service_healthy
+
+volumes:
+  matrix_pgdata_shared:
+    name: matrix_pgdata_shared

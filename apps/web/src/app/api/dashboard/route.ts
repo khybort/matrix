@@ -90,6 +90,29 @@ export async function GET() {
       FROM lab_experiments
     `;
 
+    // Federated graph_signals: latest row per asset across all nodes
+    const graphSignals = await sql`
+      SELECT DISTINCT ON (asset)
+        asset, node_id, computed_at, direct_mention_count,
+        direct_polarity, contextual_polarity, recency_weight,
+        n_contextual_documents, related_companies, co_mentioned_assets,
+        computed_in_ms
+      FROM graph_signals
+      WHERE computed_at > NOW() - INTERVAL '6 hours'
+      ORDER BY asset, computed_at DESC
+    `;
+
+    const graphSignalsStats = await sql`
+      SELECT
+        COUNT(*) AS total_signals,
+        COUNT(DISTINCT node_id) AS contributing_nodes,
+        COUNT(DISTINCT asset) AS distinct_assets,
+        MAX(computed_at) AS latest_publish,
+        AVG(computed_in_ms)::int AS avg_compute_ms
+      FROM graph_signals
+      WHERE computed_at > NOW() - INTERVAL '24 hours'
+    `;
+
     return NextResponse.json({
       ok: true,
       wallet: walletRow,
@@ -101,6 +124,8 @@ export async function GET() {
       mutationProposals,
       labLeaderboard,
       labStats: labStats[0] ?? {},
+      graphSignals,
+      graphSignalsStats: graphSignalsStats[0] ?? {},
       now: new Date().toISOString(),
     });
   } catch (e) {
