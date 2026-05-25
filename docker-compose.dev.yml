@@ -107,6 +107,16 @@ services:
       - ./services/graph/src:/workspace/services/graph/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
+  dev_agent:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m dev_agent.main"
+      - "/workspace/services/dev_agent/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/dev_agent/src:/workspace/services/dev_agent/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
   web:
     build:
       target: dev

@@ -246,6 +246,42 @@ lab-scan: ## Scan for a promotion proposal
 lab-apply-best: ## Apply the most recent pending lab_promotion proposal
 	$(DC) $(DC_BASE) exec labs uv run python -m labs.main --apply-best
 
+##@ Dev Agent
+
+.PHONY: dev-agent-tail
+dev-agent-tail: ## Follow dev_agent logs
+	$(DC) $(DC_DEV) logs -f dev_agent
+
+.PHONY: dev-agent-queue
+dev-agent-queue: ## Show review queue (awaiting_review + failed)
+	$(PSQL) -c "SELECT * FROM dev_review_queue LIMIT 20;"
+
+.PHONY: dev-agent-lessons
+dev-agent-lessons: ## Show lesson stats (active only)
+	$(PSQL) -c "SELECT * FROM dev_lesson_stats LIMIT 30;"
+
+.PHONY: dev-agent-pause
+dev-agent-pause: ## Global kill switch ON (usage: make dev-agent-pause REASON="...")
+	$(PSQL) -c "UPDATE dev_agent_runtime SET paused=true, pause_reason='$(REASON)', paused_at=NOW(), paused_by='cli' WHERE id=true;"
+
+.PHONY: dev-agent-resume
+dev-agent-resume: ## Global kill switch OFF
+	$(PSQL) -c "UPDATE dev_agent_runtime SET paused=false, pause_reason=NULL, paused_at=NULL, paused_by=NULL WHERE id=true;"
+
+.PHONY: dev-agent-clean
+dev-agent-clean: ## Apply worktree cleanup policy (manual; cron is intentionally absent)
+	$(DC) $(DC_DEV) exec dev_agent uv run python -m dev_agent.tools.clean
+
+.PHONY: dev-agent-test
+dev-agent-test: ## Run dev_agent test suite (excludes live/E2E)
+	cd services/dev_agent && uv run pytest -v -m "not live"
+
+.PHONY: install-hooks
+install-hooks: ## Install git hooks (pre-push: blocks dev-agent/* branches)
+	cp infra/hooks/pre-push .git/hooks/pre-push
+	chmod +x .git/hooks/pre-push
+	@echo "✓ pre-push hook installed"
+
 ##@ Cleanup
 
 .PHONY: clean
