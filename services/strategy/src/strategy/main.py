@@ -19,6 +19,9 @@ import sys
 from loguru import logger
 
 from strategy.base import PredictionDraft
+from strategy.modules.bist.gap_fade import BistGapFade
+from strategy.modules.bist.news_event import BistNewsEvent
+from strategy.modules.bist.volume_breakout import BistVolumeBreakout
 from strategy.modules.funding_reversion import FundingReversion
 from strategy.modules.oi_delta import OiDelta
 from strategy.modules.trade_flow_imbalance import TradeFlowImbalance
@@ -28,7 +31,16 @@ DEFAULT_INTERVAL_S = 30.0
 
 
 def _registered_strategies() -> list:
-    return [TradeFlowImbalance(), FundingReversion(), OiDelta()]
+    return [
+        # ---- crypto ----
+        TradeFlowImbalance(),
+        FundingReversion(),
+        OiDelta(),
+        # ---- bist (only emit while in TR session; modules self-gate) ----
+        BistGapFade(),
+        BistVolumeBreakout(),
+        BistNewsEvent(),
+    ]
 
 
 async def _tick() -> int:

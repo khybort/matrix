@@ -1,5 +1,32 @@
 import { NextResponse } from "next/server";
-import { sql } from "@/lib/db";
+import { sql, sqlLocal } from "@/lib/db";
+
+// AGE Cypher queries need the LOAD 'age' + SET search_path prelude on every
+// transaction. asyncpg's JS cousin (postgres) accepts multi-statement strings
+// fine for begin/commit, but we use postgres.js `.unsafe()` calls so we can
+// inline the cypher() function.
+async function ageCypher(query: string): Promise<unknown[]> {
+  try {
+    await sqlLocal.unsafe("LOAD 'age'");
+    await sqlLocal.unsafe("SET search_path = ag_catalog, public");
+    return await sqlLocal.unsafe(query);
+  } catch (e) {
+    console.warn("age query failed:", (e as Error).message);
+    return [];
+  }
+}
+
+function unquoteAgtype(v: unknown): string {
+  const s = String(v ?? "").trim();
+  if (s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1);
+  return s;
+}
+
+function toIntAgtype(v: unknown): number {
+  const s = String(v ?? "0").trim().replace(/^"|"$/g, "");
+  const n = parseInt(s, 10);
+  return Number.isFinite(n) ? n : 0;
+}
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -23,7 +50,8 @@ export async function GET() {
     `;
 
     const openPositions = await sql`
-      SELECT p.id, p.symbol, p.side, p.notional_usd, p.opened_price, p.opened_at,
+      SELECT p.id, p.symbol, p.side, p.asset_class, p.notional_usd,
+             p.opened_price, p.opened_at,
              pr.strategy_id, pr.strategy_version, pr.close_by, pr.confidence
       FROM paper_positions p
       JOIN predictions pr ON pr.id = p.prediction_id
@@ -32,8 +60,8 @@ export async function GET() {
     `;
 
     const recentPredictions = await sql`
-      SELECT id, strategy_id, strategy_version, symbol, side, confidence,
-             generated_at, close_by, status, thesis
+      SELECT id, strategy_id, strategy_version, symbol, asset_class, side,
+             confidence, generated_at, close_by, status, thesis
       FROM predictions
       ORDER BY generated_at DESC
       LIMIT 25
@@ -41,7 +69,7 @@ export async function GET() {
 
     const recentOutcomes = await sql`
       SELECT o.id, o.observed_at, o.pnl_usd, o.pnl_pct, o.score, o.reason,
-             p.strategy_id, p.strategy_version, p.symbol, p.side
+             p.strategy_id, p.strategy_version, p.symbol, p.asset_class, p.side
       FROM outcomes o
       JOIN predictions p ON p.id = o.prediction_id
       ORDER BY o.observed_at DESC
@@ -49,14 +77,14 @@ export async function GET() {
     `;
 
     const strategyAgg = await sql`
-      SELECT p.strategy_id, p.strategy_version,
+      SELECT p.strategy_id, p.strategy_version, p.asset_class,
              COUNT(*) AS n, AVG(o.score)::numeric(8,4) AS avg_score,
              SUM(o.pnl_usd)::numeric(12,4) AS total_pnl_usd,
              SUM(CASE WHEN o.score > 0 THEN 1 ELSE 0 END)::numeric / COUNT(*)::numeric AS win_rate
       FROM outcomes o
       JOIN predictions p ON p.id = o.prediction_id
       WHERE o.observed_at > NOW() - INTERVAL '24 hours'
-      GROUP BY p.strategy_id, p.strategy_version
+      GROUP BY p.strategy_id, p.strategy_version, p.asset_class
       ORDER BY n DESC
     `;
 
@@ -69,13 +97,13 @@ export async function GET() {
     `;
 
     const labLeaderboard = await sql`
-      SELECT id, generation, n_evaluations, n_signals, n_wins,
+      SELECT id, asset_class, generation, n_evaluations, n_signals, n_wins,
              total_score, fitness_score, status, params, created_at,
              parent_a_id, parent_b_id
       FROM lab_experiments
       WHERE status = 'active'
       ORDER BY fitness_score DESC NULLS LAST, n_evaluations DESC
-      LIMIT 10
+      LIMIT 20
     `;
 
     const labStats = await sql`
@@ -88,6 +116,37 @@ export async function GET() {
         (SELECT COUNT(*) FROM lab_evaluations WHERE status = 'scored') AS evals_scored,
         (SELECT COUNT(*) FROM lab_evaluations WHERE status = 'stale') AS evals_stale
       FROM lab_experiments
+    `;
+
+    // ---- BIST overview: universe size, freshest bar timestamps, position summary
+    const [bistSymbolStats] = await sql`
+      SELECT
+        COUNT(*) FILTER (WHERE active) AS active,
+        COUNT(*) FILTER (WHERE NOT active) AS inactive,
+        MAX(last_refreshed_at) AS last_refreshed
+      FROM bist_symbols
+    `;
+    const bistBarStats = await sqlLocal`
+      SELECT interval, COUNT(*) AS n, MAX(ts) AS latest_ts
+      FROM market_bars
+      WHERE asset_class = 'bist'
+      GROUP BY interval
+      ORDER BY interval
+    `;
+    const [bistPositionStats] = await sql`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'open') AS open,
+        COUNT(*) FILTER (WHERE status = 'closed') AS closed,
+        COALESCE(SUM(pnl_usd) FILTER (WHERE status = 'closed'), 0)::numeric(18,4) AS realized_pnl_usd
+      FROM paper_positions
+      WHERE asset_class = 'bist'
+    `;
+    const [bistPredictionStats] = await sql`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'open') AS open,
+        COUNT(*) FILTER (WHERE status = 'closed') AS closed
+      FROM predictions
+      WHERE asset_class = 'bist'
     `;
 
     // Federated graph_signals: latest row per asset across all nodes
@@ -113,6 +172,72 @@ export async function GET() {
       WHERE computed_at > NOW() - INTERVAL '24 hours'
     `;
 
+    // ---- LOCAL: AGE graph topology (node counts per label, edge counts per type)
+    const entityLabels = ["Document", "Asset", "Company", "Person", "Event", "Concept"];
+    const entityCounts: Record<string, number> = {};
+    for (const label of entityLabels) {
+      const rows = await ageCypher(
+        `SELECT * FROM cypher('matrix_graph', $$ MATCH (n:${label}) RETURN count(n) $$) AS (n agtype)`,
+      );
+      entityCounts[label] = rows.length > 0 ? toIntAgtype((rows[0] as any).n) : 0;
+    }
+
+    const edgeTypes = [
+      "MENTIONS", "IMPACTS", "EMPLOYS", "ANNOUNCES", "OWNS",
+      "REGULATES", "PARTNERS_WITH", "COMPETES_WITH", "PARTICIPATES_IN", "RELATED_TO",
+    ];
+    const edgeCounts: Record<string, number> = {};
+    for (const t of edgeTypes) {
+      const rows = await ageCypher(
+        `SELECT * FROM cypher('matrix_graph', $$ MATCH ()-[r:${t}]->() RETURN count(r) $$) AS (n agtype)`,
+      );
+      edgeCounts[t] = rows.length > 0 ? toIntAgtype((rows[0] as any).n) : 0;
+    }
+
+    // Top-mentioned entities (Asset + Company combined)
+    const topMentioned: { kind: string; canonical: string; mentions: number }[] = [];
+    const topRows = await ageCypher(
+      `SELECT * FROM cypher('matrix_graph', $$
+         MATCH (e)<-[r:MENTIONS]-(:Document)
+         WHERE labels(e)[0] IN ['Asset','Company','Person','Concept','Event']
+         RETURN labels(e)[0], e.canonical, count(r) AS n
+         ORDER BY n DESC LIMIT 12
+       $$) AS (kind agtype, canonical agtype, n agtype)`,
+    );
+    for (const row of topRows) {
+      const r = row as any;
+      topMentioned.push({
+        kind: unquoteAgtype(r.kind),
+        canonical: unquoteAgtype(r.canonical),
+        mentions: toIntAgtype(r.n),
+      });
+    }
+
+    // Sample of typed-edge instances (non-MENTIONS) — proof the agent is
+    // reasoning over real relations, not just keyword mentions
+    const typedEdgeSamples: {
+      edge: string; src: string; src_label: string;
+      tgt: string; tgt_label: string;
+    }[] = [];
+    const sampleRows = await ageCypher(
+      `SELECT * FROM cypher('matrix_graph', $$
+         MATCH (s)-[r]->(t)
+         WHERE type(r) <> 'MENTIONS'
+         RETURN type(r), labels(s)[0], s.canonical, labels(t)[0], t.canonical
+         LIMIT 12
+       $$) AS (edge agtype, src_label agtype, src agtype, tgt_label agtype, tgt agtype)`,
+    );
+    for (const row of sampleRows) {
+      const r = row as any;
+      typedEdgeSamples.push({
+        edge: unquoteAgtype(r.edge),
+        src_label: unquoteAgtype(r.src_label),
+        src: unquoteAgtype(r.src),
+        tgt_label: unquoteAgtype(r.tgt_label),
+        tgt: unquoteAgtype(r.tgt),
+      });
+    }
+
     return NextResponse.json({
       ok: true,
       wallet: walletRow,
@@ -126,6 +251,18 @@ export async function GET() {
       labStats: labStats[0] ?? {},
       graphSignals,
       graphSignalsStats: graphSignalsStats[0] ?? {},
+      graphTopology: {
+        entityCounts,
+        edgeCounts,
+        topMentioned,
+        typedEdgeSamples,
+      },
+      bist: {
+        symbols: bistSymbolStats ?? {},
+        bars: bistBarStats,
+        positions: bistPositionStats ?? {},
+        predictions: bistPredictionStats ?? {},
+      },
       now: new Date().toISOString(),
     });
   } catch (e) {

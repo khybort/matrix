@@ -36,10 +36,18 @@ class FeedSource:
 
 
 DEFAULT_FEEDS: list[FeedSource] = [
+    # ---- Crypto ----
     FeedSource(name="coindesk", url="https://www.coindesk.com/arc/outboundfeeds/rss/"),
     FeedSource(name="theblock", url="https://www.theblock.co/rss.xml"),
     FeedSource(name="decrypt", url="https://decrypt.co/feed"),
     FeedSource(name="cointelegraph", url="https://cointelegraph.com/rss"),
+    # ---- TR / BIST ----
+    # KAP (Public Disclosure Platform) — official BIST issuer disclosures.
+    FeedSource(name="kap", url="https://www.kap.org.tr/tr/api/disclosures.rss"),
+    # General TR business / markets coverage.
+    FeedSource(name="bloomberg_ht", url="https://www.bloomberght.com/rss"),
+    FeedSource(name="dunya", url="https://www.dunya.com/rss"),
+    FeedSource(name="hurriyet_ekonomi", url="https://www.hurriyet.com.tr/rss/ekonomi"),
 ]
 
 

@@ -29,10 +29,14 @@ class LabExperiment(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_lab_experiments_gen_status", "generation", "status"),
         Index("ix_lab_experiments_fitness", "fitness_score"),
+        Index("ix_lab_experiments_asset_class", "asset_class"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    asset_class: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="crypto"
     )
     generation: Mapped[int] = mapped_column(nullable=False, default=0)
     parent_a_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -71,6 +75,7 @@ class LabEvaluation(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_lab_evaluations_open", "status", "close_at"),
         Index("ix_lab_evaluations_experiment", "experiment_id", "status"),
+        Index("ix_lab_evaluations_asset_class", "asset_class"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -80,6 +85,9 @@ class LabEvaluation(Base, TimestampMixin):
         UUID(as_uuid=True),
         ForeignKey("lab_experiments.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    asset_class: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="crypto"
     )
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     side: Mapped[str] = mapped_column(String(8), nullable=False)

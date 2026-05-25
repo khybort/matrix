@@ -46,12 +46,15 @@ FALLBACK = AgentConfig(
 )
 
 
-_cache: dict[str, tuple[float, AgentConfig]] = {}
+_cache: dict[tuple[str, str], tuple[float, AgentConfig]] = {}
 
 
-async def load_agent_config(strategy_id: str = "matrix_agent") -> AgentConfig:
+async def load_agent_config(
+    strategy_id: str = "matrix_agent", asset_class: str = "crypto"
+) -> AgentConfig:
     now = time.monotonic()
-    cached = _cache.get(strategy_id)
+    key = (strategy_id, asset_class)
+    cached = _cache.get(key)
     if cached and now - cached[0] < CACHE_TTL_S:
         return cached[1]
 
@@ -59,6 +62,7 @@ async def load_agent_config(strategy_id: str = "matrix_agent") -> AgentConfig:
         stmt = (
             select(StrategyConfig)
             .where(StrategyConfig.strategy_id == strategy_id)
+            .where(StrategyConfig.asset_class == asset_class)
             .where(StrategyConfig.status == "active")
             .order_by(StrategyConfig.version.desc())
             .limit(1)
@@ -66,8 +70,10 @@ async def load_agent_config(strategy_id: str = "matrix_agent") -> AgentConfig:
         row = (await session.execute(stmt)).scalar_one_or_none()
 
     if row is None:
-        logger.warning(f"no active StrategyConfig for {strategy_id}, using fallback")
-        _cache[strategy_id] = (now, FALLBACK)
+        logger.debug(
+            f"no active StrategyConfig for {strategy_id}/{asset_class}, using fallback"
+        )
+        _cache[key] = (now, FALLBACK)
         return FALLBACK
 
     params = row.params or {}
@@ -87,7 +93,7 @@ async def load_agent_config(strategy_id: str = "matrix_agent") -> AgentConfig:
         signal_threshold=Decimal(str(params.get("signal_threshold", "0.18"))),
         horizon_seconds=int(params.get("horizon_seconds", 120)),
     )
-    _cache[strategy_id] = (now, cfg)
+    _cache[key] = (now, cfg)
     return cfg
 
 
@@ -96,4 +102,6 @@ def invalidate_cache(strategy_id: str | None = None) -> None:
     if strategy_id is None:
         _cache.clear()
     else:
-        _cache.pop(strategy_id, None)
+        for k in list(_cache.keys()):
+            if k[0] == strategy_id:
+                _cache.pop(k, None)

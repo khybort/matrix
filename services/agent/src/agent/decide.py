@@ -120,12 +120,41 @@ def _news_score(f: SymbolFeatures) -> Decimal:
     return Decimal(pos - neg) / Decimal(pos + neg)
 
 
+_CRYPTO_ONLY_SIGNALS = ("funding", "oi_delta")
+
+
+def _asset_weights(
+    weights: dict[str, Decimal], asset_class: str
+) -> dict[str, Decimal]:
+    """Zero out crypto-only signals for non-crypto asset classes and renormalize.
+
+    Renormalization preserves the relative emphasis the lab/reflection placed
+    on the remaining signals. If the surviving total is zero (degenerate
+    config), we leave the weights alone.
+    """
+    if asset_class == "crypto":
+        return weights
+    surviving = {k: v for k, v in weights.items() if k not in _CRYPTO_ONLY_SIGNALS}
+    total = sum(surviving.values(), Decimal("0"))
+    if total <= 0:
+        return surviving
+    scale = sum(weights.values(), Decimal("0")) / total
+    return {k: v * scale for k, v in surviving.items()}
+
+
 def rule_decide(
     f: SymbolFeatures,
     weights: dict[str, Decimal] = WEIGHTS,
     signal_threshold: Decimal = RULE_SIGNAL_THRESHOLD,
+    asset_class: str = "crypto",
 ) -> Decision:
-    """Linear-combine signals, threshold to decide side."""
+    """Linear-combine signals, threshold to decide side.
+
+    `asset_class` controls which signals contribute: crypto-only features
+    (funding, oi_delta) are dropped for non-crypto classes and the remaining
+    weights are renormalized to keep the threshold scale comparable.
+    """
+    weights = _asset_weights(weights, asset_class)
     sub = {
         "trade_flow": _trade_flow_score(f),
         "funding": _funding_score(f),
@@ -133,14 +162,24 @@ def rule_decide(
         "ob_imbalance": _ob_imbalance_score(f),
         "news": _news_score(f),
     }
+    # Drop crypto-only contributions when not applicable.
+    for k in _CRYPTO_ONLY_SIGNALS:
+        if k not in weights:
+            sub[k] = Decimal("0")
+
     total = sum((weights.get(k, Decimal("0")) * v for k, v in sub.items()), Decimal("0"))
 
     if total >= signal_threshold:
         side = "long"
         conf = min(Decimal("1"), total)
     elif total <= -signal_threshold:
-        side = "short"
-        conf = min(Decimal("1"), abs(total))
+        # BIST is long-only; suppress short emissions at the agent layer.
+        if asset_class == "bist":
+            side = "hold"
+            conf = Decimal("0")
+        else:
+            side = "short"
+            conf = min(Decimal("1"), abs(total))
     else:
         side = "hold"
         conf = Decimal("0")
@@ -212,16 +251,20 @@ def _llm_prompt(f: SymbolFeatures) -> str:
     return "\n".join(parts)
 
 
-async def decide(f: SymbolFeatures, cfg: AgentConfig | None = None) -> Decision:
+async def decide(
+    f: SymbolFeatures,
+    cfg: AgentConfig | None = None,
+    asset_class: str = "crypto",
+) -> Decision:
     """Top-level decision: rule-based by default; LLM if enabled.
 
     The LLM result, when present, overrides the rule decision but the rule
     decision is still computed and stored in feature_dump for audit.
     """
     if cfg is not None:
-        rule = rule_decide(f, cfg.weights, cfg.signal_threshold)
+        rule = rule_decide(f, cfg.weights, cfg.signal_threshold, asset_class=asset_class)
     else:
-        rule = rule_decide(f)
+        rule = rule_decide(f, asset_class=asset_class)
     if not llm_enabled():
         return rule
 

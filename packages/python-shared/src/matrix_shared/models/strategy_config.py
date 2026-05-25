@@ -25,12 +25,16 @@ class StrategyConfig(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("strategy_id", "version", name="uq_strategy_configs_id_ver"),
         Index("ix_strategy_configs_status", "strategy_id", "status"),
+        Index("ix_strategy_configs_asset_class", "asset_class"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     strategy_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_class: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="crypto"
+    )
     version: Mapped[int] = mapped_column(nullable=False, default=1)
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="active"
@@ -50,12 +54,16 @@ class MutationProposal(Base, TimestampMixin):
     __tablename__ = "mutation_proposals"
     __table_args__ = (
         Index("ix_mutation_proposals_strategy", "strategy_id", "status"),
+        Index("ix_mutation_proposals_asset_class", "asset_class"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     strategy_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_class: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="crypto"
+    )
     from_version: Mapped[int] = mapped_column(nullable=False)
     to_version: Mapped[int] = mapped_column(nullable=False)
     proposal_type: Mapped[str] = mapped_column(String(32), nullable=False)

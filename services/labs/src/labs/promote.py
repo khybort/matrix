@@ -70,6 +70,7 @@ def _scrub_forbidden(params: dict[str, Any]) -> dict[str, Any]:
 async def scan_for_promotions(
     strategy_id: str = "matrix_agent",
     *,
+    asset_class: str = "crypto",
     min_eval: int = MIN_EVAL_FOR_PROMOTION,
     min_fitness: Decimal = MIN_FITNESS_FOR_PROMOTION,
 ) -> uuid.UUID | None:
@@ -83,6 +84,7 @@ async def scan_for_promotions(
         cand_stmt = (
             select(LabExperiment)
             .where(LabExperiment.status == "active")
+            .where(LabExperiment.asset_class == asset_class)
             .where(LabExperiment.n_evaluations >= min_eval)
             .where(LabExperiment.fitness_score >= min_fitness)
             .order_by(desc(LabExperiment.fitness_score))
@@ -100,6 +102,7 @@ async def scan_for_promotions(
                     MutationProposal.strategy_id == strategy_id,
                     MutationProposal.proposal_type == LAB_PROMOTION_TYPE,
                     MutationProposal.status == "pending",
+                    MutationProposal.asset_class == asset_class,
                 )
             )
         )
@@ -114,6 +117,7 @@ async def scan_for_promotions(
             select(StrategyConfig)
             .where(StrategyConfig.strategy_id == strategy_id)
             .where(StrategyConfig.status == "active")
+            .where(StrategyConfig.asset_class == asset_class)
             .order_by(desc(StrategyConfig.version))
             .limit(1)
         )
@@ -145,6 +149,7 @@ async def scan_for_promotions(
 
         proposal = MutationProposal(
             strategy_id=strategy_id,
+            asset_class=asset_class,
             from_version=current.version,
             to_version=current.version + 1,
             proposal_type=LAB_PROMOTION_TYPE,
@@ -221,10 +226,11 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
 
         scrubbed = _scrub_forbidden(proposal.after_params or {})
 
-        # Retire existing active
+        # Retire existing active (same strategy_id + asset_class)
         cur_stmt = (
             select(StrategyConfig)
             .where(StrategyConfig.strategy_id == proposal.strategy_id)
+            .where(StrategyConfig.asset_class == proposal.asset_class)
             .where(StrategyConfig.status == "active")
         )
         for cfg in (await session.execute(cur_stmt)).scalars():
@@ -232,6 +238,7 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
 
         new_cfg = StrategyConfig(
             strategy_id=proposal.strategy_id,
+            asset_class=proposal.asset_class,
             version=proposal.to_version,
             status="active",
             params=scrubbed,

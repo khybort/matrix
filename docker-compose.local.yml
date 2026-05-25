@@ -14,6 +14,12 @@
 
 name: matrix
 
+x-logging: &default_logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-shared-local-url: &shared_local_url
   SHARED_DATABASE_URL: postgres://matrix:matrix_dev_only@postgres-shared:5432/matrix_shared
 
@@ -38,6 +44,7 @@ services:
       timeout: 5s
       retries: 20
     restart: unless-stopped
+    logging: *default_logging
 
   # Re-route every SHARED-touching service away from Neon.
   ingestion-market:
@@ -92,7 +99,10 @@ services:
   web:
     environment:
       DATABASE_URL: postgres://matrix:matrix_dev_only@postgres-shared:5432/matrix_shared
+      LOCAL_DATABASE_URL: postgres://matrix:matrix_dev_only@postgres:5432/matrix
     depends_on:
+      postgres:
+        condition: service_healthy
       postgres-shared:
         condition: service_healthy
 
