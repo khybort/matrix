@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS dev_tasks (
   auto_pr BOOLEAN NOT NULL DEFAULT FALSE,
   run_tests BOOLEAN NOT NULL DEFAULT TRUE,
   max_turns INTEGER NOT NULL DEFAULT 50,
-  model TEXT NOT NULL DEFAULT 'claude-opus-4-7',
+  model TEXT NOT NULL DEFAULT 'claude-haiku-4-5',
   base_branch TEXT NOT NULL DEFAULT 'main',
   commit_message TEXT,
   cost_cap_usd NUMERIC(10,4) NOT NULL DEFAULT 5.00,
