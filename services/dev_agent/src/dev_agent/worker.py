@@ -117,19 +117,24 @@ async def process_one_task(
         touches_files=list(task["touches_files"] or []),
     )
 
-    # Real-SDK path constructs ClaudeAgentOptions; fake path passes scenario directly.
+    # Build ClaudeAgentOptions ONLY when query_fn is the real SDK. Tests pass
+    # a fake query_fn that takes (prompt, options) with a sync 2-arg can_use
+    # — the real-SDK path's async 3-arg wrapper would break those callers.
+    options = None
     try:
         from claude_agent_sdk import ClaudeAgentOptions
-        options = ClaudeAgentOptions(
-            cwd=str(wt.path) if wt else None,
-            system_prompt=system_prompt,
-            allowed_tools=["Bash", "Read", "Edit", "Write", "Grep", "Glob"],
-            permission_mode="acceptEdits",
-            max_turns=task["max_turns"],
-            model=task["model"],
-        )
+        from claude_agent_sdk import query as real_query
+        if query_fn is real_query:
+            options = ClaudeAgentOptions(
+                cwd=str(wt.path) if wt else None,
+                system_prompt=system_prompt,
+                allowed_tools=["Bash", "Read", "Edit", "Write", "Grep", "Glob"],
+                permission_mode="acceptEdits",
+                max_turns=task["max_turns"],
+                model=task["model"],
+            )
     except ImportError:
-        options = None
+        pass
 
     result = await run_task_with_query(
         pool=pool,

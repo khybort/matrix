@@ -68,6 +68,19 @@ COPY services/${SERVICE}/src /workspace/services/${SERVICE}/src
 WORKDIR /workspace/services/${SERVICE}
 RUN uv sync --frozen
 
+# dev_agent additionally needs Node.js + the Claude Code CLI because
+# claude_agent_sdk (Python) spawns the `claude` binary as its transport.
+# Other services skip this step (no-op if SERVICE != dev_agent).
+USER root
+RUN if [ "${SERVICE}" = "dev_agent" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            git \
+        && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+        && apt-get install -y --no-install-recommends nodejs \
+        && rm -rf /var/lib/apt/lists/* \
+        && npm install -g @anthropic-ai/claude-code ; \
+    fi
+
 # Generic entrypoint: `uv run python -m <module>`. Compose passes the module
 # (e.g. ingestion.main, ingestion.news, agent.main, labs.main) + args.
 ENTRYPOINT ["uv", "run", "python", "-m"]
