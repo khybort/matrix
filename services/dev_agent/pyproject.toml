@@ -38,6 +38,12 @@ target-version = "py313"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "RUF"]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "live: requires real Anthropic API key and a running dev_agent stack",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",
