@@ -16,6 +16,7 @@ from matrix_shared.trading_safety import (
     EligibilityVerdict,
     evaluate_eligibility,
     has_valid_certificate,
+    maybe_grant_certificate,
 )
 
 __all__ = [
@@ -37,4 +38,5 @@ __all__ = [
     "EligibilityVerdict",
     "evaluate_eligibility",
     "has_valid_certificate",
+    "maybe_grant_certificate",
 ]

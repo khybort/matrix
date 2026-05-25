@@ -13,7 +13,7 @@ code in the same commit.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -172,3 +172,108 @@ async def evaluate_eligibility(
             "max_drawdown_pct": str(dd_pct.quantize(Decimal("0.000001"))),
         },
     )
+
+
+# Auto-grant defaults. A cert that's only granted once and never re-evaluated
+# is misleading — paper performance drifts. Re-certification is the design.
+GRANT_VALIDITY_DAYS = 7
+DEFAULT_GRANTED_BY = "auto-eligibility"
+
+
+async def maybe_grant_certificate(
+    strategy_id: str,
+    asset_class: str,
+    version: int,
+    *,
+    granted_by: str = DEFAULT_GRANTED_BY,
+    validity_days: int = GRANT_VALIDITY_DAYS,
+    min_observation_days: int | None = None,
+    min_outcomes: int | None = None,
+    min_win_rate: Decimal | None = None,
+    min_total_pnl_usd: Decimal | None = None,
+    max_drawdown_pct: Decimal | None = None,
+) -> tuple[bool, EligibilityVerdict | None, str]:
+    """Idempotent auto-grant. Returns (granted, verdict, reason).
+
+    Behavior:
+      - Existing 'granted' cert with validity_until > now → (False, None, 'already granted').
+      - No cert / pending / revoked / expired → run evaluate_eligibility.
+        - Not eligible → (False, verdict, 'not eligible').
+        - Eligible → UPSERT (insert new or update existing) with status='granted',
+          fresh granted_at/validity_until, metrics snapshot. Returns (True, verdict, 'granted').
+
+    Concurrency: relies on the unique constraint (strategy_id, asset_class, version)
+    plus SELECT-then-INSERT/UPDATE within a single session_scope. Two racing grants
+    will produce one row; the loser sees a unique-violation and is treated as a no-op.
+    """
+    # Pre-check existing cert before doing the (more expensive) eligibility eval.
+    async with shared_session_scope() as session:
+        stmt = (
+            select(PaperTradeCertificate)
+            .where(PaperTradeCertificate.strategy_id == strategy_id)
+            .where(PaperTradeCertificate.asset_class == asset_class)
+            .where(PaperTradeCertificate.version == version)
+            .limit(1)
+        )
+        existing = (await session.execute(stmt)).scalar_one_or_none()
+        now = datetime.now(timezone.utc)
+        if (
+            existing is not None
+            and existing.status == "granted"
+            and (existing.validity_until is None or existing.validity_until > now)
+        ):
+            return (False, None, "already granted")
+
+    # Forward only the kwargs the caller overrode; let evaluate_eligibility's
+    # own defaults win otherwise so docs/TRADING.md numbers stay authoritative.
+    kw: dict = {}
+    if min_observation_days is not None:
+        kw["min_observation_days"] = min_observation_days
+    if min_outcomes is not None:
+        kw["min_outcomes"] = min_outcomes
+    if min_win_rate is not None:
+        kw["min_win_rate"] = min_win_rate
+    if min_total_pnl_usd is not None:
+        kw["min_total_pnl_usd"] = min_total_pnl_usd
+    if max_drawdown_pct is not None:
+        kw["max_drawdown_pct"] = max_drawdown_pct
+    verdict = await evaluate_eligibility(strategy_id, asset_class, version, **kw)
+    if not verdict.eligible:
+        return (False, verdict, "not eligible")
+
+    # Snapshot the verdict's metrics onto the cert row. evaluate_eligibility
+    # returns strings; convert back to Decimal for the typed columns.
+    m = verdict.metrics
+    validity_until = now + timedelta(days=validity_days)
+
+    async with shared_session_scope() as session:
+        # Re-fetch inside the writing session to avoid double-grant race.
+        stmt = (
+            select(PaperTradeCertificate)
+            .where(PaperTradeCertificate.strategy_id == strategy_id)
+            .where(PaperTradeCertificate.asset_class == asset_class)
+            .where(PaperTradeCertificate.version == version)
+            .limit(1)
+        )
+        row = (await session.execute(stmt)).scalar_one_or_none()
+        if row is None:
+            row = PaperTradeCertificate(
+                strategy_id=strategy_id,
+                asset_class=asset_class,
+                version=version,
+            )
+            session.add(row)
+        row.status = "granted"
+        row.granted_at = now
+        row.granted_by = granted_by
+        row.validity_until = validity_until
+        row.revoked_at = None
+        row.revoked_reason = None
+        row.n_outcomes = int(m["n_outcomes"])
+        row.observation_days = int(m["observation_days"])
+        row.win_rate = Decimal(str(m["win_rate"]))
+        row.avg_pnl_usd = Decimal(str(m["avg_pnl_usd"]))
+        row.total_pnl_usd = Decimal(str(m["total_pnl_usd"]))
+        row.max_drawdown_pct = Decimal(str(m["max_drawdown_pct"]))
+
+    return (True, verdict, "granted")
