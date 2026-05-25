@@ -58,3 +58,6 @@ data/
 coverage/
 .cache/
 docs/superpowers/
+
+# dev_agent runtime worktrees (scratch git checkouts the agent spawns per task)
+worktrees/
