@@ -155,15 +155,26 @@ async def process_one_task(
         except Exception:
             pass
 
-    final_status = "awaiting_review" if result.completed else "failed"
+    # review_mode picks the post-completion terminal state for successful runs:
+    #   auto   → 'merged' (reviewed_by='auto'), skipping human review queue
+    #   manual → 'awaiting_review' (today's behavior; needs POST /accept|/discard)
+    # Failed tasks ignore this — failure has its own queue, lesson_synth path,
+    # and a human probably wants to see what broke.
+    if result.completed:
+        final_status = "merged" if task.get("review_mode", "auto") == "auto" else "awaiting_review"
+    else:
+        final_status = "failed"
+    auto_review = result.completed and task.get("review_mode", "auto") == "auto"
     await pool.execute(
         """UPDATE dev_tasks
            SET status=$1, finished_at=NOW(),
                failure_reason=$2, total_cost_usd=$3, total_tokens=$4,
-               worktree_path=$5
+               worktree_path=$5,
+               reviewed_at = CASE WHEN $7::bool THEN NOW() ELSE reviewed_at END,
+               reviewed_by = CASE WHEN $7::bool THEN 'auto'  ELSE reviewed_by END
            WHERE id=$6""",
         final_status, result.failure_reason, result.total_cost_usd, result.total_tokens,
-        str(wt.path) if wt else None, task_id,
+        str(wt.path) if wt else None, task_id, auto_review,
     )
     await pool.execute(
         """UPDATE dev_task_runs
