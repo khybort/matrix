@@ -23,6 +23,7 @@ class PredictionDraft:
     horizon_seconds: int
     entry_price_ref: Decimal
     generated_at: datetime
+    asset_class: str = "crypto"  # crypto | bist | ...
     thesis: str | None = None
     context: dict[str, Any] = field(default_factory=dict)
     id: uuid.UUID = field(default_factory=uuid.uuid4)

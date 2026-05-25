@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 
 from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.models import (
+    MarketBar,
     MarketTrade,
     Outcome,
     PaperPosition,
@@ -31,12 +32,33 @@ from matrix_shared.models import (
 )
 
 DEFAULT_WALLET_ID = uuid.UUID("00000000-0000-0000-0000-00000000d0e1")
-FRESHNESS_S = 60
+FRESHNESS_S = 60                       # crypto: ticks every few seconds
+FRESHNESS_S_BARS = 60 * 30             # BIST 1m bars + 15min Yahoo delay window
 SLIPPAGE_BPS = Decimal("2")
 SCORE_CAP_PCT = Decimal("0.01")  # ±1% horizon caps the score at ±1
 
 
-async def _latest_price(symbol: str) -> Decimal | None:
+async def _latest_price(symbol: str, asset_class: str = "crypto") -> Decimal | None:
+    """Latest mark price for a symbol.
+
+    crypto → MarketTrade (tick prints, sub-minute fresh)
+    bist   → MarketBar 1m close (Yahoo-delayed, wider freshness window)
+    """
+    if asset_class == "bist":
+        cutoff = datetime.now(UTC) - timedelta(seconds=FRESHNESS_S_BARS)
+        async with local_session_scope() as session:
+            stmt = (
+                select(MarketBar.close)
+                .where(MarketBar.symbol == symbol)
+                .where(MarketBar.asset_class == "bist")
+                .where(MarketBar.interval == "1m")
+                .where(MarketBar.ts >= cutoff)
+                .order_by(MarketBar.ts.desc())
+                .limit(1)
+            )
+            row = (await session.execute(stmt)).first()
+            return Decimal(row.close) if row else None
+
     cutoff = datetime.now(UTC) - timedelta(seconds=FRESHNESS_S)
     async with local_session_scope() as session:
         stmt = (
@@ -99,7 +121,7 @@ async def _current_equity(session, wallet: Wallet) -> tuple[Decimal, Decimal, in
 
     unrealized = Decimal("0")
     for pos in open_positions:
-        mark = await _latest_price(pos.symbol)
+        mark = await _latest_price(pos.symbol, pos.asset_class)
         if mark is None:
             continue
         unrealized += _unrealized_pnl(pos, mark)
@@ -181,9 +203,18 @@ async def open_due_positions() -> int:
 
     opened = 0
     for p in candidates:
-        last_px = await _latest_price(p.symbol)
+        # BIST is long-only (T+2 settlement, retail short restrictions). The
+        # strategy/agent layers already filter shorts, but this is a defensive
+        # gate in case a buggy proposal slips through.
+        if p.asset_class == "bist" and p.side == "short":
+            logger.warning(f"skip {p.id}: short on BIST disallowed ({p.symbol})")
+            continue
+
+        last_px = await _latest_price(p.symbol, p.asset_class)
         if last_px is None:
-            logger.debug(f"skip {p.id}: no fresh price for {p.symbol}")
+            logger.debug(
+                f"skip {p.id}: no fresh price for {p.symbol} ({p.asset_class})"
+            )
             continue
         entry = _apply_slippage(last_px, p.side, opening=True)
 
@@ -208,6 +239,7 @@ async def open_due_positions() -> int:
                     prediction_id=p.id,
                     symbol=p.symbol,
                     exchange=p.exchange,
+                    asset_class=p.asset_class,
                     side=p.side,
                     notional_usd=notional,
                     opened_at=datetime.now(UTC),
@@ -217,8 +249,8 @@ async def open_due_positions() -> int:
             )
         opened += 1
         logger.info(
-            f"opened {p.side} {p.symbol} notional={notional:.2f} entry={entry:.4f} "
-            f"(pred={p.id}, strat={p.strategy_id}v{p.strategy_version})"
+            f"opened {p.side} {p.symbol} [{p.asset_class}] notional={notional:.2f} "
+            f"entry={entry:.4f} (pred={p.id}, strat={p.strategy_id}v{p.strategy_version})"
         )
     return opened
 
@@ -236,7 +268,7 @@ async def close_due_positions() -> int:
 
     closed = 0
     for pos, pred in rows:
-        last_px = await _latest_price(pos.symbol)
+        last_px = await _latest_price(pos.symbol, pos.asset_class)
         if last_px is None:
             continue
         exit_px = _apply_slippage(last_px, pos.side, opening=False)
@@ -266,6 +298,7 @@ async def close_due_positions() -> int:
             session.add(
                 Outcome(
                     prediction_id=pred.id,
+                    asset_class=pos.asset_class,
                     observed_at=now,
                     pnl_usd=pnl_usd,
                     pnl_pct=pnl_pct,

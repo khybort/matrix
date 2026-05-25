@@ -43,40 +43,47 @@ DEFAULT_PROMOTE_SCAN_INTERVAL_S = 180.0
 
 
 async def _eval_tick(symbols: list[str]) -> tuple[int, int, int]:
-    opened = await emit_signals(symbols)
+    opened = await emit_signals(symbols, asset_class="crypto")
+    # BIST emit_signals is a no-op until bar-based features land, but the
+    # call site is wired so adding feature extraction is a one-file change.
+    opened += await emit_signals([], asset_class="bist")
     scored, stale = await score_due_evaluations()
     return opened, scored, stale
 
 
-async def _leaderboard(limit: int = 15) -> None:
+async def _leaderboard(limit: int = 15, asset_class: str | None = None) -> None:
     async with shared_session_scope() as session:
         stmt = (
             select(LabExperiment)
             .where(LabExperiment.status == "active")
             .order_by(desc(LabExperiment.fitness_score))
-            .limit(limit)
+            .limit(limit * 2)  # extra room when partitioning by class
         )
         rows = list((await session.execute(stmt)).scalars())
 
+    if asset_class is not None:
+        rows = [e for e in rows if e.asset_class == asset_class][:limit]
+    else:
+        rows = rows[:limit]
+
     if not rows:
-        print("no active experiments")
+        print(f"no active experiments{f' for {asset_class}' if asset_class else ''}")
         return
 
-    print(f"{'id':>6} {'gen':>4} {'n_eval':>6} {'n_sig':>6} {'wins':>5} "
+    print(f"{'id':>6} {'cls':>6} {'gen':>4} {'n_eval':>6} {'n_sig':>6} {'wins':>5} "
           f"{'fitness':>9} {'thr':>6} {'hor':>4}")
     for e in rows:
         params = e.params or {}
         thr = params.get("signal_threshold", "")
         hor = params.get("horizon_seconds", "")
         print(
-            f"{str(e.id)[:6]:>6} {e.generation:>4} {e.n_evaluations:>6} "
-            f"{e.n_signals:>6} {e.n_wins:>5} "
+            f"{str(e.id)[:6]:>6} {e.asset_class:>6} {e.generation:>4} "
+            f"{e.n_evaluations:>6} {e.n_signals:>6} {e.n_wins:>5} "
             f"{Decimal(e.fitness_score):>9.4f} {str(thr)[:6]:>6} {str(hor):>4}"
         )
 
-    # Show top 1's weights
     top = rows[0]
-    print(f"\nTop genome weights ({top.id}):")
+    print(f"\nTop genome weights ({top.id}, {top.asset_class}):")
     for k, v in (top.params.get("weights") or {}).items():
         print(f"  {k:>14} = {v}")
 
@@ -89,7 +96,8 @@ async def run(
     promote_scan_interval_s: float = DEFAULT_PROMOTE_SCAN_INTERVAL_S,
     auto_apply: bool = False,
 ) -> None:
-    await seed_initial_population()
+    await seed_initial_population(asset_class="crypto")
+    await seed_initial_population(asset_class="bist")
 
     stop = asyncio.Event()
 
@@ -115,16 +123,19 @@ async def run(
             logger.exception(f"eval tick failed: {e}")
 
         if loop_started - last_evolve >= evolve_interval_s:
-            try:
-                report = await run_evolution_cycle(min_eval_per_gen=min_evals)
-                if report.born or report.retired:
-                    logger.info(
-                        f"evolution: gen={report.new_generation} "
-                        f"elites={report.elites} born={report.born} "
-                        f"retired={report.retired}"
+            for ac in ("crypto", "bist"):
+                try:
+                    report = await run_evolution_cycle(
+                        min_eval_per_gen=min_evals, asset_class=ac
                     )
-            except Exception as e:
-                logger.exception(f"evolution failed: {e}")
+                    if report.born or report.retired:
+                        logger.info(
+                            f"evolution [{ac}]: gen={report.new_generation} "
+                            f"elites={report.elites} born={report.born} "
+                            f"retired={report.retired}"
+                        )
+                except Exception as e:
+                    logger.exception(f"evolution [{ac}] failed: {e}")
             last_evolve = loop_started
 
         if loop_started - last_promote_scan >= promote_scan_interval_s:
@@ -156,6 +167,11 @@ def main() -> None:
     parser.add_argument("--seed-only", action="store_true", help="Seed initial population and exit")
     parser.add_argument("--leaderboard", action="store_true", help="Print top genomes and exit")
     parser.add_argument(
+        "--asset-class",
+        default=None,
+        help="Restrict --leaderboard to this asset class (e.g. 'crypto', 'bist')",
+    )
+    parser.add_argument(
         "--min-evals", type=int, default=5,
         help="Min evaluations per genome to be eligible in evolution (default 5)",
     )
@@ -185,11 +201,14 @@ def main() -> None:
     logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level: <5} | {message}")
 
     if args.leaderboard:
-        asyncio.run(_leaderboard())
+        asyncio.run(_leaderboard(asset_class=args.asset_class))
         return
 
     if args.seed_only:
-        asyncio.run(seed_initial_population())
+        async def _seed_both():
+            await seed_initial_population(asset_class="crypto")
+            await seed_initial_population(asset_class="bist")
+        asyncio.run(_seed_both())
         return
 
     if args.scan_once:
@@ -227,14 +246,18 @@ def main() -> None:
 
     if args.once:
         async def _one():
-            await seed_initial_population()
+            await seed_initial_population(asset_class="crypto")
+            await seed_initial_population(asset_class="bist")
             opened, scored, stale = await _eval_tick(args.symbols)
             logger.info(f"once: opened={opened} scored={scored} stale={stale}")
-            report = await run_evolution_cycle(min_eval_per_gen=args.min_evals)
-            logger.info(
-                f"evolve once: gen={report.new_generation} elites={report.elites} "
-                f"born={report.born} retired={report.retired}"
-            )
+            for ac in ("crypto", "bist"):
+                report = await run_evolution_cycle(
+                    min_eval_per_gen=args.min_evals, asset_class=ac
+                )
+                logger.info(
+                    f"evolve [{ac}] once: gen={report.new_generation} "
+                    f"elites={report.elites} born={report.born} retired={report.retired}"
+                )
         asyncio.run(_one())
         return
 

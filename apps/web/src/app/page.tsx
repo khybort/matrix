@@ -24,6 +24,19 @@ type Dashboard = {
     distinct_assets?: number; latest_publish?: string;
     avg_compute_ms?: number;
   };
+  graphTopology: {
+    entityCounts: Record<string, number>;
+    edgeCounts: Record<string, number>;
+    topMentioned: { kind: string; canonical: string; mentions: number }[];
+    typedEdgeSamples: { edge: string; src: string; src_label: string;
+                        tgt: string; tgt_label: string }[];
+  };
+  bist: {
+    symbols: { active?: number; inactive?: number; last_refreshed?: string };
+    bars: { interval: string; n: number; latest_ts: string }[];
+    positions: { open?: number; closed?: number; realized_pnl_usd?: string };
+    predictions: { open?: number; closed?: number };
+  };
   now: string;
 };
 
@@ -97,12 +110,20 @@ export default function Page() {
         </Panel>
       </div>
 
+      <Panel title="BIST — paper-only equities universe (Yahoo delayed feed)" className="mt-4">
+        <BistOverview bist={data.bist} />
+      </Panel>
+
       <Panel title="Lab — evolutionary algorithm search" className="mt-4">
         <LabPanel rows={data.labLeaderboard} stats={data.labStats} />
       </Panel>
 
       <Panel title="Context graph — federated signals (per asset)" className="mt-4">
         <GraphSignalsPanel rows={data.graphSignals} stats={data.graphSignalsStats} />
+      </Panel>
+
+      <Panel title="Context graph — topology (nodes + typed edges)" className="mt-4">
+        <GraphTopologyPanel topology={data.graphTopology} />
       </Panel>
 
       <Panel title="Recent predictions" className="mt-4">
@@ -205,15 +226,16 @@ function StrategyTable({ rows }: { rows: any[] }) {
   return (
     <table className="matrix">
       <thead>
-        <tr><th>Strategy</th><th>v</th><th>N</th><th>Avg score</th><th>Win rate</th><th>PnL (USD)</th></tr>
+        <tr><th>Strategy</th><th>Cls</th><th>v</th><th>N</th><th>Avg score</th><th>Win rate</th><th>PnL (USD)</th></tr>
       </thead>
       <tbody>
         {rows.map((r) => {
           const sc = Number(r.avg_score);
           const pnl = Number(r.total_pnl_usd);
           return (
-            <tr key={`${r.strategy_id}-${r.strategy_version}`}>
+            <tr key={`${r.strategy_id}-${r.strategy_version}-${r.asset_class}`}>
               <td className="mono">{r.strategy_id}</td>
+              <td><AssetClassBadge cls={r.asset_class} /></td>
               <td className="mono">{r.strategy_version}</td>
               <td className="mono">{r.n}</td>
               <td className={`mono ${sc >= 0 ? "pos" : "neg"}`}>{sc.toFixed(4)}</td>
@@ -224,6 +246,64 @@ function StrategyTable({ rows }: { rows: any[] }) {
         })}
       </tbody>
     </table>
+  );
+}
+
+function AssetClassBadge({ cls }: { cls?: string }) {
+  const label = cls ?? "crypto";
+  const tone =
+    label === "bist"
+      ? "border-amber-500 text-amber-300"
+      : "border-emerald-500 text-emerald-300";
+  return (
+    <span className={`mono text-xs px-1.5 py-0.5 border rounded ${tone}`}>
+      {label}
+    </span>
+  );
+}
+
+function BistOverview({ bist }: { bist: Dashboard["bist"] }) {
+  const active = Number(bist.symbols.active ?? 0);
+  const inactive = Number(bist.symbols.inactive ?? 0);
+  const realized = Number(bist.positions.realized_pnl_usd ?? 0);
+  const lastRefreshed = bist.symbols.last_refreshed
+    ? new Date(bist.symbols.last_refreshed).toLocaleString()
+    : "never";
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <Stat label="Active symbols" value={String(active)} sub={inactive ? `${inactive} inactive` : undefined} />
+        <Stat label="Universe refreshed" value={lastRefreshed} subClass="muted text-xs" />
+        <Stat label="Open positions" value={String(bist.positions.open ?? 0)} />
+        <Stat label="Closed positions" value={String(bist.positions.closed ?? 0)} />
+        <Stat
+          label="Realized PnL"
+          value={fmtUsd(realized)}
+          valueClass={realized >= 0 ? "pos" : "neg"}
+        />
+      </div>
+      {bist.bars.length === 0 ? (
+        <p className="muted text-sm">No bars yet — run <code className="mono">make bist-seed</code> then <code className="mono">make bist-poll</code> (or just wait for bist-ingestion).</p>
+      ) : (
+        <table className="matrix">
+          <thead><tr><th>Interval</th><th>Bars</th><th>Latest bar ts</th></tr></thead>
+          <tbody>
+            {bist.bars.map((b) => (
+              <tr key={b.interval}>
+                <td className="mono">{b.interval}</td>
+                <td className="mono">{b.n}</td>
+                <td className="mono">{b.latest_ts ? new Date(b.latest_ts).toLocaleString() : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="muted text-xs">
+        BIST predictions: {bist.predictions.open ?? 0} open · {bist.predictions.closed ?? 0} closed.
+        Paper-only — no live execution.
+      </div>
+    </div>
   );
 }
 
@@ -252,11 +332,12 @@ function OpenPositionsTable({ rows }: { rows: any[] }) {
   if (!rows.length) return <p className="muted text-sm">No open positions.</p>;
   return (
     <table className="matrix">
-      <thead><tr><th>Symbol</th><th>Side</th><th>Notional</th><th>Entry</th><th>Strategy</th><th>Closes by</th></tr></thead>
+      <thead><tr><th>Symbol</th><th>Cls</th><th>Side</th><th>Notional</th><th>Entry</th><th>Strategy</th><th>Closes by</th></tr></thead>
       <tbody>
         {rows.map((r) => (
           <tr key={r.id}>
             <td className="mono">{r.symbol}</td>
+            <td><AssetClassBadge cls={r.asset_class} /></td>
             <td className={r.side === "long" ? "pos mono" : "neg mono"}>{r.side}</td>
             <td className="mono">${Number(r.notional_usd).toFixed(2)}</td>
             <td className="mono">{Number(r.opened_price).toFixed(2)}</td>
@@ -273,7 +354,7 @@ function OutcomesTable({ rows }: { rows: any[] }) {
   if (!rows.length) return <p className="muted text-sm">No outcomes yet.</p>;
   return (
     <table className="matrix">
-      <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Strategy</th><th>Score</th><th>PnL</th></tr></thead>
+      <thead><tr><th>Time</th><th>Symbol</th><th>Cls</th><th>Side</th><th>Strategy</th><th>Score</th><th>PnL</th></tr></thead>
       <tbody>
         {rows.map((r) => {
           const sc = Number(r.score);
@@ -282,6 +363,7 @@ function OutcomesTable({ rows }: { rows: any[] }) {
             <tr key={r.id}>
               <td className="mono">{new Date(r.observed_at).toLocaleTimeString()}</td>
               <td className="mono">{r.symbol}</td>
+              <td><AssetClassBadge cls={r.asset_class} /></td>
               <td className={r.side === "long" ? "pos mono" : "neg mono"}>{r.side}</td>
               <td className="mono">{r.strategy_id}</td>
               <td className={`mono ${sc >= 0 ? "pos" : "neg"}`}>{sc.toFixed(3)}</td>
@@ -298,13 +380,14 @@ function PredictionsTable({ rows }: { rows: any[] }) {
   if (!rows.length) return <p className="muted text-sm">No predictions.</p>;
   return (
     <table className="matrix">
-      <thead><tr><th>Time</th><th>Strategy</th><th>Symbol</th><th>Side</th><th>Conf</th><th>Status</th><th>Thesis</th></tr></thead>
+      <thead><tr><th>Time</th><th>Strategy</th><th>Symbol</th><th>Cls</th><th>Side</th><th>Conf</th><th>Status</th><th>Thesis</th></tr></thead>
       <tbody>
         {rows.map((r) => (
           <tr key={r.id}>
             <td className="mono">{new Date(r.generated_at).toLocaleTimeString()}</td>
             <td className="mono">{r.strategy_id} v{r.strategy_version}</td>
             <td className="mono">{r.symbol}</td>
+            <td><AssetClassBadge cls={r.asset_class} /></td>
             <td className={r.side === "long" ? "pos mono" : r.side === "short" ? "neg mono" : "muted mono"}>{r.side}</td>
             <td className="mono">{Number(r.confidence).toFixed(2)}</td>
             <td className="mono muted">{r.status}</td>
@@ -318,6 +401,147 @@ function PredictionsTable({ rows }: { rows: any[] }) {
 
 function fmtUsd(n: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(n);
+}
+
+function GraphTopologyPanel({ topology }: { topology: Dashboard["graphTopology"] }) {
+  const entityEntries = Object.entries(topology?.entityCounts || {});
+  const edgeEntries = Object.entries(topology?.edgeCounts || {});
+  const totalEntities = entityEntries.reduce((sum, [, v]) => sum + (v || 0), 0);
+  const totalEdges = edgeEntries.reduce((sum, [, v]) => sum + (v || 0), 0);
+
+  const typedEdges = topology?.typedEdgeSamples || [];
+  const top = topology?.topMentioned || [];
+
+  // Group typed edges by edge type for compact display
+  const byEdgeType: Record<string, typeof typedEdges> = {};
+  for (const e of typedEdges) {
+    (byEdgeType[e.edge] ??= []).push(e);
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+        <Stat label="Total nodes" value={totalEntities.toString()} />
+        <Stat label="Total edges" value={totalEdges.toString()} />
+        <Stat
+          label="Entity types"
+          value={entityEntries.filter(([, v]) => v > 0).length.toString()}
+        />
+        <Stat
+          label="Edge types"
+          value={edgeEntries.filter(([, v]) => v > 0).length.toString()}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div>
+          <div className="muted text-xs uppercase tracking-wide mb-2">Nodes by label</div>
+          {entityEntries.length === 0 ? (
+            <p className="muted text-sm">No nodes yet.</p>
+          ) : (
+            <div className="space-y-1">
+              {entityEntries
+                .sort(([, a], [, b]) => b - a)
+                .map(([label, count]) => (
+                  <div key={label} className="flex items-center gap-2 text-xs">
+                    <span className="mono w-28 muted">{label}</span>
+                    <div className="flex-1 bg-zinc-800 h-2 rounded overflow-hidden">
+                      <div
+                        className="h-full bg-cyan-400"
+                        style={{
+                          width: `${Math.max(2, Math.min(100, (count / Math.max(1, totalEntities)) * 100))}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="mono w-12 text-right">{count}</span>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="muted text-xs uppercase tracking-wide mb-2">Edges by type</div>
+          {edgeEntries.length === 0 ? (
+            <p className="muted text-sm">No edges yet.</p>
+          ) : (
+            <div className="space-y-1">
+              {edgeEntries
+                .sort(([, a], [, b]) => b - a)
+                .map(([edge, count]) => (
+                  <div key={edge} className="flex items-center gap-2 text-xs">
+                    <span className="mono w-32 muted">{edge}</span>
+                    <div className="flex-1 bg-zinc-800 h-2 rounded overflow-hidden">
+                      <div
+                        className={`h-full ${edge === "MENTIONS" ? "bg-zinc-400" : "bg-amber-400"}`}
+                        style={{
+                          width: `${Math.max(2, Math.min(100, (count / Math.max(1, totalEdges)) * 100))}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="mono w-12 text-right">{count}</span>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <div className="muted text-xs uppercase tracking-wide mb-2">
+          Top-mentioned entities (any label)
+        </div>
+        {top.length === 0 ? (
+          <p className="muted text-sm">No entities are mentioned yet.</p>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {top.map((t) => (
+              <span
+                key={`${t.kind}:${t.canonical}`}
+                className="mono text-xs px-2 py-0.5 bg-zinc-800 rounded"
+                title={`${t.kind} · ${t.mentions} mentions`}
+              >
+                <span className="muted">{t.kind}</span>
+                <span className="mx-1">·</span>
+                {t.canonical}
+                <span className="muted ml-1">{t.mentions}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <div className="muted text-xs uppercase tracking-wide mb-2">
+          Sample typed edges (non-MENTIONS)
+        </div>
+        {Object.keys(byEdgeType).length === 0 ? (
+          <p className="muted text-sm">
+            No typed relations yet. They appear once <span className="mono">AI_GATEWAY_API_KEY</span>{" "}
+            is set and the graph extractor uses the LLM path.
+          </p>
+        ) : (
+          <div className="space-y-1">
+            {Object.entries(byEdgeType).map(([edge, samples]) => (
+              <div key={edge} className="text-xs">
+                <span className="mono accent">{edge}</span>
+                <span className="muted"> · </span>
+                {samples.slice(0, 4).map((s, i) => (
+                  <span key={i} className="mono mr-2">
+                    <span className="muted">{s.src_label}:</span>
+                    {s.src}
+                    <span className="muted"> → </span>
+                    <span className="muted">{s.tgt_label}:</span>
+                    {s.tgt}
+                  </span>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function GraphSignalsPanel({
@@ -435,7 +659,7 @@ function LabPanel({ rows, stats }: { rows: any[]; stats: Dashboard["labStats"] }
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           <table className="matrix">
             <thead><tr>
-              <th>ID</th><th>Gen</th><th>Evals</th><th>Wins</th>
+              <th>ID</th><th>Cls</th><th>Gen</th><th>Evals</th><th>Wins</th>
               <th>Fitness</th><th>Thr</th><th>Hor</th>
             </tr></thead>
             <tbody>
@@ -444,6 +668,7 @@ function LabPanel({ rows, stats }: { rows: any[]; stats: Dashboard["labStats"] }
                 return (
                   <tr key={r.id}>
                     <td className="mono">{r.id.slice(0, 6)}</td>
+                    <td><AssetClassBadge cls={r.asset_class} /></td>
                     <td className="mono">{r.generation}</td>
                     <td className="mono">{r.n_evaluations}</td>
                     <td className="mono">{r.n_wins}</td>

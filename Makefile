@@ -46,7 +46,18 @@ build-dev: ## Build images with dev targets (web → 'dev' stage with HMR)
 disk: ## Show docker disk usage (run this BEFORE long build iterations)
 	@docker system df
 	@echo ""
-	@echo "If 'RECLAIMABLE' is >30GB, run: docker builder prune -f && docker image prune -f"
+	@echo "If 'RECLAIMABLE' is >30GB, run: make disk-clean"
+
+.PHONY: disk-clean
+disk-clean: ## Reclaim disk: build cache + dangling images (volumes are safe)
+	docker builder prune -f
+	docker image prune -f
+	@echo ""
+	@docker system df
+
+.PHONY: disk-watch
+disk-watch: ## Tail docker disk usage every 30s (Ctrl-C to stop)
+	@while true; do clear; docker system df; echo ""; date; sleep 30; done
 
 .PHONY: up
 up: ## Start the base stack (no overrides)
@@ -117,6 +128,43 @@ psql-shared: ## Open a psql shell on the local SHARED postgres (port 5433)
 db-reset: ## Truncate dynamic tables (predictions, paper_positions, outcomes, snapshots, lab_*)
 	$(PSQL) -c "TRUNCATE market_trades, market_orderbook_snapshots, market_ticker_snapshots, predictions, paper_positions, outcomes, wallet_snapshots, mutation_proposals CASCADE; DELETE FROM lab_evaluations; DELETE FROM lab_experiments; UPDATE wallets SET cash_usd = starting_capital_usd, locked_usd = 0, circuit_tripped_at = NULL;"
 
+##@ Backup / restore
+
+BACKUP_DIR := backups
+BACKUP_TS  := $(shell date +%Y%m%d-%H%M%S)
+
+.PHONY: backup
+backup: ## pg_dumpall LOCAL + SHARED to ./backups/<ts>/
+	@mkdir -p $(BACKUP_DIR)/$(BACKUP_TS)
+	@echo "→ dumping LOCAL..."
+	$(DC) exec -T postgres pg_dumpall -U matrix > $(BACKUP_DIR)/$(BACKUP_TS)/local.sql
+	@echo "→ dumping SHARED-local (postgres-shared) if running..."
+	-$(DC) exec -T postgres-shared pg_dumpall -U matrix > $(BACKUP_DIR)/$(BACKUP_TS)/shared.sql 2>/dev/null && echo "  ✓ shared.sql" || echo "  (skipped — postgres-shared not running)"
+	@echo "→ backup at $(BACKUP_DIR)/$(BACKUP_TS)/"
+	@ls -lh $(BACKUP_DIR)/$(BACKUP_TS)/
+
+.PHONY: restore-local
+restore-local: ## Restore LOCAL from a dump file: make restore-local FILE=backups/<ts>/local.sql
+	@if [ -z "$(FILE)" ]; then echo "Usage: make restore-local FILE=<path>" && exit 1; fi
+	@echo "→ restoring $(FILE) → LOCAL (this DROPS existing data)"
+	$(DC) exec -T postgres psql -U matrix -d postgres -c "DROP DATABASE IF EXISTS matrix;"
+	$(DC) exec -T postgres psql -U matrix -d postgres -c "CREATE DATABASE matrix;"
+	cat $(FILE) | $(DC) exec -T postgres psql -U matrix -d matrix
+	@echo "✓ LOCAL restored"
+
+.PHONY: restore-shared
+restore-shared: ## Restore SHARED-local: make restore-shared FILE=backups/<ts>/shared.sql
+	@if [ -z "$(FILE)" ]; then echo "Usage: make restore-shared FILE=<path>" && exit 1; fi
+	@echo "→ restoring $(FILE) → SHARED-local"
+	$(DC) exec -T postgres-shared psql -U matrix -d postgres -c "DROP DATABASE IF EXISTS matrix_shared;"
+	$(DC) exec -T postgres-shared psql -U matrix -d postgres -c "CREATE DATABASE matrix_shared;"
+	cat $(FILE) | $(DC) exec -T postgres-shared psql -U matrix -d matrix_shared
+	@echo "✓ SHARED-local restored"
+
+.PHONY: backup-list
+backup-list: ## List existing backups
+	@ls -lhRt $(BACKUP_DIR) 2>/dev/null || echo "(no backups yet)"
+
 ##@ Inspection
 
 .PHONY: ps
@@ -157,6 +205,25 @@ stats: ## Quick state summary (counts per major table)
 		UNION ALL SELECT 'lab_experiments', COUNT(*) FROM lab_experiments \
 		UNION ALL SELECT 'lab_evaluations', COUNT(*) FROM lab_evaluations \
 		UNION ALL SELECT 'mutation_proposals', COUNT(*) FROM mutation_proposals \
+		UNION ALL SELECT 'bist_symbols', COUNT(*) FROM bist_symbols \
+		UNION ALL SELECT 'market_bars', COUNT(*) FROM market_bars \
+		ORDER BY k;"
+
+.PHONY: bist-seed
+bist-seed: ## Seed the BIST symbol universe (idempotent)
+	$(DC) $(DC_BASE) exec bist-ingestion uv run python -m bist_ingestion.symbols --once
+
+.PHONY: bist-poll
+bist-poll: ## Run one BIST bar poll cycle and exit
+	$(DC) $(DC_BASE) exec bist-ingestion uv run python -m bist_ingestion.bars --once
+
+.PHONY: bist-stats
+bist-stats: ## BIST-specific counts (symbols, bars by interval, predictions)
+	@$(PSQL) -c "SELECT 'bist_symbols.active' AS k, COUNT(*) FROM bist_symbols WHERE active \
+		UNION ALL SELECT 'bars.1m', COUNT(*) FROM market_bars WHERE asset_class='bist' AND interval='1m' \
+		UNION ALL SELECT 'bars.1d', COUNT(*) FROM market_bars WHERE asset_class='bist' AND interval='1d' \
+		UNION ALL SELECT 'predictions.bist', COUNT(*) FROM predictions WHERE asset_class='bist' \
+		UNION ALL SELECT 'paper_positions.bist', COUNT(*) FROM paper_positions WHERE asset_class='bist' \
 		ORDER BY k;"
 
 ##@ Service shells

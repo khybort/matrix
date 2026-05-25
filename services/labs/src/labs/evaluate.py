@@ -15,7 +15,7 @@ from loguru import logger
 from sqlalchemy import desc, select
 
 from matrix_shared import local_session_scope, shared_session_scope
-from matrix_shared.models import LabEvaluation, LabExperiment, MarketTrade
+from matrix_shared.models import LabEvaluation, LabExperiment, MarketBar, MarketTrade
 
 from labs.decide import decide_with_genome
 from labs.genome import Genome
@@ -26,14 +26,28 @@ SCORE_CAP_PCT = Decimal("0.01")
 ENTRY_FRESHNESS_S = 30
 # Window around close_at to accept a mark price (need a trade within this window)
 MARK_WINDOW_S = 60
+# BIST uses 1m bars + Yahoo's ~15min delay — widen the score window accordingly.
+MARK_WINDOW_S_BARS = 60 * 30
 
 
-async def emit_signals(symbols: list[str]) -> int:
-    """For each active experiment × symbol, emit at most one fresh evaluation."""
+async def emit_signals(symbols: list[str], asset_class: str = "crypto") -> int:
+    """For each active experiment × symbol (filtered by asset_class), emit
+    at most one fresh evaluation per pair.
+
+    Crypto only for now — BIST features (microstructure) aren't extracted
+    yet, so calling this with asset_class='bist' is a no-op until the bar
+    feature extractor lands. The asset_class filter on the experiments is
+    still applied so the partitioned populations stay independent.
+    """
+    if asset_class != "crypto":
+        # Future: when BIST feature extraction exists, dispatch here.
+        return 0
+
     async with shared_session_scope() as session:
         stmt = (
             select(LabExperiment)
             .where(LabExperiment.status == "active")
+            .where(LabExperiment.asset_class == asset_class)
             .order_by(LabExperiment.created_at.asc())
         )
         experiments = list((await session.execute(stmt)).scalars())
@@ -66,6 +80,7 @@ async def emit_signals(symbols: list[str]) -> int:
                 session.add(
                     LabEvaluation(
                         experiment_id=exp.id,
+                        asset_class=asset_class,
                         symbol=sym,
                         side=d.side,
                         confidence=d.confidence,
@@ -83,8 +98,29 @@ async def emit_signals(symbols: list[str]) -> int:
     return opened
 
 
-async def _mark_price_near(symbol: str, target_ts: datetime) -> Decimal | None:
-    """Find a trade price within MARK_WINDOW_S of target_ts (closest)."""
+async def _mark_price_near(
+    symbol: str, target_ts: datetime, asset_class: str = "crypto"
+) -> Decimal | None:
+    """Find a mark price within the asset_class's window of target_ts (closest)."""
+    if asset_class == "bist":
+        window = timedelta(seconds=MARK_WINDOW_S_BARS)
+        lo = target_ts - window
+        hi = target_ts + window
+        async with local_session_scope() as session:
+            stmt = (
+                select(MarketBar.close, MarketBar.ts)
+                .where(MarketBar.symbol == symbol)
+                .where(MarketBar.asset_class == "bist")
+                .where(MarketBar.interval == "1m")
+                .where(MarketBar.ts >= lo)
+                .where(MarketBar.ts <= hi)
+            )
+            rows = (await session.execute(stmt)).all()
+        if not rows:
+            return None
+        best = min(rows, key=lambda r: abs((r.ts - target_ts).total_seconds()))
+        return Decimal(best.close)
+
     window = timedelta(seconds=MARK_WINDOW_S)
     lo = target_ts - window
     hi = target_ts + window
@@ -99,7 +135,6 @@ async def _mark_price_near(symbol: str, target_ts: datetime) -> Decimal | None:
         rows = (await session.execute(stmt)).all()
     if not rows:
         return None
-    # nearest by absolute distance
     best = min(rows, key=lambda r: abs((r.trade_ts - target_ts).total_seconds()))
     return Decimal(best.price)
 
@@ -120,7 +155,7 @@ async def score_due_evaluations(stale_after_s: int = 600) -> tuple[int, int]:
     scored = 0
     stale = 0
     for ev in evals:
-        mark = await _mark_price_near(ev.symbol, ev.close_at)
+        mark = await _mark_price_near(ev.symbol, ev.close_at, ev.asset_class)
         if mark is None:
             if ev.close_at < cutoff:
                 async with shared_session_scope() as session:

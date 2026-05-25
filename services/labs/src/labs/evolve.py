@@ -42,22 +42,33 @@ class GenerationReport:
     retired: int
 
 
-async def _next_generation_number() -> int:
+async def _next_generation_number(asset_class: str = "crypto") -> int:
     async with shared_session_scope() as session:
-        stmt = select(LabExperiment.generation).order_by(desc(LabExperiment.generation)).limit(1)
+        stmt = (
+            select(LabExperiment.generation)
+            .where(LabExperiment.asset_class == asset_class)
+            .order_by(desc(LabExperiment.generation))
+            .limit(1)
+        )
         row = (await session.execute(stmt)).first()
         return (row[0] if row else -1) + 1
 
 
-async def _active_experiments() -> list[LabExperiment]:
+async def _active_experiments(asset_class: str = "crypto") -> list[LabExperiment]:
     async with shared_session_scope() as session:
-        stmt = select(LabExperiment).where(LabExperiment.status == "active")
+        stmt = (
+            select(LabExperiment)
+            .where(LabExperiment.status == "active")
+            .where(LabExperiment.asset_class == asset_class)
+        )
         return list((await session.execute(stmt)).scalars())
 
 
-async def seed_initial_population(n: int = TARGET_POPULATION) -> int:
-    """If there are no active experiments at all, seed N random genomes at gen 0."""
-    existing = await _active_experiments()
+async def seed_initial_population(
+    n: int = TARGET_POPULATION, asset_class: str = "crypto"
+) -> int:
+    """If there are no active experiments for this asset_class, seed N random genomes."""
+    existing = await _active_experiments(asset_class)
     if existing:
         return 0
     rng = random.Random()
@@ -66,13 +77,16 @@ async def seed_initial_population(n: int = TARGET_POPULATION) -> int:
         async with shared_session_scope() as session:
             session.add(
                 LabExperiment(
+                    asset_class=asset_class,
                     generation=0,
                     params=g.to_dict(),
-                    rationale="initial random seed",
+                    rationale=f"initial random seed [{asset_class}]",
                     status="active",
                 )
             )
-    logger.info(f"seeded initial population of {n} genomes at generation 0")
+    logger.info(
+        f"seeded initial population of {n} genomes [{asset_class}] at generation 0"
+    )
     return n
 
 
@@ -80,6 +94,7 @@ async def run_evolution_cycle(
     *,
     rng: random.Random | None = None,
     min_eval_per_gen: int = MIN_EVAL_PER_GEN,
+    asset_class: str = "crypto",
 ) -> GenerationReport:
     """One selection + reproduction cycle.
 
@@ -87,10 +102,10 @@ async def run_evolution_cycle(
     returns zeros (caller should call again later).
     """
     rng = rng or random.Random()
-    actives = await _active_experiments()
+    actives = await _active_experiments(asset_class)
     if not actives:
         # If we got drained, reseed
-        await seed_initial_population()
+        await seed_initial_population(asset_class=asset_class)
         return GenerationReport(new_generation=0, elites=0, born=TARGET_POPULATION, retired=0)
 
     ranked = [e for e in actives if e.n_evaluations >= min_eval_per_gen]
@@ -106,7 +121,7 @@ async def run_evolution_cycle(
     n_elite = max(2, int(len(ranked) * ELITE_FRAC))
     elites = ranked[:n_elite]
     elite_genomes = [Genome.from_dict(e.params) for e in elites]
-    new_gen = await _next_generation_number()
+    new_gen = await _next_generation_number(asset_class)
 
     # Retire bottom CULL_FRAC of ranked
     n_cull = int(len(ranked) * CULL_FRAC)
@@ -145,6 +160,7 @@ async def run_evolution_cycle(
                 parent_b = elites[rng.randrange(len(elites))].id
                 session.add(
                     LabExperiment(
+                        asset_class=asset_class,
                         generation=new_gen,
                         parent_a_id=parent_a,
                         parent_b_id=parent_b,

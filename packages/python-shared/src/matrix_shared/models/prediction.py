@@ -21,6 +21,7 @@ class Prediction(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_predictions_status_strategy", "status", "strategy_id"),
         Index("ix_predictions_symbol_ts", "symbol", "generated_at"),
+        Index("ix_predictions_asset_class", "asset_class"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -31,6 +32,9 @@ class Prediction(Base, TimestampMixin):
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     exchange: Mapped[str] = mapped_column(String(32), nullable=False)
+    asset_class: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="crypto"
+    )
     side: Mapped[str] = mapped_column(String(8), nullable=False)  # long | short | flat
     confidence: Mapped[Decimal] = mapped_column(DECIMAL(6, 5), nullable=False, default=Decimal("0.5"))
     horizon_seconds: Mapped[int] = mapped_column(nullable=False)
@@ -47,6 +51,9 @@ class PaperPosition(Base, TimestampMixin):
     """A hypothetical position opened from a prediction in paper-trade mode."""
 
     __tablename__ = "paper_positions"
+    __table_args__ = (
+        Index("ix_paper_positions_asset_class", "asset_class"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -64,6 +71,9 @@ class PaperPosition(Base, TimestampMixin):
     )
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     exchange: Mapped[str] = mapped_column(String(32), nullable=False)
+    asset_class: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="crypto"
+    )
     side: Mapped[str] = mapped_column(String(8), nullable=False)
     notional_usd: Mapped[Decimal] = mapped_column(DECIMAL(18, 4), nullable=False)
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -80,6 +90,9 @@ class Outcome(Base, TimestampMixin):
     """Score of a prediction once its horizon has passed."""
 
     __tablename__ = "outcomes"
+    __table_args__ = (
+        Index("ix_outcomes_asset_class", "asset_class"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -89,6 +102,9 @@ class Outcome(Base, TimestampMixin):
         ForeignKey("predictions.id", ondelete="CASCADE"),
         nullable=False,
         unique=True,
+    )
+    asset_class: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="crypto"
     )
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     pnl_usd: Mapped[Decimal] = mapped_column(DECIMAL(18, 6), nullable=False)

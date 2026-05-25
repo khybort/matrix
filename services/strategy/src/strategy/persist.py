@@ -26,6 +26,7 @@ async def persist_drafts(drafts: Sequence[PredictionDraft]) -> int:
                     generated_at=d.generated_at,
                     symbol=d.symbol,
                     exchange=d.exchange,
+                    asset_class=d.asset_class,
                     side=d.side,
                     confidence=d.confidence,
                     horizon_seconds=d.horizon_seconds,

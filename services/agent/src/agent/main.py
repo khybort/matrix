@@ -21,13 +21,15 @@ import argparse
 import asyncio
 import signal
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from loguru import logger
+from sqlalchemy import select
 
-from matrix_shared import shared_session_scope
-from matrix_shared.models import Prediction
+from matrix_shared import session_scope, shared_session_scope
+from matrix_shared.models import BistSymbol, Prediction
 
 from agent.config import load_agent_config
 from agent.decide import decide
@@ -38,24 +40,64 @@ AGENT_STRATEGY_ID = "matrix_agent"
 DEFAULT_INTERVAL_S = 15.0
 DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 
+TR = ZoneInfo("Europe/Istanbul")
+BIST_OPEN = time(10, 0)
+BIST_CLOSE = time(18, 0)
+
+
+def _bist_in_session(now: datetime | None = None) -> bool:
+    now = (now or datetime.now(TR)).astimezone(TR)
+    if now.weekday() >= 5:
+        return False
+    return BIST_OPEN <= now.time() < BIST_CLOSE
+
+
+async def _bist_symbols() -> list[str]:
+    async with session_scope() as session:
+        rows = await session.execute(
+            select(BistSymbol.symbol).where(BistSymbol.active.is_(True))
+        )
+    return sorted({r[0] for r in rows})
+
+
+def _exchange_for(asset_class: str) -> str:
+    return "BIST" if asset_class == "bist" else "bybit"
+
 
 async def _tick(symbols: list[str]) -> int:
-    """Run one decision cycle. Returns number of non-hold predictions persisted."""
-    cfg = await load_agent_config(AGENT_STRATEGY_ID)
+    """Run one decision cycle. Returns number of non-hold predictions persisted.
+
+    `symbols` is the crypto universe (typically passed via --symbols). BIST
+    symbols are loaded fresh from the DB and only processed while the TR
+    session is open. Each symbol is paired with its asset_class so the
+    decision layer can drop crypto-only signals where appropriate.
+    """
+    targets: list[tuple[str, str]] = [(s, "crypto") for s in symbols]
+    if _bist_in_session():
+        bist = await _bist_symbols()
+        targets.extend((s, "bist") for s in bist)
+
+    # Config per asset_class (cached). Pre-load both so we don't re-query
+    # every symbol within the same tick.
+    cfgs = {ac: await load_agent_config(AGENT_STRATEGY_ID, ac) for ac in {ac for _, ac in targets}}
+
     persisted = 0
-    for symbol in symbols:
+    for symbol, asset_class in targets:
+        cfg = cfgs[asset_class]
         try:
             features = await extract_symbol_features(symbol)
-            decision = await decide(features, cfg)
+            decision = await decide(features, cfg, asset_class=asset_class)
         except Exception as e:
-            logger.exception(f"agent error for {symbol}: {e}")
+            logger.exception(f"agent error for {symbol} ({asset_class}): {e}")
             continue
 
         if decision.side == "hold" or decision.last_price is None:
-            logger.info(f"{symbol}: HOLD ({decision.thesis})")
+            logger.debug(f"{symbol} [{asset_class}]: HOLD ({decision.thesis[:80]})")
             continue
         if decision.confidence < Decimal("0.1"):
-            logger.info(f"{symbol}: skip; conf too low ({decision.confidence:.3f})")
+            logger.debug(
+                f"{symbol} [{asset_class}]: skip; conf={decision.confidence:.3f}"
+            )
             continue
 
         now = datetime.now(UTC)
@@ -66,7 +108,8 @@ async def _tick(symbols: list[str]) -> int:
                     strategy_version=cfg.version,
                     generated_at=now,
                     symbol=symbol,
-                    exchange="bybit",  # agent operates on whatever ingestion provides
+                    exchange=_exchange_for(asset_class),
+                    asset_class=asset_class,
                     side=decision.side,
                     confidence=decision.confidence,
                     horizon_seconds=cfg.horizon_seconds,
@@ -79,8 +122,8 @@ async def _tick(symbols: list[str]) -> int:
             )
         persisted += 1
         logger.info(
-            f"{symbol} v{cfg.version}: {decision.side.upper()} conf={decision.confidence:.3f} "
-            f"method={decision.method} | {decision.thesis[:120]}"
+            f"{symbol} [{asset_class}] v{cfg.version}: {decision.side.upper()} "
+            f"conf={decision.confidence:.3f} method={decision.method}"
         )
 
     return persisted
