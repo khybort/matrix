@@ -57,3 +57,27 @@ def _normalize(raw: str) -> str:
 
 def _matches_forbidden(path: str, forbidden: str) -> bool:
     return path.startswith(forbidden) or ("/" + forbidden) in path
+
+
+class CostCapError(SafetyError):
+    reason = "cost_cap_task"
+
+    def __init__(self, total: float, cap: float) -> None:
+        super().__init__(f"task cost cap exceeded: {total:.4f} > {cap:.4f}")
+        self.total = total
+        self.cap = cap
+
+
+class CostCap:
+    """Per-task cost accumulator. Raises when total exceeds the cap."""
+
+    def __init__(self, per_task_cap_usd: float) -> None:
+        self.cap = per_task_cap_usd
+        self.total = 0.0
+
+    def add(self, delta_usd: float) -> None:
+        if delta_usd <= 0:
+            return
+        self.total += delta_usd
+        if self.total > self.cap:
+            raise CostCapError(self.total, self.cap)
