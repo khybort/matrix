@@ -97,5 +97,23 @@ class BistMarket(MarketAdapter):
         )
         return (await db.execute(stmt)).scalar_one_or_none()
 
+    def make_executor(self, cfg: object, *, paper: bool) -> "object":  # noqa: ARG002
+        if paper:
+            raise NotImplementedError(
+                "bist paper executor is the services/backtest engine, not an "
+                "ExecutionAdapter — wire via paper_trade.py instead"
+            )
+        try:
+            from execution.adapters.bist import BistLiveExecutor
+        except ImportError as e:
+            raise RuntimeError(
+                "bist live executor requested but services/execution is not "
+                "importable — install the execution service or run inside its "
+                "container"
+            ) from e
+        # Stub raises on call; instantiation is fine so the factory contract
+        # works (callers see the wall on the first action, not on import).
+        return BistLiveExecutor()
+
 
 register(BistMarket())

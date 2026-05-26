@@ -1,4 +1,4 @@
-"""Live-execution daemon — Phase 0 idle skeleton.
+"""Live-execution daemon — Phase 0 idle skeleton, now market-aware.
 
 This process exists for two reasons before Phase 5 broker code lands:
 
@@ -10,9 +10,11 @@ This process exists for two reasons before Phase 5 broker code lands:
      it plugs into this process — same env, same restart policy, same
      log stream — instead of provisioning a new service from scratch.
 
-The daemon does NOT poll for predictions or open positions. That's the
-broker connector's job (Phase 5). All we do here is loop, log status,
-and stand ready.
+Phase D change (market parity): the daemon no longer hard-codes Bybit.
+It walks `matrix_shared.markets.all_markets()` and reports per-market
+adapter status, so BIST shows up as "not wired (Phase 1)" right next
+to crypto's "ready, gate closed". No daemon code change is needed when
+BIST live execution lands — only `BistLiveExecutor` needs filling in.
 """
 
 from __future__ import annotations
@@ -22,13 +24,71 @@ import asyncio
 import os
 import signal
 import sys
+from dataclasses import dataclass
 
 from loguru import logger
 
-from execution.bybit_connector import BybitConnector
+from matrix_shared.markets import ExecutionAdapter, all_markets
+
+# Side-effect import: ensures CryptoLiveExecutor / BistLiveExecutor are
+# importable when matrix_shared.markets factories late-bind to them.
+import execution.adapters  # noqa: F401
 from execution.safety import _env_live_enabled
 
 DEFAULT_HEARTBEAT_S = 60.0
+
+
+@dataclass(slots=True)
+class _ExecCfg:
+    testnet: bool
+
+
+def _executor_cfg() -> _ExecCfg:
+    testnet = os.environ.get("BYBIT_TESTNET", "true").strip().lower() != "false"
+    return _ExecCfg(testnet=testnet)
+
+
+async def _report_market(
+    market_name: str,
+    executor: ExecutionAdapter | None,
+    wired_error: str | None,
+) -> None:
+    if wired_error is not None:
+        logger.info(f"[{market_name}] adapter not wired: {wired_error}")
+        return
+    assert executor is not None
+    try:
+        healthy = await executor.health()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[{market_name}] health check raised: {e}")
+        healthy = False
+    logger.info(
+        f"[{market_name}] adapter={type(executor).__name__} healthy={healthy}"
+    )
+
+
+async def _heartbeat_once(cfg: _ExecCfg) -> None:
+    live = _env_live_enabled()
+    cap = os.environ.get("LIVE_CAPITAL_CAP_USD", "(unset)")
+    if live:
+        logger.warning(
+            f"LIVE_EXECUTION_ENABLED=true; LIVE_CAPITAL_CAP_USD={cap}. "
+            "Order submission still requires per-strategy cert + gate green."
+        )
+    else:
+        logger.info(
+            "gate CLOSED (LIVE_EXECUTION_ENABLED=false). "
+            "Ready and idle; no orders will be submitted."
+        )
+
+    for market in all_markets():
+        executor: ExecutionAdapter | None = None
+        wired_error: str | None = None
+        try:
+            executor = market.make_executor(cfg, paper=False)
+        except (NotImplementedError, RuntimeError) as e:
+            wired_error = str(e)
+        await _report_market(market.name, executor, wired_error)
 
 
 async def run(heartbeat_s: float) -> None:
@@ -42,56 +102,39 @@ async def run(heartbeat_s: float) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _handle_signal)
 
-    # One connector for the lifetime of the daemon. Read-only, dry-run.
-    # Even when LIVE_EXECUTION_ENABLED flips to true, this loop never
-    # places orders — it just reports reachability so Phase 5 readiness
-    # is visible in `docker logs matrix-execution`.
-    testnet = os.environ.get("BYBIT_TESTNET", "true").strip().lower() != "false"
-    connector = BybitConnector(testnet=testnet)
-    try:
-        while not stop.is_set():
-            live = _env_live_enabled()
-            cap = os.environ.get("LIVE_CAPITAL_CAP_USD", "(unset)")
-            # Banner makes a misconfiguration obvious in `docker logs`.
-            if live:
-                logger.warning(
-                    f"LIVE_EXECUTION_ENABLED=true; LIVE_CAPITAL_CAP_USD={cap}. "
-                    "Order submission still requires per-strategy cert + gate green."
-                )
-                # Second heartbeat line: broker reachability (dry-run).
-                # If creds are missing this returns the dry-run stub
-                # without touching the network — exactly what we want
-                # while no live keys are configured.
-                bal = await connector.get_wallet_balance(dry_run=True)
-                logger.info(
-                    "broker reachable: dry-run testnet={} payload_keys={}",
-                    testnet, list(bal.keys()),
-                )
-            else:
-                logger.info(
-                    f"gate CLOSED (LIVE_EXECUTION_ENABLED=false). "
-                    "Ready and idle; no orders will be submitted."
-                )
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=heartbeat_s)
-            except TimeoutError:
-                pass
-    finally:
-        await connector.aclose()
+    cfg = _executor_cfg()
+    while not stop.is_set():
+        try:
+            await _heartbeat_once(cfg)
+        except Exception as e:  # noqa: BLE001
+            logger.exception(f"heartbeat raised: {e}")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=heartbeat_s)
+        except TimeoutError:
+            pass
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Matrix live-execution daemon (Phase 0 skeleton)")
+    parser = argparse.ArgumentParser(
+        description="Matrix live-execution daemon (Phase 0 skeleton, market-aware)"
+    )
     parser.add_argument(
-        "--heartbeat", type=float, default=DEFAULT_HEARTBEAT_S,
+        "--heartbeat",
+        type=float,
+        default=DEFAULT_HEARTBEAT_S,
         help=f"Heartbeat log interval seconds (default {DEFAULT_HEARTBEAT_S})",
     )
     args = parser.parse_args()
 
     logger.remove()
-    logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level: <5} | {message}")
+    logger.add(
+        sys.stderr,
+        level="INFO",
+        format="{time:HH:mm:ss} | {level: <5} | {message}",
+    )
     logger.info(
-        "execution daemon start (Phase 0 skeleton — no broker connector)"
+        "execution daemon start "
+        f"(markets={[m.name for m in all_markets()]}, gate enforced by safety.py)"
     )
 
     asyncio.run(run(args.heartbeat))
