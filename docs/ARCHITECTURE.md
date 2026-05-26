@@ -118,6 +118,36 @@ This loop is what makes the system *appreciate* in value rather than stay static
 | Hosting (web) | Vercel | Default |
 | Hosting (engine) | Local machines (initial), Fly.io/Hetzner (scale) | Cost-effective for long-running |
 
+## Markets (pluggable via `MarketAdapter`)
+
+Every pipeline stage routes through `matrix_shared.markets.MarketAdapter` so adding a new market is one adapter + one registry entry, not a refactor of every service. As of Phase G two adapters are registered: `CryptoMarket` (Bybit/Binance perpetuals, 24/7, T+0, shortable) and `BistMarket` (Borsa Istanbul equities, Mon–Fri 10:00–18:00 Europe/Istanbul, T+2, long-only, paper-only until Phase 1).
+
+**Surface every adapter implements:**
+- `universe(db)` — active tradable symbols
+- `claims_symbol(symbol)` — sync routing predicate; `infer_market(symbol)` picks the unique claimant
+- `is_session_open(ts)` / `fees(symbol)` / `allows_short()` / `settlement_days()` — trading rules
+- `make_ingestor(cfg)` / `make_executor(cfg, *, paper)` — late-imports the per-service adapter (matrix_shared keeps zero hard deps on `services/`)
+- `latest_price(db, symbol)` — quote source for paper engine, dashboards, agents
+
+**Pipeline integration:**
+- **Strategy** (`services/strategy/main.py`): dispatcher walks `all_markets() × STRATEGIES_BY_MARKET`. Module layout mirrors per-market: `modules/crypto/{...}.py`, `modules/bist/{...}.py`. Each strategy class declares `market: ClassVar[str]`.
+- **Ingestion** (`services/ingestion/main.py`): single container fans out into `m.make_ingestor(cfg).run()` per registered market. The standalone `bist-ingestion` service was folded in (Phase F).
+- **Execution** (`services/execution/main.py`): heartbeat per registered market; `BistLiveExecutor` is a Phase-1 stub (every method raises NotImplementedError, `health()` returns False).
+- **Agent** (`services/agent/main.py`): in-session markets contribute their `universe()` to the tick targets; out-of-session markets are skipped before features are extracted.
+- **Agent lessons** (`services/agent_lessons/main.py`): one `synthesize + feed_once` pass per (strategy_id, asset_class). Lesson rows + active-lesson lookups are market-scoped so crypto stats never bleed into BIST advice.
+- **Wallet**: every row carries `asset_class`; risk caps + equity tracked independently per market (migration 0017).
+- **Web** (`/api/markets`, `/api/dashboard?market=`): adapter registry mirrored statically with live stats; dashboard panels can filter to one market.
+
+**Adding a new market (e.g. `commodities`):**
+1. Implement `CommoditiesMarket(MarketAdapter)` in `matrix_shared/markets/commodities.py`; call `register(CommoditiesMarket())` at module load.
+2. Register it in `matrix_shared/markets/__init__.py` so the side-effect import fires.
+3. Create `services/strategy/src/strategy/modules/commodities/__init__.py` exporting `STRATEGIES`; add the entry to `STRATEGIES_BY_MARKET`.
+4. Implement `CommoditiesIngestor` (services/ingestion/adapters/) + `CommoditiesLiveExecutor` (services/execution/adapters/); wire the late imports in the market module's `make_ingestor` / `make_executor`.
+5. Add a row to the static list in `apps/web/src/app/api/markets/route.ts`.
+6. Run `make migrate` if you add columns; no new schema is required to introduce a market.
+
+No pipeline-stage code change is needed beyond those steps — every service already iterates `all_markets()`.
+
 ## Cost discipline
 
 - Embeddings: use cheap models (text-embedding-3-small or open-source) for most content; reserve expensive only for high-value synthesis

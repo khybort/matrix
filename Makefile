@@ -189,8 +189,34 @@ dashboard: ## Open the dashboard in your browser
 		echo "Open http://matrix.local in your browser"
 
 .PHONY: leaderboard
-leaderboard: ## Print lab leaderboard
-	$(DC) $(DC_BASE) exec labs uv run python -m labs.main --leaderboard
+leaderboard: ## Print lab leaderboard (MARKET=crypto|bist|all; default all)
+	$(DC) $(DC_BASE) exec labs uv run python -m labs.main --leaderboard $(if $(MARKET),--asset-class $(MARKET),)
+
+.PHONY: market-stats
+market-stats: ## Per-market counts (predictions, positions, lessons; MARKET=crypto|bist; default both)
+	@$(PSQL) -c "SELECT asset_class, \
+			COUNT(*) FILTER (WHERE status='open')   AS preds_open, \
+			COUNT(*) FILTER (WHERE status='closed') AS preds_closed \
+		FROM predictions \
+		$(if $(MARKET),WHERE asset_class='$(MARKET)',) \
+		GROUP BY asset_class ORDER BY asset_class;"
+	@$(PSQL) -c "SELECT asset_class, \
+			COUNT(*) FILTER (WHERE status='open')   AS pos_open, \
+			COUNT(*) FILTER (WHERE status='closed') AS pos_closed, \
+			COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'),0)::numeric(18,4) AS realized_pnl_usd \
+		FROM paper_positions \
+		$(if $(MARKET),WHERE asset_class='$(MARKET)',) \
+		GROUP BY asset_class ORDER BY asset_class;"
+	@$(PSQL) -c "SELECT asset_class, COUNT(*) AS active_lessons \
+		FROM agent_lessons WHERE status='active' \
+		$(if $(MARKET),AND asset_class='$(MARKET)',) \
+		GROUP BY asset_class ORDER BY asset_class;"
+	@$(PSQL) -c "SELECT asset_class, COUNT(*) AS wallets, \
+			COALESCE(SUM(cash_usd),0)::numeric(18,4) AS cash_usd, \
+			COALESCE(SUM(locked_usd),0)::numeric(18,4) AS locked_usd \
+		FROM wallets \
+		$(if $(MARKET),WHERE asset_class='$(MARKET)',) \
+		GROUP BY asset_class ORDER BY asset_class;"
 
 .PHONY: stats
 stats: ## Quick state summary (counts per major table)
