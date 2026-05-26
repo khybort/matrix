@@ -97,6 +97,17 @@ class BistMarket(MarketAdapter):
         )
         return (await db.execute(stmt)).scalar_one_or_none()
 
+    def make_ingestor(self, cfg: object) -> "object":  # noqa: ARG002
+        try:
+            from ingestion.adapters.bist import BistIngestor
+        except ImportError as e:
+            raise RuntimeError(
+                "bist ingestor requested but services/ingestion is not "
+                "importable — install the ingestion service or run inside "
+                "its container"
+            ) from e
+        return BistIngestor()
+
     def make_executor(self, cfg: object, *, paper: bool) -> "object":  # noqa: ARG002
         if paper:
             raise NotImplementedError(

@@ -125,24 +125,9 @@ services:
     restart: unless-stopped
     logging: *default_logging
 
-  # BIST (Borsa Istanbul) equities, paper-only. Yahoo Finance delayed feed.
-  # No live execution path — research universe only.
-  bist-ingestion:
-    build:
-      <<: *python-build
-      target: runtime
-      args:
-        SERVICE: bist-ingestion
-    image: matrix-bist-ingestion:local
-    container_name: matrix-bist-ingestion
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      <<: *python-env
-    command: ["bist_ingestion.bars"]
-    restart: unless-stopped
-    logging: *default_logging
+  # BIST (Borsa Istanbul) equities live alongside crypto in the unified
+  # `ingestion` service above (Phase F). The yfinance bar poller is now
+  # an asyncio task inside ingestion.main.
 
   graph:
     build:

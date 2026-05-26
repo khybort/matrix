@@ -10,6 +10,8 @@ dependencies = [
     "orjson>=3.10.0",
     "loguru>=0.7.3",
     "feedparser>=6.0.11",
+    "yfinance>=0.2.50",
+    "pandas>=2.2.0",
 ]
 
 [tool.uv.sources]
@@ -25,6 +27,8 @@ packages = ["src/ingestion"]
 [project.scripts]
 matrix-ingest = "ingestion.main:main"
 matrix-news = "ingestion.news:main"
+matrix-bist-bars = "ingestion.bist.bars:main"
+matrix-bist-symbols = "ingestion.bist.symbols:main"
 
 [tool.ruff]
 line-length = 100

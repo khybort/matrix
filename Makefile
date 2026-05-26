@@ -211,11 +211,11 @@ stats: ## Quick state summary (counts per major table)
 
 .PHONY: bist-seed
 bist-seed: ## Seed the BIST symbol universe (idempotent)
-	$(DC) $(DC_BASE) exec bist-ingestion uv run python -m bist_ingestion.symbols --once
+	$(DC) $(DC_BASE) exec ingestion uv run python -m ingestion.bist.symbols --once
 
 .PHONY: bist-poll
 bist-poll: ## Run one BIST bar poll cycle and exit
-	$(DC) $(DC_BASE) exec bist-ingestion uv run python -m bist_ingestion.bars --once
+	$(DC) $(DC_BASE) exec ingestion uv run python -m ingestion.bist.bars --once
 
 .PHONY: bist-stats
 bist-stats: ## BIST-specific counts (symbols, bars by interval, predictions)
@@ -246,9 +246,9 @@ lab-scan: ## Scan for a promotion proposal
 lab-apply-best: ## Apply the most recent pending lab_promotion proposal
 	$(DC) $(DC_BASE) exec labs uv run python -m labs.main --apply-best
 
-.PHONY: bist-seed
-bist-seed: ## One-shot: upsert the embedded BIST symbol universe into bist_symbols
-	$(DC) $(DC_BASE) exec bist-ingestion uv run matrix-bist-symbols
+.PHONY: bist-seed-universe
+bist-seed-universe: ## One-shot: upsert the embedded BIST symbol universe into bist_symbols
+	$(DC) $(DC_BASE) exec ingestion uv run matrix-bist-symbols
 
 .PHONY: cert-scan
 cert-scan: ## Scan active strategies; auto-grant paper_trade_certificate where eligible

@@ -41,16 +41,6 @@ services:
       - ./services/ingestion/src:/workspace/services/ingestion/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
-  bist-ingestion:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
-    command:
-      - "python -m bist_ingestion.bars"
-      - "/workspace/services/bist-ingestion/src"
-      - "/workspace/packages/python-shared/src"
-    volumes:
-      - ./services/bist-ingestion/src:/workspace/services/bist-ingestion/src
-      - ./packages/python-shared/src:/workspace/packages/python-shared/src
-
   graph:
     entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
     command:
