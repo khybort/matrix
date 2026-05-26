@@ -129,14 +129,22 @@ async def link_typed_edge(
             f"$$) AS (r agtype)"
         )
     else:
+        # Apache AGE does not parse Cypher's `MERGE ... ON CREATE SET / ON
+        # MATCH SET` discriminator (PostgresSyntaxError near "ON"). We get
+        # the same semantics by combining MERGE with a single SET clause
+        # that uses coalesce():
+        #   - first_seen sticks on first MERGE and is preserved on match
+        #   - support_count increments on every MERGE (1 the first time,
+        #     +1 thereafter via the coalesce default of 0)
+        #   - last_seen is always the latest doc that supported the claim
         cypher = (
             f"SELECT * FROM cypher('matrix_graph', $$ "
             f"MATCH (s:{src_label} {{canonical: '{src_can}'}}), "
             f"      (t:{tgt_label} {{canonical: '{tgt_can}'}}) "
             f"MERGE (s)-[r:{edge_label}]->(t) "
-            f"ON CREATE SET r.first_seen = '{source_doc_id}', r.support_count = 1 "
-            f"ON MATCH SET r.support_count = coalesce(r.support_count, 0) + 1, "
-            f"             r.last_seen = '{source_doc_id}' "
+            f"SET r.first_seen = coalesce(r.first_seen, '{source_doc_id}'), "
+            f"    r.support_count = coalesce(r.support_count, 0) + 1, "
+            f"    r.last_seen = '{source_doc_id}' "
             f"RETURN r "
             f"$$) AS (r agtype)"
         )
