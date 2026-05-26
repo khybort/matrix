@@ -1,9 +1,17 @@
 """dev_agent configuration — env-driven, with one HARDCODED constant.
 
 FORBIDDEN_PATHS is intentionally a top-level tuple. It is NOT loaded from
-env vars or a YAML file. The spec mandates that trading-path access can
-not be unlocked by any flag, env var, or runtime setting. Changing this
-requires a code edit and a commit.
+env vars or a YAML file. Changing it requires a code edit and a commit.
+
+2026-05-26: opened by operator directive. The autonomous learning loop
+needs dev_agent to be able to mutate strategy / agent / execution code
+based on its own outcome feedback. The runtime trading-safety wall
+(LIVE_EXECUTION_REQUIRES_CERT, has_valid_certificate, should_submit_live
+in matrix_shared.trading_safety) is independent of this gate and still
+blocks live order submission until a paper-trade certificate is granted.
+
+Rollback path: re-populate the tuple with the three service prefixes
+below, commit, redeploy dev_agent.
 """
 
 from __future__ import annotations
@@ -11,12 +19,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-# Hardcoded. Do not load from config. Do not add an unlock mechanism.
-FORBIDDEN_PATHS: tuple[str, ...] = (
-    "services/strategy/",
-    "services/agent/",
-    "services/execution/",
-)
+# Empty since 2026-05-26 — dev_agent autonomous edits permitted everywhere.
+# Live execution safety enforced separately at runtime (trading_safety.py).
+FORBIDDEN_PATHS: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

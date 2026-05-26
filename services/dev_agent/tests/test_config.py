@@ -10,12 +10,13 @@ from dev_agent.config import FORBIDDEN_PATHS, Config, load_config
 
 
 def test_forbidden_paths_are_hardcoded():
-    """These paths must be a tuple of strings, not loaded from env or config file."""
+    """The constant must remain a tuple (immutable, not env-loaded).
+
+    Contents may be empty when the gate is open (current policy 2026-05-26),
+    or populated with trading-service prefixes if re-closed. Either way,
+    the shape stays a tuple — no env unlock, no list, no class.
+    """
     assert isinstance(FORBIDDEN_PATHS, tuple)
-    assert "services/strategy/" in FORBIDDEN_PATHS
-    assert "services/agent/" in FORBIDDEN_PATHS
-    assert "services/execution/" in FORBIDDEN_PATHS
-    # Bypass guard: should be a tuple (immutable), not a list
     with pytest.raises((TypeError, AttributeError)):
         FORBIDDEN_PATHS.append("foo")  # type: ignore[attr-defined]
 

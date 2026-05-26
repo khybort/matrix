@@ -84,6 +84,14 @@ async def _tick(symbols: list[str]) -> int:
     persisted = 0
     for symbol, asset_class in targets:
         cfg = cfgs[asset_class]
+        # If the strategy has no active strategy_configs row (retired or never
+        # promoted), skip emission entirely. The fallback config exists only
+        # for bootstrap before the first promotion.
+        if cfg.is_fallback:
+            logger.debug(
+                f"{symbol} [{asset_class}]: skip; no active config for {AGENT_STRATEGY_ID}"
+            )
+            continue
         try:
             features = await extract_symbol_features(symbol)
             decision = await decide(features, cfg, asset_class=asset_class)
