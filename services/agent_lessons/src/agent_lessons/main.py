@@ -15,6 +15,7 @@ import sys
 
 from loguru import logger
 
+from agent_lessons.feeder import feed_once
 from agent_lessons.synthesizer import (
     DEFAULT_STRATEGY_ID,
     LOOKBACK_HOURS,
@@ -42,6 +43,14 @@ async def run(strategy_id: str, lookback_hours: int, interval_s: float) -> None:
         except Exception as e:
             logger.exception(f"synthesize failed (non-fatal): {e}")
         try:
+            result = await feed_once(strategy_id)
+            if result["enqueued_task_id"]:
+                logger.info(f"feeder: {result['reason']}")
+            else:
+                logger.debug(f"feeder: skipped — {result['reason']}")
+        except Exception as e:
+            logger.exception(f"feeder failed (non-fatal): {e}")
+        try:
             await asyncio.wait_for(stop.wait(), timeout=interval_s)
         except TimeoutError:
             pass
@@ -65,7 +74,11 @@ def main() -> None:
     )
 
     if args.once:
-        asyncio.run(synthesize(args.strategy_id, lookback_hours=args.lookback_hours))
+        async def _once() -> None:
+            await synthesize(args.strategy_id, lookback_hours=args.lookback_hours)
+            r = await feed_once(args.strategy_id)
+            logger.info(f"feeder once: {r['reason']}")
+        asyncio.run(_once())
     else:
         asyncio.run(run(args.strategy_id, args.lookback_hours, args.interval))
 
