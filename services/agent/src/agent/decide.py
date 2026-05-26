@@ -15,9 +15,17 @@ from typing import Any
 
 from loguru import logger
 
+from matrix_shared.agent_lessons import lessons_relevant_to
+
 from agent.config import AgentConfig, FALLBACK
 from agent.features import SymbolFeatures
 from agent.llm import call_llm_decision, llm_enabled
+
+# Lessons with confidence at or above this threshold change behavior.
+# 0.4 captures buckets at ~25+ observations on the synthesizer's confidence
+# curve — enough signal to act on, low enough to catch fast-bleeding patterns
+# before the bucket grows. Tighten later if false-positives appear.
+LESSON_CONFIDENCE_GATE = Decimal("0.4")
 
 # Defaults kept only for stand-alone / test invocations; the live loop loads
 # the current AgentConfig from DB and passes it explicitly.
@@ -255,30 +263,107 @@ async def decide(
     f: SymbolFeatures,
     cfg: AgentConfig | None = None,
     asset_class: str = "crypto",
+    strategy_id: str = "matrix_agent",
 ) -> Decision:
     """Top-level decision: rule-based by default; LLM if enabled.
 
     The LLM result, when present, overrides the rule decision but the rule
     decision is still computed and stored in feature_dump for audit.
+
+    Active `avoid` lessons from agent_lessons gate the final side: if the
+    proposed (symbol, side) matches an avoid verdict with confidence >=
+    LESSON_CONFIDENCE_GATE, side is forced to hold. `prefer` verdicts
+    don't flip the side but bump confidence by a fixed clamp.
     """
     if cfg is not None:
         rule = rule_decide(f, cfg.weights, cfg.signal_threshold, asset_class=asset_class)
     else:
         rule = rule_decide(f, asset_class=asset_class)
-    if not llm_enabled():
-        return rule
 
-    llm = await call_llm_decision(_llm_prompt(f))
-    if llm is None:
-        logger.debug(f"llm fell back to rule for {f.symbol}")
-        return rule
+    if llm_enabled():
+        llm = await call_llm_decision(_llm_prompt(f))
+        if llm is not None:
+            base = Decision(
+                symbol=f.symbol,
+                side=llm.side,
+                confidence=Decimal(str(llm.confidence)),
+                thesis=f"LLM: {llm.reasoning} || rule: {rule.thesis}",
+                method="llm",
+                feature_dump={**rule.feature_dump, "llm_confidence": llm.confidence},
+                last_price=f.last_price,
+            )
+        else:
+            logger.debug(f"llm fell back to rule for {f.symbol}")
+            base = rule
+    else:
+        base = rule
 
-    return Decision(
-        symbol=f.symbol,
-        side=llm.side,
-        confidence=Decimal(str(llm.confidence)),
-        thesis=f"LLM: {llm.reasoning} || rule: {rule.thesis}",
-        method="llm",
-        feature_dump={**rule.feature_dump, "llm_confidence": llm.confidence},
-        last_price=f.last_price,
+    return await _apply_lessons(base, f, strategy_id)
+
+
+async def _apply_lessons(
+    d: Decision, f: SymbolFeatures, strategy_id: str
+) -> Decision:
+    """Consult agent_lessons; override hold on confident avoid hits."""
+    if d.side == "hold":
+        return d
+    try:
+        hits = await lessons_relevant_to(f, strategy_id, side=d.side)
+    except Exception as e:
+        logger.warning(f"agent_lessons lookup failed for {f.symbol}: {e}")
+        return d
+    if not hits:
+        return d
+
+    avoid_hit = next(
+        (h for h in hits if h.verdict == "avoid" and h.confidence >= LESSON_CONFIDENCE_GATE),
+        None,
     )
+    if avoid_hit is not None:
+        new_thesis = (
+            f"LESSON-OVERRIDE → hold | {avoid_hit.pattern_description} "
+            f"(n={avoid_hit.n_observations}, conf={avoid_hit.confidence:.2f}) | "
+            f"orig: {d.thesis}"
+        )
+        return Decision(
+            symbol=d.symbol,
+            side="hold",
+            confidence=Decimal("0"),
+            thesis=new_thesis[:1000],
+            method=f"{d.method}+lesson",
+            feature_dump={
+                **d.feature_dump,
+                "lesson_override": {
+                    "lesson_id": avoid_hit.lesson_id,
+                    "verdict": "avoid",
+                    "confidence": str(avoid_hit.confidence),
+                    "n": avoid_hit.n_observations,
+                },
+            },
+            last_price=d.last_price,
+        )
+
+    prefer_hit = next(
+        (h for h in hits if h.verdict == "prefer" and h.confidence >= LESSON_CONFIDENCE_GATE),
+        None,
+    )
+    if prefer_hit is not None:
+        boosted = min(Decimal("1"), d.confidence + Decimal("0.10"))
+        return Decision(
+            symbol=d.symbol,
+            side=d.side,
+            confidence=boosted,
+            thesis=f"LESSON+ {prefer_hit.pattern_description} | {d.thesis}"[:1000],
+            method=f"{d.method}+lesson",
+            feature_dump={
+                **d.feature_dump,
+                "lesson_boost": {
+                    "lesson_id": prefer_hit.lesson_id,
+                    "verdict": "prefer",
+                    "confidence": str(prefer_hit.confidence),
+                },
+            },
+            last_price=d.last_price,
+        )
+
+    return d

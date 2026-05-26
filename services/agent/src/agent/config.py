@@ -29,9 +29,16 @@ class AgentConfig:
     weights: dict[str, Decimal]
     signal_threshold: Decimal
     horizon_seconds: int
+    # True when no active strategy_configs row exists for this (strategy_id,
+    # asset_class). Callers should treat this as "strategy retired — skip
+    # emitting predictions." The fallback is a bootstrap aid, not a
+    # default-on state for retired strategies.
+    is_fallback: bool = False
 
 
-# Fallback used when the DB has nothing (shouldn't happen post-bootstrap).
+# Fallback used during bootstrap before any strategy_configs row exists.
+# When a strategy is RETIRED (had a row, now status != 'active'), the
+# agent main loop checks `is_fallback` and skips that strategy entirely.
 FALLBACK = AgentConfig(
     version=1,
     weights={
@@ -43,6 +50,7 @@ FALLBACK = AgentConfig(
     },
     signal_threshold=Decimal("0.18"),
     horizon_seconds=120,
+    is_fallback=True,
 )
 
 
