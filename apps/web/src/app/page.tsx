@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { STRATEGY_TEMPLATES, type StrategyTemplate } from "@/lib/strategy-templates";
+
 type Dashboard = {
   ok: boolean;
   wallet: any;
@@ -120,6 +122,10 @@ export default function Page() {
 
       <Panel title="Live-execution gate — paper_trade_certificate per active version" className="mt-4">
         <CertificatesTable rows={data.certificates} />
+      </Panel>
+
+      <Panel title="Strategy templates — deploy a starter config" className="mt-4">
+        <TemplatesPanel />
       </Panel>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
@@ -404,6 +410,86 @@ function CertificatesTable({ rows }: { rows: Dashboard["certificates"] }) {
         })}
       </tbody>
     </table>
+  );
+}
+
+function TemplatesPanel() {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  async function deploy(t: StrategyTemplate) {
+    if (!confirm(
+      `Deploy "${t.label}" as the next active version of ${t.strategy_id}/${t.asset_class}?\n\n`
+      + `This retires the current active config and inserts a new strategy_configs row.\n`
+      + `Live order submission stays blocked until a paper_trade_certificate is granted.`
+    )) return;
+    setBusy(t.id);
+    setMsg(null);
+    try {
+      const r = await fetch("/api/strategy/promote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          strategy_id: t.strategy_id,
+          asset_class: t.asset_class,
+          params: t.params,
+          rationale: `Deployed template "${t.label}" (${t.id}) from dashboard`,
+          promoted_by: "dashboard-operator",
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error ?? "promote failed");
+      setMsg({ kind: "ok", text: `Deployed ${t.strategy_id} v${j.config.version}` });
+    } catch (e) {
+      setMsg({ kind: "err", text: String((e as Error).message) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {msg && (
+        <div className={msg.kind === "ok" ? "pos text-sm" : "neg text-sm"}>{msg.text}</div>
+      )}
+      <table className="matrix">
+        <thead><tr>
+          <th>Template</th>
+          <th>Strategy</th>
+          <th>Class</th>
+          <th>Risk</th>
+          <th>Params</th>
+          <th>Action</th>
+        </tr></thead>
+        <tbody>
+          {STRATEGY_TEMPLATES.map((t) => (
+            <tr key={t.id}>
+              <td>
+                <div className="font-medium">{t.label}</div>
+                <div className="muted text-xs">{t.short_description}</div>
+              </td>
+              <td className="mono">{t.strategy_id}</td>
+              <td className="mono">{t.asset_class}</td>
+              <td className={t.risk === "conservative" ? "pos mono" : t.risk === "aggressive" ? "neg mono" : "mono"}>
+                {t.risk}
+              </td>
+              <td className="mono text-xs">
+                <pre className="whitespace-pre-wrap break-all">{JSON.stringify(t.params, null, 0)}</pre>
+              </td>
+              <td>
+                <button
+                  className="px-3 py-1 border border-current opacity-80 hover:opacity-100 disabled:opacity-40 text-xs"
+                  onClick={() => deploy(t)}
+                  disabled={busy !== null}
+                >
+                  {busy === t.id ? "Deploying…" : "Deploy"}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
