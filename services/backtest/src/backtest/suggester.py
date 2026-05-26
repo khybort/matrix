@@ -54,9 +54,6 @@ GRID_PARAM_GRID: dict[str, list[Any]] = {
     "horizon_s": [120, 300, 600],
 }
 
-# DCA is currently bar-replayed only via grid (one strategy in the historical
-# engine). Wiring more strategies here is a follow-up — for now, the suggester
-# advertises only the strategies historical.run_backtest knows.
 # matrix_agent suggester sweeps the signal_threshold + a coarse weight knob.
 # We don't enumerate the full 5-dim weight cube here (combinatoric blow-up
 # at 5 values per axis = 5^5 = 3125); instead vary the news damping factor,
@@ -88,9 +85,17 @@ def _matrix_agent_grid() -> dict[str, list[Any]]:
     }
 
 
+DCA_PARAM_GRID: dict[str, list[Any]] = {
+    # Cadence sweep — 15/30/60/120/240 minute intervals over the same bar
+    # series. The suggester ranks them by risk-weighted score.
+    "interval_minutes": [15, 30, 60, 120, 240],
+}
+
+
 STRATEGY_PARAM_GRIDS: dict[str, dict[str, list[Any]]] = {
     "grid": GRID_PARAM_GRID,
     "matrix_agent": _matrix_agent_grid(),
+    "dca": DCA_PARAM_GRID,
 }
 
 # ----------------------------------------------------------------- scoring

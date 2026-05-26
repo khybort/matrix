@@ -429,15 +429,6 @@ function TemplatesPanel() {
   const [previews, setPreviews] = useState<Record<string, PreviewResult | { error: string }>>({});
 
   async function preview(t: StrategyTemplate) {
-    // DCA replayer not landed yet — surface a soft hint inline instead of
-    // a 400 round-trip from the backtest API.
-    if (t.strategy_id === "dca") {
-      setPreviews((p) => ({
-        ...p,
-        [t.id]: { error: "DCA replayer not implemented yet (matrix_agent + grid supported)" },
-      }));
-      return;
-    }
     setPreviewBusy(t.id);
     setPreviews((p) => {
       const next = { ...p };
