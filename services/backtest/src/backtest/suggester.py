@@ -57,8 +57,40 @@ GRID_PARAM_GRID: dict[str, list[Any]] = {
 # DCA is currently bar-replayed only via grid (one strategy in the historical
 # engine). Wiring more strategies here is a follow-up — for now, the suggester
 # advertises only the strategies historical.run_backtest knows.
+# matrix_agent suggester sweeps the signal_threshold + a coarse weight knob.
+# We don't enumerate the full 5-dim weight cube here (combinatoric blow-up
+# at 5 values per axis = 5^5 = 3125); instead vary the news damping factor,
+# the trade_flow share, and signal_threshold. That captures the most
+# operator-relevant tuning surface — Bybit-style "tighter vs looser
+# filter, more vs less news weight."
+def _matrix_agent_grid() -> dict[str, list[Any]]:
+    """Generated param-set candidates for matrix_agent.
+
+    Each "n_grids" key here is actually a (trade_flow_share, news_share)
+    pair encoded into a `weights` dict — the suggester treats the grid as
+    opaque dicts, so we just hand it pre-built `weights` payloads.
+    """
+    weight_variants = []
+    for tf in (Decimal("0.30"), Decimal("0.35"), Decimal("0.45")):
+        for news in (Decimal("0.05"), Decimal("0.10"), Decimal("0.20")):
+            remaining = Decimal("1") - tf - news
+            each = (remaining / Decimal("3")).quantize(Decimal("0.0001"))
+            weight_variants.append({
+                "trade_flow": str(tf),
+                "funding": str(each),
+                "oi_delta": str(each),
+                "ob_imbalance": str(each),
+                "news": str(news),
+            })
+    return {
+        "weights": weight_variants,
+        "signal_threshold": ["0.15", "0.18", "0.23", "0.30"],
+    }
+
+
 STRATEGY_PARAM_GRIDS: dict[str, dict[str, list[Any]]] = {
     "grid": GRID_PARAM_GRID,
+    "matrix_agent": _matrix_agent_grid(),
 }
 
 # ----------------------------------------------------------------- scoring

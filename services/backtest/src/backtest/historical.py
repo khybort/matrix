@@ -309,8 +309,14 @@ async def run_backtest(
     until = datetime.now(UTC)
     since = until - timedelta(days=days)
     bars = await fetch_bars(symbol, asset_class, "1m", since, until)
+    p = params or {}
     if strategy == "grid":
-        return grid_replay(bars, params or {})
+        return grid_replay(bars, p)
+    if strategy == "matrix_agent":
+        # Lazy import — replayers/matrix_agent.py imports from historical
+        # at top-level, so a top-level back-import would cycle.
+        from backtest.replayers.matrix_agent import matrix_agent_replay
+        return await matrix_agent_replay(bars, p, symbol_hint=symbol)
     raise ValueError(f"unknown strategy {strategy}")
 
 
