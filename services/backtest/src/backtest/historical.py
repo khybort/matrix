@@ -317,6 +317,9 @@ async def run_backtest(
         # at top-level, so a top-level back-import would cycle.
         from backtest.replayers.matrix_agent import matrix_agent_replay
         return await matrix_agent_replay(bars, p, symbol_hint=symbol)
+    if strategy == "dca":
+        from backtest.replayers.dca import dca_replay
+        return dca_replay(bars, p)
     raise ValueError(f"unknown strategy {strategy}")
 
 
