@@ -75,6 +75,20 @@ class CryptoMarket(MarketAdapter):
         )
         return (await db.execute(stmt)).scalar_one_or_none()
 
+    def make_ingestor(self, cfg: object) -> "object":  # noqa: ARG002
+        try:
+            from ingestion.adapters.crypto import CryptoIngestor
+        except ImportError as e:
+            raise RuntimeError(
+                "crypto ingestor requested but services/ingestion is not "
+                "importable — install the ingestion service or run inside "
+                "its container"
+            ) from e
+        return CryptoIngestor(
+            symbols=getattr(cfg, "symbols", None),
+            testnet=getattr(cfg, "testnet", None),
+        )
+
     def make_executor(self, cfg: object, *, paper: bool) -> "object":
         if paper:
             # Paper PnL is the Wallet/PaperPosition engine in services/backtest;

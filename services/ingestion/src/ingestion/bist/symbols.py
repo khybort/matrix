@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from matrix_shared import session_scope
 from matrix_shared.models import BistSymbol
 
-from bist_ingestion.universe import deduped_seed
+from ingestion.bist.universe import deduped_seed
 
 
 async def seed_universe() -> int:

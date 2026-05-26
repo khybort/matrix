@@ -154,13 +154,24 @@ def test_bist_fees_higher_than_crypto() -> None:
 # ---------------------------------------------------------------------------
 # Factories not wired in Phase A
 # ---------------------------------------------------------------------------
-def test_make_ingestor_not_yet_wired() -> None:
+def test_make_ingestor_requires_ingestion_service() -> None:
+    """Phase F: factory late-imports services/ingestion. From inside the
+    matrix_shared test venv (no ingestion installed) this must raise
+    RuntimeError with a clear remediation, not silently NotImplementedError."""
     for m in all_markets():
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(RuntimeError, match="services/ingestion"):
             m.make_ingestor({})
 
 
-def test_make_executor_not_yet_wired() -> None:
+def test_make_executor_paper_is_blocked() -> None:
+    """paper=True is never an ExecutionAdapter (engine lives in services/backtest)."""
     for m in all_markets():
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(NotImplementedError, match="services/backtest"):
             m.make_executor({}, paper=True)
+
+
+def test_make_executor_live_requires_execution_service() -> None:
+    """paper=False late-imports services/execution; absent → RuntimeError."""
+    for m in all_markets():
+        with pytest.raises(RuntimeError, match="services/execution"):
+            m.make_executor({}, paper=False)
