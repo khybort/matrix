@@ -23,7 +23,7 @@ from sqlalchemy import delete
 
 from matrix_shared import local_session_scope
 from matrix_shared.models import MarketTrade
-from strategy.modules.grid import DEFAULT_PRICE_BAND_PCT, Grid
+from strategy.modules.crypto.grid import DEFAULT_PRICE_BAND_PCT, Grid
 
 from tests.conftest import TEST_SYM
 

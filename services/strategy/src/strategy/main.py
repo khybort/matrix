@@ -1,7 +1,11 @@
 """Strategy generator loop.
 
-Each tick: every registered strategy module runs `generate()`, drafts go to
-predictions table. Paper-trade engine (services/backtest) consumes from there.
+Each tick the dispatcher walks every registered `MarketAdapter` and, while
+that market's session is open, runs every strategy class registered for
+it. Drafts go to predictions table; paper-trade engine consumes from there.
+
+Strategies declare their market via the `market` ClassVar. They no longer
+self-gate on session hours — `MarketAdapter.is_session_open()` does that.
 
 Usage:
     uv run python -m strategy.main                    # default 30s loop
@@ -18,52 +22,42 @@ import sys
 
 from loguru import logger
 
+from matrix_shared.markets import MarketAdapter, all_markets
+
 from strategy.base import PredictionDraft
-from strategy.modules.bist.gap_fade import BistGapFade
-from strategy.modules.bist.intraday_reversion import BistIntradayReversion
-from strategy.modules.bist.news_event import BistNewsEvent
-from strategy.modules.bist.volume_breakout import BistVolumeBreakout
-from strategy.modules.dca import Dca
-from strategy.modules.funding_reversion import FundingReversion
-from strategy.modules.grid import Grid
-from strategy.modules.oi_breakout import OiBreakout
-from strategy.modules.oi_delta import OiDelta
+from strategy.modules import STRATEGIES_BY_MARKET
 from strategy.persist import persist_drafts
 
 DEFAULT_INTERVAL_S = 30.0
 
 
-def _registered_strategies() -> list:
-    return [
-        # ---- crypto ----
-        # TradeFlowImbalance retired 2026-05-26: -$229.61/24h on 1783 trades, 12.8% win.
-        # FundingReversion + OiDelta kept (low volume, near-flat PnL — keep learning).
-        FundingReversion(),
-        OiDelta(),
-        # OiBreakout: isolates the only signal that worked in matrix_agent
-        # diagnostics (oi_delta at 1800s horizon, 42% win). Hypothesis.
-        OiBreakout(),
-        Grid(),
-        Dca(),
-        # ---- bist (only emit while in TR session; modules self-gate) ----
-        BistGapFade(),
-        # BistIntradayReversion: same mean-reversion family as gap_fade
-        # (+$11.42/24h winner) but triggered by intraday drawdown vs
-        # opening-gap. Long-only, 60min horizon.
-        BistIntradayReversion(),
-        BistVolumeBreakout(),
-        BistNewsEvent(),
-    ]
+def _instantiate_for_market(market: MarketAdapter) -> list:
+    """Build a fresh list of strategy instances for `market` from the registry.
+
+    A KeyError here means a market was registered as a MarketAdapter but has
+    no `modules/<market>/__init__.py` exporting STRATEGIES — surface loudly.
+    """
+    if market.name not in STRATEGIES_BY_MARKET:
+        logger.warning(
+            f"market {market.name!r} has no registered strategies "
+            f"(STRATEGIES_BY_MARKET keys: {sorted(STRATEGIES_BY_MARKET)})"
+        )
+        return []
+    return [cls() for cls in STRATEGIES_BY_MARKET[market.name]]
 
 
 async def _tick() -> int:
     drafts: list[PredictionDraft] = []
-    for strat in _registered_strategies():
-        try:
-            ds = await strat.generate()
-            drafts.extend(ds)
-        except Exception as e:
-            logger.exception(f"strategy {strat.id} failed: {e}")
+    for market in all_markets():
+        if not market.is_session_open():
+            logger.debug(f"market {market.name} session closed; skip")
+            continue
+        for strat in _instantiate_for_market(market):
+            try:
+                ds = await strat.generate()
+                drafts.extend(ds)
+            except Exception as e:
+                logger.exception(f"strategy {strat.id} ({market.name}) failed: {e}")
     return await persist_drafts(drafts)
 
 
@@ -105,7 +99,10 @@ def main() -> None:
 
     logger.remove()
     logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level: <5} | {message}")
-    logger.info(f"strategy start: interval={args.interval}s once={args.once}")
+    logger.info(
+        f"strategy start: interval={args.interval}s once={args.once} "
+        f"markets={[m.name for m in all_markets()]}"
+    )
 
     if args.once:
         asyncio.run(_tick())
