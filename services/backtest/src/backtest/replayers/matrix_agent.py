@@ -346,42 +346,22 @@ async def matrix_agent_replay(
     horizon_s = int(params.get("horizon_s", DEFAULT_HORIZON_S))
     bar_seconds = _infer_bar_seconds(bars)
     horizon_bars = max(1, horizon_s // bar_seconds)
+    tp_pct_raw = params.get("tp_pct")
+    sl_pct_raw = params.get("sl_pct")
+    tp_pct = Decimal(str(tp_pct_raw)) if tp_pct_raw is not None else None
+    sl_pct = Decimal(str(sl_pct_raw)) if sl_pct_raw is not None else None
     notional = (starting_capital * max_position_pct).quantize(Decimal("0.01"))
+
+    # Import here to dodge the historical → matrix_agent import cycle.
+    from backtest.historical import _simulate_exit
 
     positions: list[BacktestPosition] = []
     n_predictions = 0
     equity_curve: list[Decimal] = [starting_capital]
     realized = Decimal("0")
 
-    # Track open positions by their close_bar index so we can settle them
-    # when the loop catches up. tuples: (close_idx, side, opened_price, opened_ts)
-    open_pos: list[tuple[int, str, Decimal, datetime]] = []
-
     for i in range(0, len(bars), step_bars):
         bar = bars[i]
-        # Settle anything due before this step
-        still_open: list[tuple[int, str, Decimal, datetime]] = []
-        for close_idx, side, opened_price, opened_ts in open_pos:
-            if close_idx <= i:
-                close_bar = bars[min(close_idx, len(bars) - 1)]
-                exit_px = _apply_slippage(close_bar.close, side, opening=False)
-                if side == "long":
-                    pnl_pct = (exit_px - opened_price) / opened_price
-                else:
-                    pnl_pct = (opened_price - exit_px) / opened_price
-                pnl = (notional * pnl_pct).quantize(Decimal("0.000001"))
-                realized += pnl
-                positions.append(BacktestPosition(
-                    side=side, opened_ts=opened_ts, opened_price=opened_price,
-                    closed_ts=close_bar.ts, closed_price=exit_px,
-                    notional_usd=notional, pnl_usd=pnl,
-                ))
-                equity_curve.append(starting_capital + realized)
-            else:
-                still_open.append((close_idx, side, opened_price, opened_ts))
-        open_pos = still_open
-
-        # Feature extract + decide
         try:
             f = await _features_at(symbol, bar.ts)
         except Exception as e:
@@ -392,23 +372,21 @@ async def matrix_agent_replay(
             continue
         n_predictions += 1
         entry_px = _apply_slippage(bar.close, side, opening=True)
-        open_pos.append((i + horizon_bars, side, entry_px, bar.ts))
-
-    # Final settle: anything still open closes at the last bar.
-    last_idx = len(bars) - 1
-    for _, side, opened_price, opened_ts in open_pos:
-        last_bar = bars[last_idx]
-        exit_px = _apply_slippage(last_bar.close, side, opening=False)
+        close_idx, exit_px, reason = _simulate_exit(
+            bars, i, side, entry_px, horizon_bars,
+            tp_pct=tp_pct, sl_pct=sl_pct,
+        )
         if side == "long":
-            pnl_pct = (exit_px - opened_price) / opened_price
+            pnl_pct = (exit_px - entry_px) / entry_px
         else:
-            pnl_pct = (opened_price - exit_px) / opened_price
+            pnl_pct = (entry_px - exit_px) / entry_px
         pnl = (notional * pnl_pct).quantize(Decimal("0.000001"))
         realized += pnl
         positions.append(BacktestPosition(
-            side=side, opened_ts=opened_ts, opened_price=opened_price,
-            closed_ts=last_bar.ts, closed_price=exit_px,
+            side=side, opened_ts=bar.ts, opened_price=entry_px,
+            closed_ts=bars[close_idx].ts, closed_price=exit_px,
             notional_usd=notional, pnl_usd=pnl,
+            close_reason=reason,
         ))
         equity_curve.append(starting_capital + realized)
 
@@ -424,6 +402,8 @@ async def matrix_agent_replay(
             "signal_threshold": str(threshold),
             "step_bars": step_bars,
             "horizon_s": horizon_s,
+            "tp_pct": str(tp_pct) if tp_pct is not None else None,
+            "sl_pct": str(sl_pct) if sl_pct is not None else None,
         },
         window=(bars[0].ts, bars[-1].ts),
         n_bars=len(bars),

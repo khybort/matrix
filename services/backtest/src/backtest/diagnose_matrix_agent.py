@@ -102,6 +102,40 @@ async def threshold_sweep(
     return rows
 
 
+async def tp_sl_sweep(
+    bars, symbol: str, *, horizon_s: int
+) -> list[dict[str, Any]]:
+    """Fix weights + threshold + horizon; vary the asymmetric exit pair.
+    Tests the diagnosis-driven hypothesis: 'losers are bigger than winners,
+    so cut them faster.' Symmetric and asymmetric (tighter SL than TP)
+    variants both included so we can see whether the kill-losers-fast
+    intuition pays — symmetric won't separate losers from winners; it'll
+    only cut tails.
+    """
+    base = {
+        "weights": {k: str(v) for k, v in DEFAULT_WEIGHTS.items()},
+        "signal_threshold": str(DEFAULT_SIGNAL_THRESHOLD),
+        "horizon_s": horizon_s,
+    }
+    # Values calibrated for 1-min BTC bars over a 30-min horizon: at that
+    # cadence, intra-position moves rarely exceed ±0.5%, so triggers above
+    # 1% almost never fire. Tighter is more informative.
+    cases: list[tuple[str, dict[str, Any]]] = [
+        ("none",            {**base}),
+        ("tp0.3/sl0.1",     {**base, "tp_pct": "0.003", "sl_pct": "0.001"}),
+        ("tp0.5/sl0.2",     {**base, "tp_pct": "0.005", "sl_pct": "0.002"}),
+        ("tp0.5/sl0.3",     {**base, "tp_pct": "0.005", "sl_pct": "0.003"}),
+        ("tp1/sl0.3",       {**base, "tp_pct": "0.01",  "sl_pct": "0.003"}),
+        ("tp_only/0.5",     {**base, "tp_pct": "0.005"}),
+        ("sl_only/0.3",     {**base, "sl_pct": "0.003"}),
+    ]
+    rows: list[dict[str, Any]] = []
+    for label, params in cases:
+        r = await _one_run(bars, params, symbol)
+        rows.append({"tp/sl": label, **_short_summary(r)})
+    return rows
+
+
 async def signal_attribution(
     bars, symbol: str, *, horizon_s: int
 ) -> list[dict[str, Any]]:
@@ -180,9 +214,15 @@ async def run(symbol: str, asset_class: str, days: int, output_json: bool) -> No
 
     h_rows = await horizon_sweep(bars, symbol)
     best_h = _best_horizon(h_rows)
-    logger.info(f"horizon sweep best: {best_h}s")
+    logger.info(f"horizon sweep best (by pnl): {best_h}s")
     t_rows = await threshold_sweep(bars, symbol, horizon_s=best_h)
     a_rows = await signal_attribution(bars, symbol, horizon_s=best_h)
+    # TP/SL needs intra-position bar movement to trigger. At ≤ 120s horizon
+    # the one-or-two bars between open and close rarely cross 0.5% — sweep
+    # would just report "no difference." Pin TP/SL sweep at 1800s where
+    # the position holds long enough for asymmetric exits to actually fire.
+    TPSL_HORIZON_S = 1800
+    tpsl_rows = await tp_sl_sweep(bars, symbol, horizon_s=TPSL_HORIZON_S)
 
     if output_json:
         print(json.dumps({
@@ -191,6 +231,7 @@ async def run(symbol: str, asset_class: str, days: int, output_json: bool) -> No
             "horizon_sweep": h_rows,
             "threshold_sweep": t_rows,
             "signal_attribution": a_rows,
+            "tp_sl_sweep": tpsl_rows,
             "verdict": _verdict(a_rows),
         }, indent=2))
         return
@@ -199,6 +240,7 @@ async def run(symbol: str, asset_class: str, days: int, output_json: bool) -> No
     print(f"\n→ best horizon by pnl: {best_h}s")
     _print_table(f"THRESHOLD SWEEP (horizon={best_h}s)", t_rows)
     _print_table(f"SIGNAL ATTRIBUTION (solo weights, threshold=0.01, horizon={best_h}s)", a_rows)
+    _print_table(f"TP/SL SWEEP (default weights/threshold, horizon={TPSL_HORIZON_S}s — pinned long so exits can fire)", tpsl_rows)
     print("\n=== verdict ===")
     print(_verdict(a_rows))
 
