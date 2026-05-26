@@ -413,9 +413,58 @@ function CertificatesTable({ rows }: { rows: Dashboard["certificates"] }) {
   );
 }
 
+type PreviewResult = {
+  strategy_id: string;
+  n_bars: number;
+  n_positions_closed: number;
+  total_pnl_usd: string;
+  win_rate: string;
+  max_drawdown_pct: string;
+};
+
 function TemplatesPanel() {
   const [busy, setBusy] = useState<string | null>(null);
+  const [previewBusy, setPreviewBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [previews, setPreviews] = useState<Record<string, PreviewResult | { error: string }>>({});
+
+  async function preview(t: StrategyTemplate) {
+    // Backtest engine currently only knows the grid replay. Others get a
+    // soft "not supported" hint in-place rather than a 400 round-trip.
+    if (t.strategy_id !== "grid") {
+      setPreviews((p) => ({
+        ...p,
+        [t.id]: { error: "Preview is grid-only for now (matrix_agent/dca need their own replayer)" },
+      }));
+      return;
+    }
+    setPreviewBusy(t.id);
+    setPreviews((p) => {
+      const next = { ...p };
+      delete next[t.id];
+      return next;
+    });
+    try {
+      const r = await fetch("/api/strategy/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          strategy: t.strategy_id,
+          symbol: "BTCUSDT",
+          asset_class: t.asset_class,
+          days: 7,
+          params: t.params,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error ?? "preview failed");
+      setPreviews((p) => ({ ...p, [t.id]: j.result }));
+    } catch (e) {
+      setPreviews((p) => ({ ...p, [t.id]: { error: String((e as Error).message) } }));
+    } finally {
+      setPreviewBusy(null);
+    }
+  }
 
   async function deploy(t: StrategyTemplate) {
     if (!confirm(
@@ -459,34 +508,65 @@ function TemplatesPanel() {
           <th>Class</th>
           <th>Risk</th>
           <th>Params</th>
-          <th>Action</th>
+          <th>Preview (7d BTC)</th>
+          <th>Actions</th>
         </tr></thead>
         <tbody>
-          {STRATEGY_TEMPLATES.map((t) => (
-            <tr key={t.id}>
-              <td>
-                <div className="font-medium">{t.label}</div>
-                <div className="muted text-xs">{t.short_description}</div>
-              </td>
-              <td className="mono">{t.strategy_id}</td>
-              <td className="mono">{t.asset_class}</td>
-              <td className={t.risk === "conservative" ? "pos mono" : t.risk === "aggressive" ? "neg mono" : "mono"}>
-                {t.risk}
-              </td>
-              <td className="mono text-xs">
-                <pre className="whitespace-pre-wrap break-all">{JSON.stringify(t.params, null, 0)}</pre>
-              </td>
-              <td>
-                <button
-                  className="px-3 py-1 border border-current opacity-80 hover:opacity-100 disabled:opacity-40 text-xs"
-                  onClick={() => deploy(t)}
-                  disabled={busy !== null}
-                >
-                  {busy === t.id ? "Deploying…" : "Deploy"}
-                </button>
-              </td>
-            </tr>
-          ))}
+          {STRATEGY_TEMPLATES.map((t) => {
+            const pv = previews[t.id];
+            return (
+              <tr key={t.id}>
+                <td>
+                  <div className="font-medium">{t.label}</div>
+                  <div className="muted text-xs">{t.short_description}</div>
+                </td>
+                <td className="mono">{t.strategy_id}</td>
+                <td className="mono">{t.asset_class}</td>
+                <td className={t.risk === "conservative" ? "pos mono" : t.risk === "aggressive" ? "neg mono" : "mono"}>
+                  {t.risk}
+                </td>
+                <td className="mono text-xs">
+                  <pre className="whitespace-pre-wrap break-all">{JSON.stringify(t.params, null, 0)}</pre>
+                </td>
+                <td className="mono text-xs">
+                  {pv === undefined && <span className="muted">— click Preview</span>}
+                  {pv !== undefined && "error" in pv && (
+                    <span className="neg">{pv.error}</span>
+                  )}
+                  {pv !== undefined && !("error" in pv) && (
+                    <div className="space-y-0.5">
+                      <div>
+                        PnL: <span className={Number(pv.total_pnl_usd) >= 0 ? "pos" : "neg"}>
+                          ${Number(pv.total_pnl_usd).toFixed(2)}
+                        </span>
+                        {" / "}
+                        win: {(Number(pv.win_rate) * 100).toFixed(1)}%
+                      </div>
+                      <div className="muted">
+                        n={pv.n_positions_closed}, dd={(Number(pv.max_drawdown_pct) * 100).toFixed(2)}%
+                      </div>
+                    </div>
+                  )}
+                </td>
+                <td className="space-x-1 whitespace-nowrap">
+                  <button
+                    className="px-2 py-1 border border-current opacity-80 hover:opacity-100 disabled:opacity-40 text-xs"
+                    onClick={() => preview(t)}
+                    disabled={previewBusy !== null || busy !== null}
+                  >
+                    {previewBusy === t.id ? "Running…" : "Preview"}
+                  </button>
+                  <button
+                    className="px-2 py-1 border border-current opacity-80 hover:opacity-100 disabled:opacity-40 text-xs"
+                    onClick={() => deploy(t)}
+                    disabled={busy !== null || previewBusy !== null}
+                  >
+                    {busy === t.id ? "Deploying…" : "Deploy"}
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
