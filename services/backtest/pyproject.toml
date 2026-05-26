@@ -6,6 +6,8 @@ requires-python = ">=3.13"
 dependencies = [
     "matrix-shared",
     "loguru>=0.7.3",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
 ]
 
 [tool.uv.sources]
@@ -22,6 +24,7 @@ packages = ["src/backtest"]
 matrix-backtest = "backtest.main:main"
 matrix-backtest-historical = "backtest.historical:main"
 matrix-backtest-suggester = "backtest.suggester:main"
+matrix-backtest-api = "backtest.api:main"
 
 [tool.ruff]
 line-length = 100

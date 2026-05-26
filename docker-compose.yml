@@ -258,6 +258,23 @@ services:
     restart: unless-stopped
     logging: *default_logging
 
+  # HTTP wrapper around historical.run_backtest for the dashboard's deploy
+  # preview. Same image as the daemon; just a different command. Internal
+  # only — not exposed on host. The web service hits it as http://backtest-api:8010.
+  backtest-api:
+    image: matrix-backtest:local
+    container_name: matrix-backtest-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backtest:
+        condition: service_started
+    environment:
+      <<: *python-env
+    command: ["backtest.api"]
+    restart: unless-stopped
+    logging: *default_logging
+
   reflection:
     build:
       <<: *python-build
