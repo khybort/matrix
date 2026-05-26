@@ -75,5 +75,26 @@ class CryptoMarket(MarketAdapter):
         )
         return (await db.execute(stmt)).scalar_one_or_none()
 
+    def make_executor(self, cfg: object, *, paper: bool) -> "object":
+        if paper:
+            # Paper PnL is the Wallet/PaperPosition engine in services/backtest;
+            # there's no separate ExecutionAdapter for it. Strategies → paper
+            # via the backtest loop, not via this factory.
+            raise NotImplementedError(
+                "crypto paper executor is the services/backtest engine, not an "
+                "ExecutionAdapter — wire via paper_trade.py instead"
+            )
+        # Late import keeps matrix_shared free of a hard dep on services/.
+        try:
+            from execution.adapters.crypto import CryptoLiveExecutor
+        except ImportError as e:
+            raise RuntimeError(
+                "crypto live executor requested but services/execution is not "
+                "importable — install the execution service or run inside its "
+                "container"
+            ) from e
+        testnet = getattr(cfg, "testnet", None)
+        return CryptoLiveExecutor(testnet=testnet)
+
 
 register(CryptoMarket())
