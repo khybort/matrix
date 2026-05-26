@@ -246,7 +246,7 @@ export async function GET() {
          MATCH (e)<-[r:MENTIONS]-(:Document)
          WHERE labels(e)[0] IN ['Asset','Company','Person','Concept','Event']
          RETURN labels(e)[0], e.canonical, count(r) AS n
-         ORDER BY n DESC LIMIT 12
+         ORDER BY count(r) DESC LIMIT 12
        $$) AS (kind agtype, canonical agtype, n agtype)`,
     );
     for (const row of topRows) {
@@ -292,6 +292,7 @@ export async function GET() {
       recentOutcomes,
       strategyAgg,
       mutationProposals,
+      agentLessons,
       certificates,
       labLeaderboard,
       labStats: labStats[0] ?? {},

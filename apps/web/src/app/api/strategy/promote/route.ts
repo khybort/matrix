@@ -76,19 +76,22 @@ export async function POST(req: Request) {
       // postgres-js's `sql.json(...)` keeps `params` as a real JSON object on
       // the column; plain JSON.stringify would store it as a JSON-string-of-
       // a-JSON-object, which the SQLAlchemy reader can't unpack.
-      const [created] = await tx<
-        { id: string; strategy_id: string; version: number; asset_class: string }[]
-      >`
+      const rows = (await tx`
         INSERT INTO strategy_configs (
           id, strategy_id, asset_class, version, status, params, rationale, promoted_at
         ) VALUES (
           gen_random_uuid(),
           ${strategyId}, ${assetClass}, ${nextVersion}, 'active',
-          ${params as Record<string, unknown>}, ${rationale}, NOW()
+          ${sql.json(params as never)}, ${rationale}, NOW()
         )
         RETURNING id, strategy_id, version, asset_class
-      `;
-      return created;
+      `) as unknown as {
+        id: string;
+        strategy_id: string;
+        version: number;
+        asset_class: string;
+      }[];
+      return rows[0];
     });
 
     return NextResponse.json({ ok: true, config: result });
