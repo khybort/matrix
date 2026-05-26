@@ -26,7 +26,6 @@ from strategy.modules.dca import Dca
 from strategy.modules.funding_reversion import FundingReversion
 from strategy.modules.grid import Grid
 from strategy.modules.oi_delta import OiDelta
-from strategy.modules.trade_flow_imbalance import TradeFlowImbalance
 from strategy.persist import persist_drafts
 
 DEFAULT_INTERVAL_S = 30.0
@@ -35,7 +34,8 @@ DEFAULT_INTERVAL_S = 30.0
 def _registered_strategies() -> list:
     return [
         # ---- crypto ----
-        TradeFlowImbalance(),
+        # TradeFlowImbalance retired 2026-05-26: -$229.61/24h on 1783 trades, 12.8% win.
+        # FundingReversion + OiDelta kept (low volume, near-flat PnL — keep learning).
         FundingReversion(),
         OiDelta(),
         Grid(),
