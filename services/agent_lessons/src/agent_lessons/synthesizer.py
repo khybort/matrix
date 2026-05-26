@@ -77,11 +77,20 @@ def _confidence(n: int) -> Decimal:
 
 
 async def _symbol_side_buckets(
-    strategy_id: str, *, since: datetime, until: datetime
+    strategy_id: str,
+    *,
+    asset_class: str,
+    since: datetime,
+    until: datetime,
 ) -> list[_PatternStat]:
     """Aggregate by (symbol, side) — the simplest, most reliable pattern.
     Reads outcomes joined to predictions; matrix_agent's hold-only-on-
-    horizon model means each prediction has at most one outcome row."""
+    horizon model means each prediction has at most one outcome row.
+
+    The asset_class filter keeps crypto and BIST decisions in separate
+    buckets — a "long on THYAO" lesson must never inform a crypto
+    decision (and vice versa).
+    """
     async with shared_session_scope() as session:
         stmt = (
             select(
@@ -93,6 +102,7 @@ async def _symbol_side_buckets(
             )
             .join(Outcome, Outcome.prediction_id == Prediction.id)
             .where(Prediction.strategy_id == strategy_id)
+            .where(Prediction.asset_class == asset_class)
             .where(Outcome.observed_at >= since)
             .where(Outcome.observed_at <= until)
             .where(Prediction.side.in_(("long", "short")))
@@ -121,14 +131,16 @@ async def _symbol_side_buckets(
 async def synthesize(
     strategy_id: str = DEFAULT_STRATEGY_ID,
     *,
+    asset_class: str = "crypto",
     lookback_hours: int = LOOKBACK_HOURS,
     now: datetime | None = None,
 ) -> int:
-    """Run one synthesis pass. Returns count of NEW lessons written.
+    """Run one synthesis pass for one (strategy_id, asset_class) pair.
 
-    Idempotent: re-running on the same data writes one row per pattern
-    only when win_rate diverged from any existing active lesson for the
-    same bucket beyond a 5pp band. The existing active lesson, if any,
+    Returns count of NEW lessons written. Idempotent: re-running on the
+    same data writes one row per pattern only when win_rate diverged
+    from any existing active lesson for the same (strategy, market,
+    bucket) beyond a 5pp band. The existing active lesson, if any,
     gets marked superseded and pointed at the new row.
     """
     now = now or datetime.now(timezone.utc)
@@ -148,11 +160,15 @@ async def synthesize(
             .limit(1)
         )).scalar_one_or_none()
     if cfg is None:
-        logger.warning(f"synthesize: no active strategy_config for {strategy_id}")
+        logger.warning(
+            f"synthesize: no active strategy_config for {strategy_id}"
+        )
         return 0
     version = int(cfg.version)
 
-    stats = await _symbol_side_buckets(strategy_id, since=since, until=now)
+    stats = await _symbol_side_buckets(
+        strategy_id, asset_class=asset_class, since=since, until=now
+    )
     written = 0
 
     for s in stats:
@@ -162,18 +178,23 @@ async def synthesize(
         if verdict is None:
             # Neutral — supersede any active lesson for this bucket so we
             # don't leave stale advice live when the pattern washes out.
-            await _supersede_if_active(strategy_id, "symbol_specific", s.bucket_filter, now)
+            await _supersede_if_active(
+                strategy_id, asset_class, "symbol_specific", s.bucket_filter, now
+            )
             continue
 
         # Has an active lesson for this exact bucket already? If its
         # win_rate matches within 5pp, keep it. Otherwise supersede + write
         # a fresh one.
-        existing = await _find_active(strategy_id, "symbol_specific", s.bucket_filter)
+        existing = await _find_active(
+            strategy_id, asset_class, "symbol_specific", s.bucket_filter
+        )
         if existing is not None and existing.win_rate is not None:
             if abs(Decimal(existing.win_rate) - s.win_rate) < Decimal("0.05"):
                 continue  # close enough — leave it
         new_id = await _insert_lesson(
             strategy_id=strategy_id,
+            asset_class=asset_class,
             version=version,
             kind="symbol_specific",
             stat=s,
@@ -185,19 +206,23 @@ async def synthesize(
             await _mark_superseded(existing.id, new_id, now)
         written += 1
         logger.info(
-            f"lesson {new_id} ({verdict}): {s.description} "
+            f"lesson {new_id} [{asset_class}] ({verdict}): {s.description} "
             f"n={s.n} win={float(s.win_rate)*100:.1f}% pnl=${float(s.total_pnl):.2f}"
         )
     return written
 
 
 async def _find_active(
-    strategy_id: str, kind: str, bucket_filter: dict[str, Any]
+    strategy_id: str,
+    asset_class: str,
+    kind: str,
+    bucket_filter: dict[str, Any],
 ) -> AgentLesson | None:
     async with shared_session_scope() as session:
         rows = (await session.execute(
             select(AgentLesson)
             .where(AgentLesson.strategy_id == strategy_id)
+            .where(AgentLesson.asset_class == asset_class)
             .where(AgentLesson.status == "active")
             .where(AgentLesson.pattern_kind == kind)
         )).scalars().all()
@@ -211,6 +236,7 @@ async def _find_active(
 async def _insert_lesson(
     *,
     strategy_id: str,
+    asset_class: str,
     version: int,
     kind: str,
     stat: _PatternStat,
@@ -223,6 +249,7 @@ async def _insert_lesson(
         session.add(AgentLesson(
             id=new_id,
             strategy_id=strategy_id,
+            asset_class=asset_class,
             strategy_version=version,
             pattern_kind=kind,
             pattern_description=stat.description,
@@ -254,13 +281,14 @@ async def _mark_superseded(
 
 async def _supersede_if_active(
     strategy_id: str,
+    asset_class: str,
     kind: str,
     bucket_filter: dict[str, Any],
     at: datetime,
 ) -> None:
     """Lesson's pattern is no longer informative — flip to superseded with
     no replacement. Caller computed neutral verdict."""
-    existing = await _find_active(strategy_id, kind, bucket_filter)
+    existing = await _find_active(strategy_id, asset_class, kind, bucket_filter)
     if existing is None:
         return
     async with shared_session_scope() as session:

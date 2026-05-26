@@ -153,11 +153,16 @@ async def _strategy_is_active(strategy_id: str) -> bool:
         return row is not None
 
 
-async def feed_once(strategy_id: str = "matrix_agent") -> dict[str, Any]:
+async def feed_once(
+    strategy_id: str = "matrix_agent",
+    *,
+    asset_class: str = "crypto",
+) -> dict[str, Any]:
     """One scan: returns {'enqueued_task_id': int|None, 'reason': str}.
 
-    Idempotent — safe to call from any cadence loop. Internal rate limit
-    + dedup do the right thing.
+    Scoped to one (strategy_id, asset_class) pair so crypto and BIST
+    lesson feeds never blur. Idempotent — safe to call from any cadence
+    loop. Internal rate limit + dedup do the right thing.
     """
     if not await _strategy_is_active(strategy_id):
         return {
@@ -181,7 +186,7 @@ async def feed_once(strategy_id: str = "matrix_agent") -> dict[str, Any]:
                     "reason": f"rate-limited ({mins_left}min until next slot)",
                 }
 
-        lessons = await active_lessons(strategy_id)
+        lessons = await active_lessons(strategy_id, asset_class=asset_class)
         candidates = [
             l for l in lessons
             if l.verdict == "avoid"
@@ -191,7 +196,9 @@ async def feed_once(strategy_id: str = "matrix_agent") -> dict[str, Any]:
         if not candidates:
             return {
                 "enqueued_task_id": None,
-                "reason": f"no qualifying avoid lessons for {strategy_id}",
+                "reason": (
+                    f"no qualifying avoid lessons for {strategy_id}/{asset_class}"
+                ),
             }
 
         # Highest confidence first; ties broken by larger n_observations.

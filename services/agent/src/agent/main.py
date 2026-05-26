@@ -21,15 +21,14 @@ import argparse
 import asyncio
 import signal
 import sys
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from zoneinfo import ZoneInfo
 
 from loguru import logger
-from sqlalchemy import select
 
 from matrix_shared import session_scope, shared_session_scope
-from matrix_shared.models import BistSymbol, Prediction
+from matrix_shared.markets import all_markets
+from matrix_shared.models import Prediction
 
 from agent.config import load_agent_config
 from agent.decide import decide
@@ -40,42 +39,51 @@ AGENT_STRATEGY_ID = "matrix_agent"
 DEFAULT_INTERVAL_S = 15.0
 DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 
-TR = ZoneInfo("Europe/Istanbul")
-BIST_OPEN = time(10, 0)
-BIST_CLOSE = time(18, 0)
-
-
-def _bist_in_session(now: datetime | None = None) -> bool:
-    now = (now or datetime.now(TR)).astimezone(TR)
-    if now.weekday() >= 5:
-        return False
-    return BIST_OPEN <= now.time() < BIST_CLOSE
-
-
-async def _bist_symbols() -> list[str]:
-    async with session_scope() as session:
-        rows = await session.execute(
-            select(BistSymbol.symbol).where(BistSymbol.active.is_(True))
-        )
-    return sorted({r[0] for r in rows})
-
 
 def _exchange_for(asset_class: str) -> str:
     return "BIST" if asset_class == "bist" else "bybit"
 
 
+async def _resolve_targets(
+    cli_symbols: list[str],
+) -> list[tuple[str, str]]:
+    """Build the (symbol, asset_class) target list for one tick.
+
+    For each registered market that's currently in-session:
+      - crypto: use CLI symbols (matches the historical --symbols override)
+      - other markets: take the market's universe straight from the adapter
+
+    Out-of-session markets are skipped entirely (no features extracted, no
+    config loaded, no log noise).
+    """
+    targets: list[tuple[str, str]] = []
+    for market in all_markets():
+        if not market.is_session_open():
+            continue
+        if market.name == "crypto":
+            # Honour the operator's --symbols override; falls back to the
+            # adapter's universe when nothing was passed.
+            symbols = cli_symbols if cli_symbols else None
+            if symbols is None:
+                async with session_scope() as db:
+                    symbols = await market.universe(db)
+            targets.extend((s, market.asset_class) for s in symbols)
+        else:
+            async with session_scope() as db:
+                symbols = await market.universe(db)
+            targets.extend((s, market.asset_class) for s in symbols)
+    return targets
+
+
 async def _tick(symbols: list[str]) -> int:
     """Run one decision cycle. Returns number of non-hold predictions persisted.
 
-    `symbols` is the crypto universe (typically passed via --symbols). BIST
-    symbols are loaded fresh from the DB and only processed while the TR
-    session is open. Each symbol is paired with its asset_class so the
-    decision layer can drop crypto-only signals where appropriate.
+    Target list comes from `MarketAdapter`s — each in-session market
+    contributes its universe (CLI --symbols still overrides crypto).
+    Each symbol is paired with its asset_class so the decision layer can
+    drop signals that don't apply.
     """
-    targets: list[tuple[str, str]] = [(s, "crypto") for s in symbols]
-    if _bist_in_session():
-        bist = await _bist_symbols()
-        targets.extend((s, "bist") for s in bist)
+    targets = await _resolve_targets(symbols)
 
     # Config per asset_class (cached). Pre-load both so we don't re-query
     # every symbol within the same tick.
