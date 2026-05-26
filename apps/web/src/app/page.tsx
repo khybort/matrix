@@ -128,6 +128,10 @@ export default function Page() {
         <TemplatesPanel />
       </Panel>
 
+      <Panel title="Strategy wizard — build a custom config" className="mt-4">
+        <WizardPanel />
+      </Panel>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
         <Panel title={`Open positions (${data.openPositions.length})`}>
           <OpenPositionsTable rows={data.openPositions} />
@@ -561,6 +565,296 @@ function TemplatesPanel() {
         </tbody>
       </table>
     </div>
+  );
+}
+
+// ---- Wizard ----------------------------------------------------------------
+//
+// Free-form strategy builder. Three strategies (grid / matrix_agent / dca)
+// expose their tunable params here; the operator can preview against
+// historical bars and then deploy a new strategy_configs version.
+//
+// Param defaults match the live runtime defaults so a Preview without
+// touching anything reflects the current production behavior.
+
+type WizardStrategy = "grid" | "matrix_agent" | "dca";
+
+type WizardState = {
+  strategy: WizardStrategy;
+  symbol: string;
+  asset_class: "crypto" | "bist";
+  days: number;
+  // grid params
+  n_grids: number;
+  price_band_pct: string;
+  horizon_s: number;
+  // matrix_agent params
+  weight_trade_flow: string;
+  weight_funding: string;
+  weight_oi_delta: string;
+  weight_ob_imbalance: string;
+  weight_news: string;
+  signal_threshold: string;
+  // dca params
+  interval_minutes: number;
+};
+
+const WIZARD_DEFAULTS: WizardState = {
+  strategy: "grid",
+  symbol: "BTCUSDT",
+  asset_class: "crypto",
+  days: 7,
+  n_grids: 10,
+  price_band_pct: "0.02",
+  horizon_s: 300,
+  weight_trade_flow: "0.35",
+  weight_funding: "0.20",
+  weight_oi_delta: "0.20",
+  weight_ob_imbalance: "0.15",
+  weight_news: "0.10",
+  signal_threshold: "0.18",
+  interval_minutes: 60,
+};
+
+function wizardParams(s: WizardState): Record<string, unknown> {
+  if (s.strategy === "grid") {
+    return {
+      n_grids: s.n_grids,
+      price_band_pct: s.price_band_pct,
+      horizon_s: s.horizon_s,
+    };
+  }
+  if (s.strategy === "matrix_agent") {
+    return {
+      weights: {
+        trade_flow: s.weight_trade_flow,
+        funding: s.weight_funding,
+        oi_delta: s.weight_oi_delta,
+        ob_imbalance: s.weight_ob_imbalance,
+        news: s.weight_news,
+      },
+      signal_threshold: s.signal_threshold,
+    };
+  }
+  // dca
+  return { interval_minutes: s.interval_minutes };
+}
+
+function WizardPanel() {
+  const [s, setS] = useState<WizardState>(WIZARD_DEFAULTS);
+  const [busy, setBusy] = useState<"preview" | "deploy" | null>(null);
+  const [pv, setPv] = useState<PreviewResult | { error: string } | null>(null);
+  const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  function set<K extends keyof WizardState>(k: K, v: WizardState[K]) {
+    setS((prev) => ({ ...prev, [k]: v }));
+  }
+
+  async function preview() {
+    setBusy("preview");
+    setPv(null);
+    try {
+      const r = await fetch("/api/strategy/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          strategy: s.strategy,
+          symbol: s.symbol,
+          asset_class: s.asset_class,
+          days: s.days,
+          params: wizardParams(s),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error ?? "preview failed");
+      setPv(j.result);
+    } catch (e) {
+      setPv({ error: String((e as Error).message) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function deploy() {
+    if (!confirm(
+      `Deploy strategy "${s.strategy}" (${s.asset_class}) with these params?\n\n`
+      + `Retires the current active config for ${s.strategy}/${s.asset_class} and inserts a new version.\n`
+      + `Live order submission stays blocked until a paper_trade_certificate is granted.`
+    )) return;
+    setBusy("deploy");
+    setMsg(null);
+    try {
+      const r = await fetch("/api/strategy/promote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          strategy_id: s.strategy,
+          asset_class: s.asset_class,
+          params: wizardParams(s),
+          rationale: `Deployed via wizard with params ${JSON.stringify(wizardParams(s))}`,
+          promoted_by: "dashboard-wizard",
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error ?? "promote failed");
+      setMsg({ kind: "ok", text: `Deployed ${j.config.strategy_id} v${j.config.version}` });
+    } catch (e) {
+      setMsg({ kind: "err", text: String((e as Error).message) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="space-y-3 text-sm">
+      {msg && (
+        <div className={msg.kind === "ok" ? "pos text-sm" : "neg text-sm"}>{msg.text}</div>
+      )}
+
+      {/* common fields */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="muted text-xs uppercase tracking-wide">Strategy</span>
+          <select
+            className="bg-transparent border border-current px-2 py-1"
+            value={s.strategy}
+            onChange={(e) => set("strategy", e.target.value as WizardStrategy)}
+          >
+            <option value="grid">grid</option>
+            <option value="matrix_agent">matrix_agent</option>
+            <option value="dca">dca</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="muted text-xs uppercase tracking-wide">Asset class</span>
+          <select
+            className="bg-transparent border border-current px-2 py-1"
+            value={s.asset_class}
+            onChange={(e) => set("asset_class", e.target.value as "crypto" | "bist")}
+          >
+            <option value="crypto">crypto</option>
+            <option value="bist">bist</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="muted text-xs uppercase tracking-wide">Preview symbol</span>
+          <input
+            className="bg-transparent border border-current px-2 py-1 mono"
+            value={s.symbol}
+            onChange={(e) => set("symbol", e.target.value.toUpperCase())}
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="muted text-xs uppercase tracking-wide">Preview days</span>
+          <input
+            type="number"
+            min={1}
+            max={30}
+            className="bg-transparent border border-current px-2 py-1 mono"
+            value={s.days}
+            onChange={(e) => set("days", parseInt(e.target.value || "1", 10))}
+          />
+        </label>
+      </div>
+
+      {/* strategy-specific fields */}
+      {s.strategy === "grid" && (
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+          <WizardNumber label="n_grids" value={s.n_grids} onChange={(v) => set("n_grids", v)} />
+          <WizardText label="price_band_pct" value={s.price_band_pct} onChange={(v) => set("price_band_pct", v)} />
+          <WizardNumber label="horizon_s" value={s.horizon_s} onChange={(v) => set("horizon_s", v)} />
+        </div>
+      )}
+      {s.strategy === "matrix_agent" && (
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+          <WizardText label="weights.trade_flow" value={s.weight_trade_flow} onChange={(v) => set("weight_trade_flow", v)} />
+          <WizardText label="weights.funding" value={s.weight_funding} onChange={(v) => set("weight_funding", v)} />
+          <WizardText label="weights.oi_delta" value={s.weight_oi_delta} onChange={(v) => set("weight_oi_delta", v)} />
+          <WizardText label="weights.ob_imbalance" value={s.weight_ob_imbalance} onChange={(v) => set("weight_ob_imbalance", v)} />
+          <WizardText label="weights.news" value={s.weight_news} onChange={(v) => set("weight_news", v)} />
+          <WizardText label="signal_threshold" value={s.signal_threshold} onChange={(v) => set("signal_threshold", v)} />
+        </div>
+      )}
+      {s.strategy === "dca" && (
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+          <WizardNumber label="interval_minutes" value={s.interval_minutes} onChange={(v) => set("interval_minutes", v)} />
+        </div>
+      )}
+
+      <div className="flex gap-2 items-center">
+        <button
+          className="px-3 py-1 border border-current opacity-80 hover:opacity-100 disabled:opacity-40 text-xs"
+          onClick={preview}
+          disabled={busy !== null}
+        >
+          {busy === "preview" ? "Running…" : "Preview"}
+        </button>
+        <button
+          className="px-3 py-1 border border-current opacity-80 hover:opacity-100 disabled:opacity-40 text-xs"
+          onClick={deploy}
+          disabled={busy !== null}
+        >
+          {busy === "deploy" ? "Deploying…" : "Deploy"}
+        </button>
+        <span className="muted text-xs">
+          Preview uses {s.days}d of {s.symbol} {s.asset_class} bars.
+        </span>
+      </div>
+
+      {pv !== null && (
+        <div className="mt-2 text-xs">
+          {"error" in pv ? (
+            <span className="neg">{pv.error}</span>
+          ) : (
+            <div className="space-y-0.5 mono">
+              <div>
+                PnL: <span className={Number(pv.total_pnl_usd) >= 0 ? "pos" : "neg"}>
+                  ${Number(pv.total_pnl_usd).toFixed(2)}
+                </span>
+                {" / "}
+                win: {(Number(pv.win_rate) * 100).toFixed(1)}%
+                {" / "}
+                dd: {(Number(pv.max_drawdown_pct) * 100).toFixed(2)}%
+              </div>
+              <div className="muted">
+                n_bars={pv.n_bars}, n_positions={pv.n_positions_closed}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WizardNumber({ label, value, onChange }: {
+  label: string; value: number; onChange: (v: number) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="muted text-xs uppercase tracking-wide">{label}</span>
+      <input
+        type="number"
+        className="bg-transparent border border-current px-2 py-1 mono"
+        value={value}
+        onChange={(e) => onChange(parseInt(e.target.value || "0", 10))}
+      />
+    </label>
+  );
+}
+
+function WizardText({ label, value, onChange }: {
+  label: string; value: string; onChange: (v: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="muted text-xs uppercase tracking-wide">{label}</span>
+      <input
+        className="bg-transparent border border-current px-2 py-1 mono"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
   );
 }
 
