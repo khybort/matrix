@@ -113,6 +113,16 @@ services:
       - ./services/bulletin/src:/workspace/services/bulletin/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
+  agent-lessons:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m agent_lessons.main"
+      - "/workspace/services/agent_lessons/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/agent_lessons/src:/workspace/services/agent_lessons/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
   backtest-api:
     entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
     command:
