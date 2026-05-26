@@ -86,7 +86,7 @@ async def test_expire_skips_predictions_with_open_position(
     async with shared_session_scope() as session:
         session.add(
             PaperPosition(
-                id=uuid.uuid4(), prediction_id=pid, symbol="BTCUSDT",
+                id=uuid.uuid4(), prediction_id=pid, symbol="TEST_BTCUSDT",
                 exchange="bybit", side="long", notional_usd=Decimal("50"),
                 opened_at=datetime.now(timezone.utc),
                 opened_price=Decimal("100"),
@@ -111,7 +111,7 @@ async def test_open_skips_expired_predictions(
     monkeypatch.setattr(
         "backtest.paper_trade.DEFAULT_WALLET_ID", wallet_id
     )
-    await seed_recent_trades("BTCUSDT", Decimal("100"))
+    await seed_recent_trades("TEST_BTCUSDT", Decimal("100"))
     pid = await make_prediction(
         strategy_id="open_strat_a",
         generated_at=datetime.now(timezone.utc) - timedelta(minutes=5),
@@ -146,13 +146,13 @@ async def test_close_writes_outcome_and_unlocks_capital(
         generated_at=datetime.now(timezone.utc) - timedelta(minutes=10),
         close_by_offset=timedelta(seconds=60),  # close_by already past
     )
-    await seed_recent_trades("BTCUSDT", Decimal("101"))  # exit @ ~101
+    await seed_recent_trades("TEST_BTCUSDT", Decimal("101"))  # exit @ ~101
     notional = Decimal("50")
     pos_id = uuid.uuid4()
     async with shared_session_scope() as session:
         session.add(
             PaperPosition(
-                id=pos_id, prediction_id=pid, symbol="BTCUSDT", exchange="bybit",
+                id=pos_id, prediction_id=pid, symbol="TEST_BTCUSDT", exchange="bybit",
                 side="long", notional_usd=notional,
                 opened_at=datetime.now(timezone.utc) - timedelta(minutes=10),
                 opened_price=Decimal("100"),
@@ -251,14 +251,14 @@ async def test_tp_closes_early_in_profit(
         p.tp_pct = Decimal("0.020000")
 
     # Mark moves to 103 from opened_price 100 → +3% > tp 2%.
-    await seed_recent_trades("BTCUSDT", Decimal("103"))
+    await seed_recent_trades("TEST_BTCUSDT", Decimal("103"))
 
     notional = Decimal("50")
     pos_id = uuid.uuid4()
     async with shared_session_scope() as session:
         session.add(
             PaperPosition(
-                id=pos_id, prediction_id=pid, symbol="BTCUSDT", exchange="bybit",
+                id=pos_id, prediction_id=pid, symbol="TEST_BTCUSDT", exchange="bybit",
                 side="long", notional_usd=notional,
                 opened_at=datetime.now(timezone.utc) - timedelta(minutes=5),
                 opened_price=Decimal("100"),
@@ -298,14 +298,14 @@ async def test_sl_closes_early_in_loss(
         p.sl_pct = Decimal("0.020000")
 
     # Mark moves to 103 — short is now 3% underwater, exceeds sl 2%.
-    await seed_recent_trades("BTCUSDT", Decimal("103"))
+    await seed_recent_trades("TEST_BTCUSDT", Decimal("103"))
 
     notional = Decimal("50")
     pos_id = uuid.uuid4()
     async with shared_session_scope() as session:
         session.add(
             PaperPosition(
-                id=pos_id, prediction_id=pid, symbol="BTCUSDT", exchange="bybit",
+                id=pos_id, prediction_id=pid, symbol="TEST_BTCUSDT", exchange="bybit",
                 side="short", notional_usd=notional,
                 opened_at=datetime.now(timezone.utc) - timedelta(minutes=5),
                 opened_price=Decimal("100"),
