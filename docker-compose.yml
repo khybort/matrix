@@ -174,6 +174,27 @@ services:
     command: ["agent.main", "--interval", "15"]
     restart: unless-stopped
 
+  # Continuous lesson synthesizer. Reads matrix_agent's past decisions +
+  # outcomes hourly; writes agent_lessons rows describing patterns where
+  # win rate strays from chance. Read-only on the agent itself — the
+  # agent will (with operator direction) consume these in decide().
+  agent-lessons:
+    build:
+      <<: *python-build
+      target: runtime
+      args:
+        SERVICE: agent_lessons
+    image: matrix-agent-lessons:local
+    container_name: matrix-agent-lessons
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *python-env
+    command: ["agent_lessons.main"]
+    restart: unless-stopped
+    logging: *default_logging
+
   # Weekly bulletin generator. Composes a markdown digest from engine state
   # via Claude Haiku (falls back to a deterministic template if LLM disabled)
   # and writes a draft row. Operator publishes via `matrix-bulletin --publish`.

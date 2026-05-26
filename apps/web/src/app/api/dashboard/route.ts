@@ -127,6 +127,20 @@ export async function GET() {
       ORDER BY av.strategy_id, av.asset_class, av.version
     `;
 
+    // Agent lessons: continuous pattern learning. The synthesizer writes
+    // "avoid X" / "prefer X" rows after each scan; the dashboard surfaces
+    // them so an operator can sanity-check what the engine has noticed.
+    const agentLessons = await sql`
+      SELECT id, strategy_id, strategy_version, pattern_kind,
+             pattern_description, n_observations,
+             win_rate, total_pnl_usd, verdict, confidence,
+             observed_until, generated_at
+      FROM agent_lessons
+      WHERE status = 'active'
+      ORDER BY confidence DESC NULLS LAST, generated_at DESC
+      LIMIT 30
+    `;
+
     const labLeaderboard = await sql`
       SELECT id, asset_class, generation, n_evaluations, n_signals, n_wins,
              total_score, fitness_score, status, params, created_at,

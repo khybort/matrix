@@ -1,3 +1,4 @@
+from matrix_shared.models.agent_lesson import AgentLesson
 from matrix_shared.models.base import Base, TimestampMixin
 from matrix_shared.models.bist_symbol import BistSymbol
 from matrix_shared.models.bulletin import BulletinIssue
@@ -17,6 +18,7 @@ from matrix_shared.models.wallet import Wallet, WalletSnapshot
 __all__ = [
     "Base",
     "TimestampMixin",
+    "AgentLesson",
     "BistSymbol",
     "BulletinIssue",
     "GraphSignal",

@@ -14,6 +14,20 @@ type Dashboard = {
   recentOutcomes: any[];
   strategyAgg: any[];
   mutationProposals: any[];
+  agentLessons: {
+    id: string;
+    strategy_id: string;
+    strategy_version: number;
+    pattern_kind: string;
+    pattern_description: string;
+    n_observations: number;
+    win_rate: string | null;
+    total_pnl_usd: string | null;
+    verdict: "avoid" | "prefer" | "neutral";
+    confidence: string | null;
+    observed_until: string;
+    generated_at: string;
+  }[];
   certificates: {
     strategy_id: string; asset_class: string; version: number;
     cert_id: string | null; cert_status: string | null;
@@ -122,6 +136,10 @@ export default function Page() {
 
       <Panel title="Live-execution gate — paper_trade_certificate per active version" className="mt-4">
         <CertificatesTable rows={data.certificates} />
+      </Panel>
+
+      <Panel title="Agent lessons — what the engine learned about its own decisions" className="mt-4">
+        <AgentLessonsTable rows={data.agentLessons} />
       </Panel>
 
       <Panel title="Strategy templates — deploy a starter config" className="mt-4">
@@ -425,6 +443,62 @@ type PreviewResult = {
   win_rate: string;
   max_drawdown_pct: string;
 };
+
+function AgentLessonsTable({ rows }: { rows: Dashboard["agentLessons"] }) {
+  if (!rows.length) {
+    return (
+      <p className="muted text-sm">
+        No lessons yet. The synthesizer runs hourly; come back after the engine
+        has booked enough outcomes per pattern bucket.
+      </p>
+    );
+  }
+  return (
+    <table className="matrix">
+      <thead><tr>
+        <th>Pattern</th>
+        <th>Verdict</th>
+        <th>n</th>
+        <th>Win rate</th>
+        <th>Total PnL</th>
+        <th>Confidence</th>
+        <th>Observed</th>
+      </tr></thead>
+      <tbody>
+        {rows.map((r) => {
+          const verdictClass = r.verdict === "avoid"
+            ? "neg mono"
+            : r.verdict === "prefer" ? "pos mono" : "mono muted";
+          const wr = r.win_rate != null ? Number(r.win_rate) * 100 : null;
+          return (
+            <tr key={r.id}>
+              <td>
+                <div className="font-medium">{r.pattern_description}</div>
+                <div className="muted text-xs">
+                  {r.strategy_id} v{r.strategy_version} · {r.pattern_kind}
+                </div>
+              </td>
+              <td className={verdictClass}>{r.verdict.toUpperCase()}</td>
+              <td className="mono">{r.n_observations}</td>
+              <td className={wr != null && wr < 50 ? "neg mono" : "pos mono"}>
+                {wr != null ? wr.toFixed(2) + "%" : "—"}
+              </td>
+              <td className={r.total_pnl_usd != null && Number(r.total_pnl_usd) >= 0 ? "pos mono" : "neg mono"}>
+                {r.total_pnl_usd != null ? "$" + Number(r.total_pnl_usd).toFixed(2) : "—"}
+              </td>
+              <td className="mono">
+                {r.confidence != null ? (Number(r.confidence) * 100).toFixed(0) + "%" : "—"}
+              </td>
+              <td className="muted text-xs">
+                {new Date(r.observed_until).toLocaleString()}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
 
 function TemplatesPanel() {
   const [busy, setBusy] = useState<string | null>(null);
