@@ -20,11 +20,13 @@ from loguru import logger
 
 from strategy.base import PredictionDraft
 from strategy.modules.bist.gap_fade import BistGapFade
+from strategy.modules.bist.intraday_reversion import BistIntradayReversion
 from strategy.modules.bist.news_event import BistNewsEvent
 from strategy.modules.bist.volume_breakout import BistVolumeBreakout
 from strategy.modules.dca import Dca
 from strategy.modules.funding_reversion import FundingReversion
 from strategy.modules.grid import Grid
+from strategy.modules.oi_breakout import OiBreakout
 from strategy.modules.oi_delta import OiDelta
 from strategy.persist import persist_drafts
 
@@ -38,10 +40,17 @@ def _registered_strategies() -> list:
         # FundingReversion + OiDelta kept (low volume, near-flat PnL — keep learning).
         FundingReversion(),
         OiDelta(),
+        # OiBreakout: isolates the only signal that worked in matrix_agent
+        # diagnostics (oi_delta at 1800s horizon, 42% win). Hypothesis.
+        OiBreakout(),
         Grid(),
         Dca(),
         # ---- bist (only emit while in TR session; modules self-gate) ----
         BistGapFade(),
+        # BistIntradayReversion: same mean-reversion family as gap_fade
+        # (+$11.42/24h winner) but triggered by intraday drawdown vs
+        # opening-gap. Long-only, 60min horizon.
+        BistIntradayReversion(),
         BistVolumeBreakout(),
         BistNewsEvent(),
     ]
