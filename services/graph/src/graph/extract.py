@@ -23,7 +23,7 @@ from loguru import logger
 
 from matrix_shared import call_claude_json
 
-LLM_MODEL = "claude-haiku-4-5"
+LLM_MODEL = "claude-sonnet-4-6"
 
 
 @dataclass(slots=True)

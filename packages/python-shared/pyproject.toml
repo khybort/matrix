@@ -12,6 +12,7 @@ dependencies = [
     "anyio>=4.7.0",
     "httpx>=0.28.0",
     "orjson>=3.10.0",
+    "claude-agent-sdk>=0.0.10",
 ]
 
 [build-system]

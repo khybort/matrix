@@ -70,7 +70,7 @@ async def real_haiku_llm(**kwargs: Any) -> dict[str, Any]:
         "claude",
         "-p", user_prompt,
         "--output-format", "json",
-        "--model", "claude-haiku-4-5",
+        "--model", "claude-sonnet-4-6",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

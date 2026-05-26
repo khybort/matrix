@@ -21,7 +21,7 @@ from matrix_shared import call_claude_json
 
 from reflection.metrics import StrategyMetrics
 
-LLM_MODEL = "claude-haiku-4-5"
+LLM_MODEL = "claude-sonnet-4-6"
 
 # Mutation triggers
 NEG_AVG_SCORE_TRIGGER = Decimal("-0.05")  # below this avg score → propose mutation

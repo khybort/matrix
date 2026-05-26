@@ -22,7 +22,7 @@ from matrix_shared.models import RawDocument
 
 from graph.age import link_typed_edge, upsert_entity
 
-LLM_MODEL = "claude-haiku-4-5"
+LLM_MODEL = "claude-sonnet-4-6"
 
 MAX_DOCS_PER_RUN = 60       # context budget cap
 TITLE_CHARS = 200

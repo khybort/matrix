@@ -11,6 +11,11 @@ from matrix_shared.db import (
     shared_session_scope,
 )
 from matrix_shared.llm import call_claude, call_claude_json, llm_enabled
+from matrix_shared.subscription_llm import (
+    call_subscription,
+    call_subscription_json,
+    subscription_enabled,
+)
 from matrix_shared.trading_safety import (
     LIVE_EXECUTION_REQUIRES_CERT,
     EligibilityVerdict,
@@ -34,6 +39,9 @@ __all__ = [
     "call_claude",
     "call_claude_json",
     "llm_enabled",
+    "call_subscription",
+    "call_subscription_json",
+    "subscription_enabled",
     "LIVE_EXECUTION_REQUIRES_CERT",
     "EligibilityVerdict",
     "evaluate_eligibility",

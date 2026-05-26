@@ -18,7 +18,7 @@ from loguru import logger
 
 from bulletin.state import BulletinSnapshot
 
-LLM_MODEL = "claude-haiku-4-5"
+LLM_MODEL = "claude-sonnet-4-6"
 
 
 @dataclass(slots=True)

@@ -28,8 +28,11 @@ x-python-env: &python-env
   LOCAL_DATABASE_URL: ${LOCAL_DATABASE_URL:-postgres://matrix:matrix_dev_only@postgres:5432/matrix}
   SHARED_DATABASE_URL: ${SHARED_DATABASE_URL:-postgres://matrix:matrix_dev_only@postgres:5432/matrix}
   DATABASE_URL: ${LOCAL_DATABASE_URL:-postgres://matrix:matrix_dev_only@postgres:5432/matrix}
+  # All LLM calls route via subscription (claude_agent_sdk) since 2026-05-26.
+  # API keys kept as passthroughs but blanked in .env. See feedback_subscription_only.md.
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
+  CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
   NODE_ID: ${NODE_ID:-default-node}
   NODE_ROLES: ${NODE_ROLES:-dev,ingestion,graph,strategy,backtest,reflection,labs}
   MAX_POSITION_PCT: ${MAX_POSITION_PCT:-2.0}
@@ -401,8 +404,13 @@ services:
       DEV_AGENT_TASK_COST_CAP_USD: ${DEV_AGENT_TASK_COST_CAP_USD:-5}
       DEV_AGENT_REPO_ROOT: /workspace
       DEV_AGENT_WORKTREE_ROOT: /workspace/worktrees/dev-agent
-    ports:
-      - "8009:8009"
+    # Host port removed to avoid collisions with other local projects on 8009.
+    # Reach via OrbStack proxy at the custom domain set by the label below.
+    expose:
+      - "8009"
+    labels:
+      dev.orbstack.domains: "agent.matrix.local"
+      dev.orbstack.http-port: "8009"
     volumes:
       # Repo root RW-mounted so dev_agent can create worktrees on the host filesystem.
       - .:/workspace
@@ -429,8 +437,13 @@ services:
       DATABASE_URL: ${SHARED_DATABASE_URL:-postgres://matrix:matrix_dev_only@postgres:5432/matrix}
       # LOCAL tier (market data, raw_documents, AGE graph entity counts)
       LOCAL_DATABASE_URL: ${LOCAL_DATABASE_URL:-postgres://matrix:matrix_dev_only@postgres:5432/matrix}
-    ports:
-      - "3030:3030"
+    # Host port removed to avoid collisions with other local projects on 3030.
+    # Reach via OrbStack proxy at the custom domain set by the label below.
+    expose:
+      - "3030"
+    labels:
+      dev.orbstack.domains: "matrix.local"
+      dev.orbstack.http-port: "3030"
     restart: unless-stopped
     logging: *default_logging
 

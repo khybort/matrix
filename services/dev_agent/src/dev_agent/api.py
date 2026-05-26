@@ -21,7 +21,7 @@ class TaskCreate(BaseModel):
     auto_pr: bool = False
     run_tests: bool = True
     max_turns: int = 50
-    model: str = "claude-haiku-4-5"
+    model: str = "claude-sonnet-4-6"
     base_branch: str = "main"
     commit_message: str | None = None
     cost_cap_usd: float = 5.00
