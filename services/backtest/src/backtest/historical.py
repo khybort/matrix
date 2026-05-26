@@ -56,6 +56,7 @@ class BacktestPosition:
     closed_price: Decimal | None
     notional_usd: Decimal
     pnl_usd: Decimal
+    close_reason: str = "hit_horizon"  # "hit_horizon" | "hit_tp" | "hit_sl" | "end_of_window"
 
 
 @dataclass(slots=True)
@@ -113,6 +114,63 @@ def _apply_slippage(price: Decimal, side: str, *, opening: bool) -> Decimal:
     if opening:
         return price * (Decimal("1") + bps) if side == "long" else price * (Decimal("1") - bps)
     return price * (Decimal("1") - bps) if side == "long" else price * (Decimal("1") + bps)
+
+
+def _simulate_exit(
+    bars: list[MarketBar],
+    open_idx: int,
+    side: str,
+    entry_price: Decimal,
+    horizon_bars: int,
+    *,
+    tp_pct: Decimal | None = None,
+    sl_pct: Decimal | None = None,
+) -> tuple[int, Decimal, str]:
+    """Walk bars after `open_idx` until tp_pct OR sl_pct triggers, OR the
+    horizon expires, OR we run out of bars.
+
+    Returns (close_idx, exit_price_with_slippage, close_reason).
+
+    Semantics mirror the live engine (services/backtest/paper_trade.py):
+      - tp_pct / sl_pct are fractions in [0, 1]. Sign-aware per side.
+      - tp_pct in long means price went UP by tp_pct; in short means DOWN.
+      - sl_pct in long means price went DOWN by sl_pct; in short means UP.
+      - On the same bar where both could trigger, TP wins (a chart gap
+        means the operator-favorable outcome is what we report — matches
+        paper_trade._tp_sl_reason).
+      - Reasons: "hit_tp" / "hit_sl" / "hit_horizon" / "end_of_window".
+
+    Slippage is applied to the exit price the same way live close does.
+    """
+    if not bars:
+        return open_idx, entry_price, "end_of_window"
+
+    horizon_idx = min(open_idx + horizon_bars, len(bars) - 1)
+    last_idx = len(bars) - 1
+
+    # Walk from the FIRST bar after open. The opening bar itself doesn't
+    # close the trade — that would be zero-time hold and useless.
+    for i in range(open_idx + 1, min(horizon_idx + 1, last_idx + 1)):
+        bar = bars[i]
+        if side == "long":
+            move_for = (bar.close - entry_price) / entry_price
+            move_against = -move_for
+        else:
+            move_for = (entry_price - bar.close) / entry_price
+            move_against = -move_for
+
+        # TP wins ties (see docstring).
+        if tp_pct is not None and move_for >= tp_pct:
+            return i, _apply_slippage(bar.close, side, opening=False), "hit_tp"
+        if sl_pct is not None and move_against >= sl_pct:
+            return i, _apply_slippage(bar.close, side, opening=False), "hit_sl"
+
+    # No trigger inside the horizon — close at the horizon bar (or the
+    # last available bar if we ran out before reaching horizon).
+    close_idx = horizon_idx if horizon_idx <= last_idx else last_idx
+    close_bar = bars[close_idx]
+    reason = "hit_horizon" if close_idx == open_idx + horizon_bars else "end_of_window"
+    return close_idx, _apply_slippage(close_bar.close, side, opening=False), reason
 
 
 def _grid_lines(mid: Decimal, band_pct: Decimal, n_grids: int) -> list[Decimal]:
@@ -175,14 +233,15 @@ def grid_replay(
     slip = Decimal(slippage_bps) / Decimal("10000")
     bar_seconds = _infer_bar_seconds(bars)
     horizon_bars = max(1, (horizon_s + bar_seconds - 1) // bar_seconds)
+    tp_pct = params.get("tp_pct")
+    sl_pct = params.get("sl_pct")
+    tp_pct = Decimal(str(tp_pct)) if tp_pct is not None else None
+    sl_pct = Decimal(str(sl_pct)) if sl_pct is not None else None
 
     window: deque[Decimal] = deque(maxlen=ROLLING_WINDOW_BARS)
     notional = (starting_capital * max_position_pct).quantize(Decimal("0.01"))
 
     positions: list[BacktestPosition] = []
-    # open positions: list of (BacktestPosition, exit_bar_index)
-    open_q: list[tuple[BacktestPosition, int]] = []
-
     equity_curve: list[Decimal] = [starting_capital]
     realized = Decimal("0")
     n_predictions = 0
@@ -191,24 +250,7 @@ def grid_replay(
     for i, bar in enumerate(bars):
         close = Decimal(bar.close)
 
-        # ---- exits first (positions reaching their horizon this bar)
-        still_open: list[tuple[BacktestPosition, int]] = []
-        for pos, exit_idx in open_q:
-            if i >= exit_idx:
-                raw_exit = close
-                exit_px = raw_exit * (Decimal("1") - slip)  # long-only exit
-                pnl_pct = (exit_px - pos.opened_price) / pos.opened_price
-                pos.closed_ts = bar.ts
-                pos.closed_price = exit_px
-                pos.pnl_usd = (pos.notional_usd * pnl_pct).quantize(Decimal("0.000001"))
-                realized += pos.pnl_usd
-                positions.append(pos)
-                equity_curve.append(starting_capital + realized)
-            else:
-                still_open.append((pos, exit_idx))
-        open_q = still_open
-
-        # ---- entries: rolling-window grid crossover
+        # Rolling-window grid crossover — one entry per bar at most.
         if len(window) >= ROLLING_WINDOW_BARS and prev_close is not None:
             mid = sum(window, Decimal("0")) / Decimal(len(window))
             lines = _grid_lines(mid, band_pct, n_grids)
@@ -216,34 +258,28 @@ def grid_replay(
                 if prev_close > line >= close:
                     n_predictions += 1
                     entry_px = close * (Decimal("1") + slip)
-                    pos = BacktestPosition(
+                    close_idx, exit_px, reason = _simulate_exit(
+                        bars, i, "long", entry_px, horizon_bars,
+                        tp_pct=tp_pct, sl_pct=sl_pct,
+                    )
+                    pnl_pct = (exit_px - entry_px) / entry_px
+                    pnl = (notional * pnl_pct).quantize(Decimal("0.000001"))
+                    realized += pnl
+                    positions.append(BacktestPosition(
                         side="long",
                         opened_ts=bar.ts,
                         opened_price=entry_px,
-                        closed_ts=None,
-                        closed_price=None,
+                        closed_ts=bars[close_idx].ts,
+                        closed_price=exit_px,
                         notional_usd=notional,
-                        pnl_usd=Decimal("0"),
-                    )
-                    open_q.append((pos, i + horizon_bars))
+                        pnl_usd=pnl,
+                        close_reason=reason,
+                    ))
+                    equity_curve.append(starting_capital + realized)
                     break  # one entry per bar; avoid stacking on noisy ticks
 
         window.append(close)
         prev_close = close
-
-    # ---- force-close any still-open positions at the last bar
-    if open_q:
-        last_bar = bars[-1]
-        last_close = Decimal(last_bar.close)
-        for pos, _exit_idx in open_q:
-            exit_px = last_close * (Decimal("1") - slip)
-            pnl_pct = (exit_px - pos.opened_price) / pos.opened_price
-            pos.closed_ts = last_bar.ts
-            pos.closed_price = exit_px
-            pos.pnl_usd = (pos.notional_usd * pnl_pct).quantize(Decimal("0.000001"))
-            realized += pos.pnl_usd
-            positions.append(pos)
-            equity_curve.append(starting_capital + realized)
 
     # ---- stats
     n_closed = sum(1 for p in positions if p.closed_ts is not None)
