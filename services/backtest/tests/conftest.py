@@ -79,7 +79,7 @@ async def make_prediction():
         strategy_id: str = "test_strat",
         version: int = 1,
         asset_class: str = "crypto",
-        symbol: str = "BTCUSDT",
+        symbol: str = "TEST_BTCUSDT",
         side: str = "long",
         confidence: Decimal = Decimal("0.5"),
         horizon_seconds: int = 60,
@@ -117,15 +117,35 @@ async def make_prediction():
             await session.execute(delete(Prediction).where(Prediction.id.in_(created)))
 
 
+# Tests must NEVER seed market_trades for live symbols (BTCUSDT/ETHUSDT). The
+# live paper engine queries `_latest_price` per tick — if a test's $100-priced
+# row lands between the live engine reading and a real Bybit tick arriving,
+# the engine closes a real position at a fake price. We hit this once: a
+# BTCUSDT test row caused a $102,516 spurious "win" that took the wallet
+# from $9.5k to $112k before being reversed manually. Lesson encoded here.
+_TEST_SYMBOL_PREFIX = "TEST_"
+_LIVE_SYMBOLS = frozenset({"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"})
+
+
 @pytest_asyncio.fixture
 async def seed_recent_trades():
-    """Drop a fresh market trade per (symbol, exchange) so `_latest_price`
-    has something to mark out at. Trades are tagged with a session-unique
-    exchange-id prefix and cleaned up after."""
+    """Drop a fresh market trade so `_latest_price` has something to mark out
+    at. Tagged with a session-unique exchange-id prefix and cleaned up after.
+
+    REFUSES live symbols — see the comment above for why. Tests should pass
+    a TEST_xxx symbol; the paper_trade code under test doesn't care about
+    symbol semantics, only that prediction.symbol matches the seeded row."""
     tag = f"bt-test-{uuid.uuid4().hex[:8]}"
     inserted: list[str] = []
 
-    async def _seed(symbol: str = "BTCUSDT", price: Decimal = Decimal("100")) -> None:
+    async def _seed(
+        symbol: str = "TEST_BTCUSDT", price: Decimal = Decimal("100")
+    ) -> None:
+        if symbol in _LIVE_SYMBOLS:
+            raise ValueError(
+                f"seed_recent_trades refuses live symbol {symbol!r}; use "
+                f"a TEST_ prefixed symbol so the live paper engine ignores it."
+            )
         trade_id = f"{tag}-{symbol}-{datetime.now(timezone.utc).timestamp()}"
         async with local_session_scope() as session:
             session.add(
