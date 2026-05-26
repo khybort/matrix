@@ -1,0 +1,41 @@
+[project]
+name = "matrix-notify"
+version = "0.0.1"
+description = "Operator alerts + interactive command handler over Telegram."
+requires-python = ">=3.13"
+dependencies = [
+    "matrix-shared",
+    "loguru>=0.7.3",
+    "python-telegram-bot>=21.0",
+]
+
+[tool.uv.sources]
+matrix-shared = { path = "../../packages/python-shared", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/notify"]
+
+[project.scripts]
+matrix-notify = "notify.main:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+]
