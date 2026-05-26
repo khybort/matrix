@@ -37,6 +37,12 @@ class AgentLesson(Base, TimestampMixin):
     __tablename__ = "agent_lessons"
     __table_args__ = (
         Index("ix_agent_lessons_active", "strategy_id", "status", "pattern_kind"),
+        Index(
+            "ix_agent_lessons_strategy_market_status",
+            "strategy_id",
+            "asset_class",
+            "status",
+        ),
         Index("ix_agent_lessons_generated", "generated_at"),
         CheckConstraint(
             "verdict IN ('avoid', 'prefer', 'neutral')",
@@ -53,6 +59,9 @@ class AgentLesson(Base, TimestampMixin):
     )
     strategy_id: Mapped[str] = mapped_column(String(64), nullable=False)
     strategy_version: Mapped[int] = mapped_column(nullable=False)
+    asset_class: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="crypto"
+    )
     pattern_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     pattern_description: Mapped[str] = mapped_column(Text, nullable=False)
     pattern_filter: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

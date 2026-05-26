@@ -122,17 +122,29 @@ def matches(lesson: AgentLesson, features: Any, side: str | None) -> bool:
     return False
 
 
-async def active_lessons(strategy_id: str) -> list[AgentLesson]:
-    """All currently-active lessons for a strategy. Caller filters by side
-    or feature state via `matches()`."""
+async def active_lessons(
+    strategy_id: str,
+    *,
+    asset_class: str | None = None,
+) -> list[AgentLesson]:
+    """All currently-active lessons for a strategy.
+
+    When `asset_class` is given, filter to that market (Phase E parity):
+    crypto callers don't want BIST lessons informing their decisions and
+    vice versa. Pass `asset_class=None` only for diagnostics / dashboards
+    that want the full set.
+
+    Caller filters by side or feature state via `matches()`.
+    """
     async with shared_session_scope() as session:
-        rows = (
-            await session.execute(
-                select(AgentLesson)
-                .where(AgentLesson.strategy_id == strategy_id)
-                .where(AgentLesson.status == "active")
-            )
-        ).scalars().all()
+        stmt = (
+            select(AgentLesson)
+            .where(AgentLesson.strategy_id == strategy_id)
+            .where(AgentLesson.status == "active")
+        )
+        if asset_class is not None:
+            stmt = stmt.where(AgentLesson.asset_class == asset_class)
+        rows = (await session.execute(stmt)).scalars().all()
         # Detach from session so callers can read attributes after the
         # scope exits.
         for r in rows:
