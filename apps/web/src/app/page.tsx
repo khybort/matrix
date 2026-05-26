@@ -111,78 +111,186 @@ export default function Page() {
     return <div className="p-8 muted">Loading…</div>;
   }
 
+  const starting = Number(data.wallet.starting_capital_usd);
+  const latest = data.equityCurve.at(-1);
+  const equity = latest ? Number(latest.equity_usd) : Number(data.wallet.cash_usd) + Number(data.wallet.locked_usd);
+  const totalPct = ((equity - starting) / starting) * 100;
+  const circuitTripped = !!data.wallet.circuit_tripped_at;
+
   return (
-    <main className="p-6 max-w-[1400px] mx-auto">
-      <header className="flex items-baseline justify-between mb-6">
-        <h1 className="text-2xl font-medium">
-          <span className="accent">matrix</span> <span className="muted text-sm">/ trading agent dashboard</span>
+    <div className="min-h-screen flex">
+      <Sidebar
+        equity={equity}
+        totalPct={totalPct}
+        circuitTripped={circuitTripped}
+        now={data.now}
+      />
+      <main className="flex-1 min-w-0 px-6 lg:px-10 py-8 max-w-[1400px] mx-auto">
+        <Section id="overview" title="Overview">
+          <WalletCard wallet={data.wallet} curve={data.equityCurve} />
+        </Section>
+
+        <Section id="performance" title="Performance">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <Panel title="Strategy performance (24h)">
+              <StrategyTable rows={data.strategyAgg} />
+            </Panel>
+            <Panel title="Mutation proposals">
+              <ProposalsTable rows={data.mutationProposals} />
+            </Panel>
+          </div>
+          <Panel title="Live-execution gate — paper_trade_certificate" className="mt-4">
+            <CertificatesTable rows={data.certificates} />
+          </Panel>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+            <Panel title={`Open positions (${data.openPositions.length})`}>
+              <OpenPositionsTable rows={data.openPositions} />
+            </Panel>
+            <Panel title="Recent outcomes">
+              <OutcomesTable rows={data.recentOutcomes} />
+            </Panel>
+          </div>
+        </Section>
+
+        <Section id="learning" title="Learning">
+          <Panel title="Agent lessons — distilled from the engine's own decisions">
+            <AgentLessonsTable rows={data.agentLessons} />
+          </Panel>
+          <Panel title="Lab — evolutionary algorithm search" className="mt-4">
+            <LabPanel rows={data.labLeaderboard} stats={data.labStats} />
+          </Panel>
+        </Section>
+
+        <Section id="deploy" title="Deploy">
+          <Panel title="Strategy templates — starter configs">
+            <TemplatesPanel />
+          </Panel>
+          <Panel title="Strategy wizard — custom config" className="mt-4">
+            <WizardPanel />
+          </Panel>
+        </Section>
+
+        <Section id="markets" title="Markets">
+          <Panel title="BIST — paper-only equities (Yahoo delayed feed)">
+            <BistOverview bist={data.bist} />
+          </Panel>
+        </Section>
+
+        <Section id="graph" title="Graph">
+          <Panel title="Federated signals (per asset)">
+            <GraphSignalsPanel rows={data.graphSignals} stats={data.graphSignalsStats} />
+          </Panel>
+          <Panel title="Topology — nodes + typed edges" className="mt-4">
+            <GraphTopologyPanel topology={data.graphTopology} />
+          </Panel>
+        </Section>
+
+        <Section id="predictions" title="Predictions">
+          <Panel title="Recent predictions">
+            <PredictionsTable rows={data.recentPredictions} />
+          </Panel>
+        </Section>
+
+        <footer className="muted text-xs mt-12 text-center mono">
+          refreshing every {REFRESH_MS / 1000}s · local-only · {formatTime(new Date(data.now))}
+        </footer>
+      </main>
+    </div>
+  );
+}
+
+const NAV_SECTIONS = [
+  { id: "overview", label: "Overview" },
+  { id: "performance", label: "Performance" },
+  { id: "learning", label: "Learning" },
+  { id: "deploy", label: "Deploy" },
+  { id: "markets", label: "Markets" },
+  { id: "graph", label: "Graph" },
+  { id: "predictions", label: "Predictions" },
+] as const;
+
+function Sidebar({ equity, totalPct, circuitTripped, now }: {
+  equity: number; totalPct: number; circuitTripped: boolean; now: string;
+}) {
+  const [active, setActive] = useState<string>("overview");
+  useEffect(() => {
+    const obs = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        if (visible[0]) setActive(visible[0].target.id);
+      },
+      { rootMargin: "-20% 0px -60% 0px", threshold: [0, 0.25, 0.5, 1] }
+    );
+    NAV_SECTIONS.forEach((s) => {
+      const el = document.getElementById(s.id);
+      if (el) obs.observe(el);
+    });
+    return () => obs.disconnect();
+  }, []);
+
+  return (
+    <aside className="hidden md:flex flex-col w-56 shrink-0 border-r border-[var(--border)] bg-[var(--panel)] sticky top-0 h-screen p-5">
+      <div className="mb-6">
+        <h1 className="text-lg font-medium tracking-tight">
+          <span className="accent">matrix</span>
         </h1>
-        <span className="muted text-xs mono">{new Date(data.now).toLocaleTimeString()}</span>
-      </header>
-      <div className="muted text-xs mb-4">
-        Last refresh: {formatTime(new Date(data.now))}
+        <p className="muted text-xs mono mt-0.5">trading agent</p>
       </div>
 
-      <WalletCard wallet={data.wallet} curve={data.equityCurve} />
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
-        <Panel title="Strategy performance (24h)">
-          <StrategyTable rows={data.strategyAgg} />
-        </Panel>
-        <Panel title="Mutation proposals (self-improvement)">
-          <ProposalsTable rows={data.mutationProposals} />
-        </Panel>
+      <div className="mb-6 space-y-1">
+        <div className="muted text-[10px] uppercase tracking-widest">Equity</div>
+        <div className="mono text-base">{fmtUsd(equity)}</div>
+        <div className={`mono text-xs ${totalPct >= 0 ? "pos" : "neg"}`}>
+          {totalPct >= 0 ? "+" : ""}{totalPct.toFixed(3)}%
+        </div>
+        <div className="mt-2">
+          {circuitTripped ? (
+            <span className="neg mono text-[10px] uppercase tracking-widest">● circuit tripped</span>
+          ) : (
+            <span className="pos mono text-[10px] uppercase tracking-widest">● live</span>
+          )}
+        </div>
       </div>
 
-      <Panel title="Live-execution gate — paper_trade_certificate per active version" className="mt-4">
-        <CertificatesTable rows={data.certificates} />
-      </Panel>
+      <nav className="flex-1 space-y-1">
+        {NAV_SECTIONS.map((s) => {
+          const isActive = active === s.id;
+          return (
+            <a
+              key={s.id}
+              href={`#${s.id}`}
+              className={`block px-3 py-1.5 text-sm rounded-md border-l-2 transition-colors ${
+                isActive
+                  ? "border-[var(--accent)] text-[var(--foreground)] bg-black/30"
+                  : "border-transparent muted hover:text-[var(--foreground)] hover:bg-black/20"
+              }`}
+            >
+              {s.label}
+            </a>
+          );
+        })}
+      </nav>
 
-      <Panel title="Agent lessons — what the engine learned about its own decisions" className="mt-4">
-        <AgentLessonsTable rows={data.agentLessons} />
-      </Panel>
-
-      <Panel title="Strategy templates — deploy a starter config" className="mt-4">
-        <TemplatesPanel />
-      </Panel>
-
-      <Panel title="Strategy wizard — build a custom config" className="mt-4">
-        <WizardPanel />
-      </Panel>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
-        <Panel title={`Open positions (${data.openPositions.length})`}>
-          <OpenPositionsTable rows={data.openPositions} />
-        </Panel>
-        <Panel title="Recent outcomes">
-          <OutcomesTable rows={data.recentOutcomes} />
-        </Panel>
+      <div className="mt-auto pt-4 border-t border-[var(--border)]">
+        <div className="muted text-[10px] uppercase tracking-widest">Last refresh</div>
+        <div className="mono text-xs">{formatTime(new Date(now))}</div>
       </div>
+    </aside>
+  );
+}
 
-      <Panel title="BIST — paper-only equities universe (Yahoo delayed feed)" className="mt-4">
-        <BistOverview bist={data.bist} />
-      </Panel>
-
-      <Panel title="Lab — evolutionary algorithm search" className="mt-4">
-        <LabPanel rows={data.labLeaderboard} stats={data.labStats} />
-      </Panel>
-
-      <Panel title="Context graph — federated signals (per asset)" className="mt-4">
-        <GraphSignalsPanel rows={data.graphSignals} stats={data.graphSignalsStats} />
-      </Panel>
-
-      <Panel title="Context graph — topology (nodes + typed edges)" className="mt-4">
-        <GraphTopologyPanel topology={data.graphTopology} />
-      </Panel>
-
-      <Panel title="Recent predictions" className="mt-4">
-        <PredictionsTable rows={data.recentPredictions} />
-      </Panel>
-
-      <footer className="muted text-xs mt-8 text-center mono">
-        refreshing every {REFRESH_MS / 1000}s · local-only
-      </footer>
-    </main>
+function Section({ id, title, children }: {
+  id: string; title: string; children: React.ReactNode;
+}) {
+  return (
+    <section id={id} className="scroll-mt-6 mb-10">
+      <h2 className="text-xs muted uppercase tracking-widest mb-3 border-b border-[var(--border)] pb-2">
+        {title}
+      </h2>
+      {children}
+    </section>
   );
 }
 
