@@ -258,6 +258,19 @@ cert-scan: ## Scan active strategies; auto-grant paper_trade_certificate where e
 notify-tail: ## Follow the Telegram notify daemon logs (dry-run if token unset)
 	$(DC) $(DC_BASE) logs -f --tail=100 notify
 
+.PHONY: bulletin-once
+bulletin-once: ## Generate one bulletin draft (template/LLM); prints the slug
+	$(DC) $(DC_BASE) exec bulletin uv run python -m bulletin.main --once
+
+.PHONY: bulletin-list
+bulletin-list: ## List recent bulletin issues with status
+	$(DC) $(DC_BASE) exec bulletin uv run python -m bulletin.main --list
+
+.PHONY: bulletin-publish
+bulletin-publish: ## Publish a draft. Usage: make bulletin-publish SLUG=<slug>
+	@if [ -z "$(SLUG)" ]; then echo "Usage: make bulletin-publish SLUG=<slug>" && exit 1; fi
+	$(DC) $(DC_BASE) exec bulletin uv run python -m bulletin.main --publish $(SLUG)
+
 .PHONY: suggest
 suggest: ## AI param suggester. Args: STRATEGY (default grid) SYMBOL DAYS RISK SAMPLES TOP_K
 	$(DC) $(DC_BASE) exec backtest uv run matrix-backtest-suggester \

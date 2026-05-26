@@ -1,5 +1,6 @@
 from matrix_shared.models.base import Base, TimestampMixin
 from matrix_shared.models.bist_symbol import BistSymbol
+from matrix_shared.models.bulletin import BulletinIssue
 from matrix_shared.models.graph_signal import GraphSignal
 from matrix_shared.models.job import Job
 from matrix_shared.models.lab import LabEvaluation, LabExperiment
@@ -17,6 +18,7 @@ __all__ = [
     "Base",
     "TimestampMixin",
     "BistSymbol",
+    "BulletinIssue",
     "GraphSignal",
     "Job",
     "LabEvaluation",

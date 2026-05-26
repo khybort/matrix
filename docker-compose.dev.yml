@@ -103,6 +103,16 @@ services:
       - ./services/notify/src:/workspace/services/notify/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
+  bulletin:
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m bulletin.main"
+      - "/workspace/services/bulletin/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/bulletin/src:/workspace/services/bulletin/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
   backtest-api:
     entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
     command:
