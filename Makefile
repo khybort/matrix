@@ -10,7 +10,7 @@
 #   make migrate       # run alembic migrations
 #   make up-dev        # start everything in dev mode
 #   make logs          # follow all logs
-#   make dashboard     # open http://localhost:3030
+#   make dashboard     # open http://matrix.local
 
 DC          := docker compose
 DC_BASE     := -f docker-compose.yml
@@ -185,8 +185,8 @@ logs-labs: ## Follow only the labs service
 
 .PHONY: dashboard
 dashboard: ## Open the dashboard in your browser
-	@open http://localhost:3030 2>/dev/null || xdg-open http://localhost:3030 2>/dev/null || \
-		echo "Open http://localhost:3030 in your browser"
+	@open http://matrix.local 2>/dev/null || xdg-open http://matrix.local 2>/dev/null || \
+		echo "Open http://matrix.local in your browser"
 
 .PHONY: leaderboard
 leaderboard: ## Print lab leaderboard
@@ -253,6 +253,10 @@ bist-seed: ## One-shot: upsert the embedded BIST symbol universe into bist_symbo
 .PHONY: cert-scan
 cert-scan: ## Scan active strategies; auto-grant paper_trade_certificate where eligible
 	$(DC) $(DC_BASE) exec reflection uv run python -m reflection.main --scan-grants
+
+.PHONY: notify-tail
+notify-tail: ## Follow the Telegram notify daemon logs (dry-run if token unset)
+	$(DC) $(DC_BASE) logs -f --tail=100 notify
 
 .PHONY: suggest
 suggest: ## AI param suggester. Args: STRATEGY (default grid) SYMBOL DAYS RISK SAMPLES TOP_K
