@@ -12,7 +12,7 @@ from loguru import logger
 
 from matrix_shared import call_claude_json, llm_enabled as _llm_enabled
 
-DEFAULT_MODEL = "claude-haiku-4-5"
+DEFAULT_MODEL = "claude-sonnet-4-6"
 
 
 @dataclass(slots=True)

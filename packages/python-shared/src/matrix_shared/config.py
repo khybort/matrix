@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     # carries secrets. Unset = LLM call sites fall back to deterministic
     # rule/heuristic paths.
     anthropic_api_key: str | None = None
-    anthropic_model_default: str = "claude-haiku-4-5"
+    anthropic_model_default: str = "claude-sonnet-4-6"
     # Legacy field kept so existing settings.ai_gateway_api_key calls don't
     # crash; the Vercel AI Gateway abstraction is no longer used.
     ai_gateway_api_key: str | None = None

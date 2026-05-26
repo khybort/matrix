@@ -480,6 +480,7 @@ source = { editable = "../../packages/python-shared" }
 dependencies = [
     { name = "anyio" },
     { name = "asyncpg" },
+    { name = "claude-agent-sdk" },
     { name = "httpx" },
     { name = "loguru" },
     { name = "orjson" },
@@ -492,6 +493,7 @@ dependencies = [
 requires-dist = [
     { name = "anyio", specifier = ">=4.7.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
+    { name = "claude-agent-sdk", specifier = ">=0.0.10" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "orjson", specifier = ">=3.10.0" },
