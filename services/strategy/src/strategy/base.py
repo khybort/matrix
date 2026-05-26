@@ -30,11 +30,17 @@ class PredictionDraft:
 
 
 class Strategy(Protocol):
-    """A strategy module reads recent market state and emits 0..N PredictionDrafts."""
+    """A strategy module reads recent market state and emits 0..N PredictionDrafts.
+
+    `market` must match a registered `MarketAdapter.name` ("crypto", "bist", ...).
+    The strategy dispatcher only invokes a strategy when its market's session
+    is open, so modules can drop their own session gating.
+    """
 
     id: str
     version: int
     horizon_seconds: int
+    market: str  # "crypto" | "bist" | ...
 
     async def generate(self) -> Sequence[PredictionDraft]:
         ...

@@ -39,6 +39,7 @@ class OiDelta:
     id: str = STRATEGY_ID
     version: int = STRATEGY_VERSION
     horizon_seconds: int = HORIZON_S
+    market: str = "crypto"
 
     def __init__(self, symbols: Sequence[str] = DEFAULT_SYMBOLS) -> None:
         self.symbols = list(symbols)

@@ -18,7 +18,7 @@ from sqlalchemy import delete
 
 from matrix_shared import local_session_scope
 from matrix_shared.models import MarketTrade
-from strategy.modules.dca import CONFIDENCE, Dca
+from strategy.modules.crypto.dca import CONFIDENCE, Dca
 
 from tests.conftest import TEST_SYM
 

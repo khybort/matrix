@@ -47,6 +47,7 @@ class BistGapFade:
     id: str = STRATEGY_ID
     version: int = STRATEGY_VERSION
     horizon_seconds: int = HORIZON_S
+    market: str = "bist"
     asset_class: str = "bist"
 
     async def generate(self) -> list[PredictionDraft]:
