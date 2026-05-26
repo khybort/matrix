@@ -20,8 +20,11 @@ from typing import Any
 
 import asyncpg
 from loguru import logger
+from sqlalchemy import select
 
+from matrix_shared import shared_session_scope
 from matrix_shared.agent_lessons import active_lessons
+from matrix_shared.models import StrategyConfig
 
 # Lessons below this confidence don't trigger a task — too noisy.
 MIN_CONFIDENCE = Decimal("0.4")
@@ -132,12 +135,36 @@ async def _enqueue_task(pool: asyncpg.Pool, description: str) -> int:
     return row["id"]
 
 
+async def _strategy_is_active(strategy_id: str) -> bool:
+    """True iff at least one strategy_configs row is currently active.
+
+    Lessons for retired strategies are moot — no production code will ever
+    consume them — so feeding them to dev_agent would just burn cycles.
+    """
+    async with shared_session_scope() as session:
+        row = (
+            await session.execute(
+                select(StrategyConfig.id)
+                .where(StrategyConfig.strategy_id == strategy_id)
+                .where(StrategyConfig.status == "active")
+                .limit(1)
+            )
+        ).first()
+        return row is not None
+
+
 async def feed_once(strategy_id: str = "matrix_agent") -> dict[str, Any]:
     """One scan: returns {'enqueued_task_id': int|None, 'reason': str}.
 
     Idempotent — safe to call from any cadence loop. Internal rate limit
     + dedup do the right thing.
     """
+    if not await _strategy_is_active(strategy_id):
+        return {
+            "enqueued_task_id": None,
+            "reason": f"{strategy_id} has no active strategy_configs row — lessons moot",
+        }
+
     local_url = os.environ.get("LOCAL_DATABASE_URL")
     if not local_url:
         return {"enqueued_task_id": None, "reason": "LOCAL_DATABASE_URL not set"}
