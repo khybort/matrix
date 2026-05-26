@@ -271,6 +271,11 @@ bulletin-publish: ## Publish a draft. Usage: make bulletin-publish SLUG=<slug>
 	@if [ -z "$(SLUG)" ]; then echo "Usage: make bulletin-publish SLUG=<slug>" && exit 1; fi
 	$(DC) $(DC_BASE) exec bulletin uv run python -m bulletin.main --publish $(SLUG)
 
+.PHONY: diagnose-matrix-agent
+diagnose-matrix-agent: ## Horizon/threshold sweep + signal attribution for matrix_agent
+	$(DC) $(DC_BASE) exec backtest uv run matrix-backtest-diagnose \
+		--symbol=$${SYMBOL:-BTCUSDT} --days=$${DAYS:-7}
+
 .PHONY: suggest
 suggest: ## AI param suggester. Args: STRATEGY (default grid) SYMBOL DAYS RISK SAMPLES TOP_K
 	$(DC) $(DC_BASE) exec backtest uv run matrix-backtest-suggester \

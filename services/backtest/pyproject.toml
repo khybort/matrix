@@ -25,6 +25,7 @@ matrix-backtest = "backtest.main:main"
 matrix-backtest-historical = "backtest.historical:main"
 matrix-backtest-suggester = "backtest.suggester:main"
 matrix-backtest-api = "backtest.api:main"
+matrix-backtest-diagnose = "backtest.diagnose_matrix_agent:main"
 
 [tool.ruff]
 line-length = 100
