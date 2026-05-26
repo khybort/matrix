@@ -66,6 +66,26 @@ type Dashboard = {
   now: string;
 };
 
+type MarketsResp = {
+  markets: {
+    name: string;
+    assetClass: string;
+    sessionDescription: string;
+    allowsShort: boolean;
+    settlementDays: number;
+    liveExecutor: "wired" | "phase1-stub";
+    universeSize: number;
+    predictionsOpen: number;
+    predictions24h: number;
+    positionsOpen: number;
+    positionsClosed: number;
+    realizedPnlUsd: number;
+    walletCashUsd: number;
+    walletLockedUsd: number;
+    walletCount: number;
+  }[];
+};
+
 const REFRESH_MS = 5000;
 
 function formatTime(date: Date): string {
@@ -74,20 +94,26 @@ function formatTime(date: Date): string {
 
 export default function Page() {
   const [data, setData] = useState<Dashboard | null>(null);
+  const [markets, setMarkets] = useState<MarketsResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     async function tick() {
       try {
-        const res = await fetch("/api/dashboard", { cache: "no-store" });
-        const j = (await res.json()) as Dashboard;
+        const [dashRes, marketsRes] = await Promise.all([
+          fetch("/api/dashboard", { cache: "no-store" }),
+          fetch("/api/markets", { cache: "no-store" }),
+        ]);
+        const j = (await dashRes.json()) as Dashboard;
+        const m = (await marketsRes.json()) as MarketsResp;
         if (!alive) return;
         if (!j.ok) {
           setErr(String((j as any).error));
         } else {
           setErr(null);
           setData(j);
+          setMarkets(m);
         }
       } catch (e) {
         if (!alive) return;
@@ -171,7 +197,10 @@ export default function Page() {
         </Section>
 
         <Section id="markets" title="Markets">
-          <Panel title="BIST — paper-only equities (Yahoo delayed feed)">
+          <Panel title="Registered market adapters">
+            <MarketsOverview markets={markets?.markets ?? []} />
+          </Panel>
+          <Panel title="BIST — paper-only equities (Yahoo delayed feed)" className="mt-4">
             <BistOverview bist={data.bist} />
           </Panel>
         </Section>
@@ -419,6 +448,51 @@ function AssetClassBadge({ cls }: { cls?: string }) {
   );
 }
 
+function MarketsOverview({ markets }: { markets: MarketsResp["markets"] }) {
+  if (markets.length === 0) {
+    return <p className="muted text-sm">Loading market registry…</p>;
+  }
+  return (
+    <table className="matrix">
+      <thead>
+        <tr>
+          <th>Market</th>
+          <th>Session</th>
+          <th>Short?</th>
+          <th>Settle</th>
+          <th>Live exec</th>
+          <th>Universe</th>
+          <th>Preds 24h</th>
+          <th>Pos open</th>
+          <th>Realized PnL</th>
+        </tr>
+      </thead>
+      <tbody>
+        {markets.map((m) => (
+          <tr key={m.name}>
+            <td className="mono">{m.name}</td>
+            <td className="text-xs">{m.sessionDescription}</td>
+            <td>{m.allowsShort ? "yes" : "no"}</td>
+            <td>T+{m.settlementDays}</td>
+            <td className={m.liveExecutor === "wired" ? "pos" : "muted"}>
+              {m.liveExecutor}
+            </td>
+            <td>{m.universeSize}</td>
+            <td>
+              {m.predictions24h}
+              {m.predictionsOpen ? <span className="muted text-xs"> ({m.predictionsOpen} open)</span> : null}
+            </td>
+            <td>{m.positionsOpen}</td>
+            <td className={m.realizedPnlUsd >= 0 ? "pos" : "neg"}>
+              {fmtUsd(m.realizedPnlUsd)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function BistOverview({ bist }: { bist: Dashboard["bist"] }) {
   const active = Number(bist.symbols.active ?? 0);
   const inactive = Number(bist.symbols.inactive ?? 0);
@@ -441,7 +515,7 @@ function BistOverview({ bist }: { bist: Dashboard["bist"] }) {
         />
       </div>
       {bist.bars.length === 0 ? (
-        <p className="muted text-sm">No bars yet — run <code className="mono">make bist-seed</code> then <code className="mono">make bist-poll</code> (or just wait for bist-ingestion).</p>
+        <p className="muted text-sm">No bars yet — run <code className="mono">make bist-seed</code> then <code className="mono">make bist-poll</code> (or just wait for the unified ingestion container).</p>
       ) : (
         <table className="matrix">
           <thead><tr><th>Interval</th><th>Bars</th><th>Latest bar ts</th></tr></thead>

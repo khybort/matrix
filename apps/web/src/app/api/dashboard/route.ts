@@ -31,7 +31,23 @@ function toIntAgtype(v: unknown): number {
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export async function GET() {
+// Phase G: ?market=<asset_class> filters predictions / positions / outcomes
+// to one market. Omit (or pass "all") for the global view that the page
+// has shown historically. Unknown markets are treated as "no rows".
+function pickMarket(req: Request): string | null {
+  try {
+    const u = new URL(req.url);
+    const raw = (u.searchParams.get("market") ?? "").trim().toLowerCase();
+    if (!raw || raw === "all") return null;
+    if (raw === "crypto" || raw === "bist") return raw;
+    return raw; // pass through; the SQL filter just won't match
+  } catch {
+    return null;
+  }
+}
+
+export async function GET(req: Request) {
+  const market = pickMarket(req);
   try {
     const [walletRow] = await sql`
       SELECT id, name, starting_capital_usd, cash_usd, locked_usd,
@@ -59,22 +75,41 @@ export async function GET() {
       ORDER BY p.opened_at DESC
     `;
 
-    const recentPredictions = await sql`
-      SELECT id, strategy_id, strategy_version, symbol, asset_class, side,
-             confidence, generated_at, close_by, status, thesis
-      FROM predictions
-      ORDER BY generated_at DESC
-      LIMIT 25
-    `;
+    const recentPredictions = market
+      ? await sql`
+          SELECT id, strategy_id, strategy_version, symbol, asset_class, side,
+                 confidence, generated_at, close_by, status, thesis
+          FROM predictions
+          WHERE asset_class = ${market}
+          ORDER BY generated_at DESC
+          LIMIT 25
+        `
+      : await sql`
+          SELECT id, strategy_id, strategy_version, symbol, asset_class, side,
+                 confidence, generated_at, close_by, status, thesis
+          FROM predictions
+          ORDER BY generated_at DESC
+          LIMIT 25
+        `;
 
-    const recentOutcomes = await sql`
-      SELECT o.id, o.observed_at, o.pnl_usd, o.pnl_pct, o.score, o.reason,
-             p.strategy_id, p.strategy_version, p.symbol, p.asset_class, p.side
-      FROM outcomes o
-      JOIN predictions p ON p.id = o.prediction_id
-      ORDER BY o.observed_at DESC
-      LIMIT 25
-    `;
+    const recentOutcomes = market
+      ? await sql`
+          SELECT o.id, o.observed_at, o.pnl_usd, o.pnl_pct, o.score, o.reason,
+                 p.strategy_id, p.strategy_version, p.symbol, p.asset_class, p.side
+          FROM outcomes o
+          JOIN predictions p ON p.id = o.prediction_id
+          WHERE p.asset_class = ${market}
+          ORDER BY o.observed_at DESC
+          LIMIT 25
+        `
+      : await sql`
+          SELECT o.id, o.observed_at, o.pnl_usd, o.pnl_pct, o.score, o.reason,
+                 p.strategy_id, p.strategy_version, p.symbol, p.asset_class, p.side
+          FROM outcomes o
+          JOIN predictions p ON p.id = o.prediction_id
+          ORDER BY o.observed_at DESC
+          LIMIT 25
+        `;
 
     const strategyAgg = await sql`
       SELECT p.strategy_id, p.strategy_version, p.asset_class,
@@ -285,6 +320,7 @@ export async function GET() {
 
     return NextResponse.json({
       ok: true,
+      market: market ?? "all",
       wallet: walletRow,
       equityCurve: equityCurve.slice().reverse(),
       openPositions,
