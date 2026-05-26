@@ -1,0 +1,28 @@
+# Per-market risk caps consumed at wallet seed time.
+#
+# These are *defaults* for newly seeded wallets — the live source of truth
+# is the `wallets` table (max_position_pct, max_concurrent_positions,
+# daily_loss_circuit_pct, equity_trailing_stop_pct). Editing a wallet via
+# the dashboard or API does NOT roll back here; this file only governs the
+# initial values used by seed scripts and `dev-agent init`-style helpers.
+#
+# Per-market knobs reflect structural differences:
+#   - crypto: 24/7 venues + perpetuals tolerate tighter daily DD circuits
+#     because positions can be re-entered after a circuit cooldown
+#   - bist: long-only, T+2 settlement, 8h session — a single bad day
+#     compounds without a re-entry opportunity; looser DD, fewer
+#     concurrent positions, smaller per-position fraction
+
+crypto:
+  starting_capital_usd: 10000
+  max_position_pct: 0.02         # 2% notional per single trade
+  max_concurrent_positions: 5
+  daily_loss_circuit_pct: 0.05   # 5% intraday drawdown trips the circuit
+  equity_trailing_stop_pct: 0.10 # 10% peak-to-current trailing stop
+
+bist:
+  starting_capital_usd: 10000
+  max_position_pct: 0.05         # higher per-position (fewer concurrent slots)
+  max_concurrent_positions: 3
+  daily_loss_circuit_pct: 0.08   # T+2 settlement → wider DD tolerance
+  equity_trailing_stop_pct: 0.15

@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DECIMAL, DateTime, ForeignKey, Index, String
+from sqlalchemy import DECIMAL, DateTime, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,19 +19,33 @@ from matrix_shared.models.base import Base, TimestampMixin
 
 
 class Wallet(Base, TimestampMixin):
-    """A paper-trade capital pool with risk caps.
+    """A paper-trade capital pool with risk caps, scoped to one market.
 
     Invariant: equity = cash + sum(open_position_notional * mark_price_factor).
     For our simple model we keep `cash` as the realized balance and recompute
     equity on the fly from open positions' marked PnL.
+
+    Per-market separation (Phase C, migration 0017): every wallet belongs to
+    exactly one `asset_class` ("crypto", "bist", ...). Names are unique
+    *within* a market but may repeat across markets — e.g. a "default"
+    wallet on crypto + another "default" on BIST is permitted.
     """
 
     __tablename__ = "wallets"
+    __table_args__ = (
+        UniqueConstraint(
+            "name", "asset_class", name="wallets_name_asset_class_key"
+        ),
+        Index("ix_wallets_asset_class", "asset_class"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    name: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_class: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="crypto"
+    )
     starting_capital_usd: Mapped[Decimal] = mapped_column(
         DECIMAL(18, 4), nullable=False, default=Decimal("10000")
     )
