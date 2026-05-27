@@ -14,6 +14,7 @@ from matrix_shared.agent_runtime.guards import (
     UnsafeQueryError,
     ensure_read_only_cypher,
     ensure_read_only_sql,
+    referenced_tables,
 )
 
 ALLOWED = {"predictions", "outcomes", "wallets"}
@@ -84,6 +85,24 @@ def test_column_named_like_a_keyword_is_not_a_false_positive():
         "SELECT created_at, updated_at FROM predictions", ALLOWED
     )
     assert "limit" in out.lower()
+
+
+# ---- referenced_tables ----
+
+def test_referenced_tables_extracts_from_and_join():
+    assert referenced_tables(
+        "SELECT * FROM predictions p JOIN outcomes o ON o.prediction_id = p.id"
+    ) == {"predictions", "outcomes"}
+
+
+def test_referenced_tables_excludes_cte_names():
+    assert referenced_tables(
+        "WITH recent AS (SELECT * FROM predictions) SELECT * FROM recent"
+    ) == {"predictions"}
+
+
+def test_referenced_tables_strips_schema_qualifier():
+    assert referenced_tables("SELECT * FROM public.wallets") == {"wallets"}
 
 
 # ---- Cypher ----

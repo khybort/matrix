@@ -68,11 +68,11 @@ COPY services/${SERVICE}/src /workspace/services/${SERVICE}/src
 WORKDIR /workspace/services/${SERVICE}
 RUN uv sync --frozen
 
-# dev_agent additionally needs Node.js + the Claude Code CLI because
+# dev_agent and brain additionally need Node.js + the Claude Code CLI because
 # claude_agent_sdk (Python) spawns the `claude` binary as its transport.
-# Other services skip this step (no-op if SERVICE != dev_agent).
+# Other services skip this step (no-op for them).
 USER root
-RUN if [ "${SERVICE}" = "dev_agent" ]; then \
+RUN if [ "${SERVICE}" = "dev_agent" ] || [ "${SERVICE}" = "brain" ]; then \
         apt-get update && apt-get install -y --no-install-recommends \
             git \
         && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
