@@ -60,7 +60,9 @@ class Wallet(Base, TimestampMixin):
     max_position_pct: Mapped[Decimal] = mapped_column(
         DECIMAL(6, 4), nullable=False, default=Decimal("0.02")
     )  # 2% per single position by default
-    max_concurrent_positions: Mapped[int] = mapped_column(nullable=False, default=5)
+    # 15 (raised from 5) so the concurrency cap isn't the binding constraint
+    # during paper-trade learning — more open positions = more outcome samples.
+    max_concurrent_positions: Mapped[int] = mapped_column(nullable=False, default=15)
     daily_loss_circuit_pct: Mapped[Decimal] = mapped_column(
         DECIMAL(6, 4), nullable=False, default=Decimal("0.05")
     )  # 5% daily loss = circuit breaker
