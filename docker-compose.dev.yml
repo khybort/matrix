@@ -11,10 +11,14 @@
 
 services:
   # Python services — common pattern: mount src dirs + wrap CMD with watchfiles
+  # Unified ingestion (Phase F): one container fans out into every
+  # registered MarketAdapter's IngestorAdapter (crypto Bybit ws + BIST
+  # yfinance poller). Crypto symbols still passed explicitly for parity
+  # with the historical default; BIST universe comes from bist_symbols.
   ingestion-market:
     entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
     command:
-      - "python -m ingestion.main BTCUSDT ETHUSDT --mainnet"
+      - "python -m ingestion.main --markets crypto bist --mainnet"
       - "/workspace/services/ingestion/src"
       - "/workspace/packages/python-shared/src"
     volumes:

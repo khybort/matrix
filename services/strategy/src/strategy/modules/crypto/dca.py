@@ -23,13 +23,15 @@ from sqlalchemy import desc, select
 from matrix_shared import session_scope, shared_session_scope
 from matrix_shared.models import MarketTrade, Prediction
 
+from matrix_shared.markets.crypto import crypto_universe
+
 from strategy.base import PredictionDraft
 
 STRATEGY_ID = "dca"
 STRATEGY_VERSION = 1
 HORIZON_S = 3600  # 1h
 INTERVAL_MINUTES = 60
-DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT")
+DEFAULT_SYMBOLS = tuple(crypto_universe())
 CONFIDENCE = Decimal("0.30")
 
 

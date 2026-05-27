@@ -24,6 +24,8 @@ from sqlalchemy import desc, select
 from matrix_shared import session_scope
 from matrix_shared.models import MarketTrade, TickerSnapshot
 
+from matrix_shared.markets.crypto import crypto_universe
+
 from strategy.base import PredictionDraft
 
 STRATEGY_ID = "oi_delta"
@@ -32,7 +34,7 @@ LOOKBACK_S = 300  # 5min
 OI_JUMP_THRESHOLD = Decimal("0.015")  # 1.5% OI surge
 PRICE_CONFIRM_THRESHOLD = Decimal("0.0015")  # 0.15% same-direction price move
 HORIZON_S = 300
-DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT")
+DEFAULT_SYMBOLS = tuple(crypto_universe())
 
 
 class OiDelta:
