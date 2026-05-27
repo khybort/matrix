@@ -404,6 +404,35 @@ services:
     restart: unless-stopped
     logging: *default_logging
 
+  brain:
+    build:
+      <<: *python-build
+      target: runtime
+      args:
+        SERVICE: brain
+    image: matrix-brain:local
+    container_name: matrix-brain
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *python-env
+      # Read-only "ask anything" agent. Spawns the `claude` CLI via the SDK, so
+      # it runs on subscription auth (CLAUDE_CODE_OAUTH_TOKEN) like dev_agent.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      BRAIN_PORT: "3032"
+      BRAIN_MODEL: ${BRAIN_MODEL:-claude-opus-4-7}
+      BRAIN_MAX_TURNS: ${BRAIN_MAX_TURNS:-12}
+      AGENT_MAX_CONCURRENCY: ${AGENT_MAX_CONCURRENCY:-3}
+    expose:
+      - "3032"
+    labels:
+      dev.orbstack.domains: "brain.matrix.local"
+      dev.orbstack.http-port: "3032"
+    command: ["brain.main"]
+    restart: unless-stopped
+    logging: *default_logging
+
   web:
     build:
       context: .

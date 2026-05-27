@@ -183,6 +183,10 @@ logs-agent: ## Follow only the agent
 logs-labs: ## Follow only the labs service
 	$(DC) $(DC_BASE) logs -f --tail=200 labs
 
+.PHONY: logs-brain
+logs-brain: ## Follow only the brain (chat) service
+	$(DC) $(DC_BASE) logs -f --tail=200 brain
+
 .PHONY: dashboard
 dashboard: ## Open the dashboard in your browser
 	@open http://matrix.local 2>/dev/null || xdg-open http://matrix.local 2>/dev/null || \
@@ -341,6 +345,14 @@ dev-agent-clean: ## Apply worktree cleanup policy (manual; cron is intentionally
 .PHONY: dev-agent-test
 dev-agent-test: ## Run dev_agent test suite (excludes live/E2E)
 	cd services/dev_agent && uv run pytest -v -m "not live"
+
+.PHONY: brain-test
+brain-test: ## Run brain pure-logic test suite (host, no DB/SDK)
+	cd services/brain && uv run pytest -v
+
+.PHONY: shared-test
+shared-test: ## Run matrix-shared test suite (host)
+	cd packages/python-shared && uv run --no-sync pytest -v
 
 .PHONY: install-hooks
 install-hooks: ## Install git hooks (pre-push: blocks dev-agent/* branches)

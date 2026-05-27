@@ -51,6 +51,18 @@ def _has_word(haystack: str, word: str) -> bool:
     return re.search(rf"\b{re.escape(word)}\b", haystack, re.IGNORECASE) is not None
 
 
+def referenced_tables(sql: str) -> set[str]:
+    """Tables referenced via FROM/JOIN, schema-stripped and lowercased,
+    excluding names defined as CTEs in the same query."""
+    cte_names = {m.group(1).lower() for m in _CTE_DEF.finditer(sql)}
+    tables: set[str] = set()
+    for m in _TABLE_REF.finditer(sql):
+        name = m.group(1).split(".")[-1].strip('"').lower()
+        if name not in cte_names:
+            tables.add(name)
+    return tables
+
+
 def ensure_read_only_sql(
     sql: str,
     allowed_tables: set[str],
@@ -82,11 +94,7 @@ def ensure_read_only_sql(
         if _has_word(body, kw):
             raise UnsafeQueryError(f"forbidden keyword: {kw}")
 
-    cte_names = {m.group(1).lower() for m in _CTE_DEF.finditer(body)}
-    for m in _TABLE_REF.finditer(body):
-        table = m.group(1).split(".")[-1].strip('"').lower()
-        if table in cte_names:
-            continue
+    for table in referenced_tables(body):
         if table not in allowed_tables:
             raise UnsafeQueryError(f"table not in allow-list: {table}")
 

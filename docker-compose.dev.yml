@@ -189,6 +189,22 @@ services:
       - ./services/dev_agent/src:/workspace/services/dev_agent/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
+  brain:
+    # Dev safety: force the spawned `claude` CLI onto subscription auth.
+    environment:
+      ANTHROPIC_API_KEY: ""
+    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    command:
+      - "python -m brain.main"
+      - "/workspace/services/brain/src"
+      - "/workspace/packages/python-shared/src"
+    # Host port so the chat SSE endpoint can be curled directly during dev.
+    ports:
+      - "3032:3032"
+    volumes:
+      - ./services/brain/src:/workspace/services/brain/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
   web:
     build:
       target: dev
