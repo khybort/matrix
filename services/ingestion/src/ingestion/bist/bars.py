@@ -158,7 +158,7 @@ async def _upsert(rows: list[dict]) -> int:
     async with session_scope() as session:
         stmt = pg_insert(MarketBar).values(rows)
         stmt = stmt.on_conflict_do_nothing(
-            constraint="uq_market_bars_symbol_interval_ts"
+            constraint="uq_market_bars_class_sit"
         )
         result = await session.execute(stmt)
         return result.rowcount or 0
