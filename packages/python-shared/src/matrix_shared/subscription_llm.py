@@ -12,6 +12,8 @@ from the operator's standpoint; the new bottleneck is rate limits.
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any
 
 import orjson
 from loguru import logger
@@ -110,3 +112,56 @@ async def call_subscription_json(
         logger.warning(f"subscription_llm: response not valid JSON: {text[:200]}")
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+async def call_subscription_agent(
+    *,
+    prompt: str,
+    system: str | None = None,
+    model: str | None = None,
+    mcp_servers: dict[str, Any] | None = None,
+    allowed_tools: list[str] | None = None,
+    disallowed_tools: list[str] | None = None,
+    can_use_tool: Callable[[str, dict], bool | Awaitable[bool]] | None = None,
+    max_turns: int = 12,
+    session_id: str = "agent",
+    limiter: Any | None = None,
+) -> AsyncIterator[Any]:
+    """Run a multi-step SDK tool loop on the subscription path; yield AgentEvents.
+
+    Unlike call_subscription (single-shot, no tools), this exposes the SDK's
+    native tool loop via in-process MCP servers — still authenticated by
+    CLAUDE_CODE_OAUTH_TOKEN, no raw Anthropic API. Yields nothing when the
+    subscription is not configured (caller falls back to a deterministic path).
+    """
+    if not subscription_enabled():
+        return
+
+    try:
+        from claude_agent_sdk import ClaudeAgentOptions, query
+    except ImportError as e:
+        logger.warning(f"claude_agent_sdk import failed: {e}")
+        return
+
+    from matrix_shared.agent_runtime.runtime import run_agent_stream
+
+    options = ClaudeAgentOptions(
+        system_prompt=system or "",
+        model=model or DEFAULT_MODEL,
+        permission_mode="acceptEdits",
+        mcp_servers=mcp_servers or {},
+        allowed_tools=allowed_tools or [],
+        disallowed_tools=disallowed_tools or [],
+        setting_sources=[],
+    )
+
+    async for ev in run_agent_stream(
+        prompt=prompt,
+        query_fn=query,
+        options=options,
+        can_use_tool=can_use_tool,
+        max_turns=max_turns,
+        session_id=session_id,
+        limiter=limiter,
+    ):
+        yield ev
