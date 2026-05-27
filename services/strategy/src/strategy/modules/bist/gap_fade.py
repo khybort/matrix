@@ -19,12 +19,14 @@ Horizon: 30min (intraday mean reversion).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from loguru import logger
+from sqlalchemy import select
 
-from matrix_shared import session_scope
+from matrix_shared import session_scope, shared_session_scope
+from matrix_shared.models import Prediction
 
 from strategy.base import PredictionDraft
 from strategy.modules.bist._helpers import (
@@ -41,6 +43,12 @@ STRATEGY_VERSION = 1
 GAP_THRESHOLD = Decimal("0.015")  # 1.5%
 GAP_CAP = Decimal("0.05")  # 5% gap → confidence 1.0
 HORIZON_S = 1800  # 30min
+# The opening gap is a once-per-day, slow-moving signal — its value barely
+# moves intraday. Without dedup the 30s generator loop re-emits the same
+# ~28 signals every tick (~960 rows/symbol/session). Suppress re-emission
+# within one horizon window: at most one open prediction per symbol+side
+# at a time, re-evaluated after the outcome window closes.
+DEDUP_WINDOW_S = HORIZON_S
 
 
 class BistGapFade:
@@ -79,6 +87,23 @@ class BistGapFade:
                 # Long-only: only act on gap-down (expect bounce). Gap-up is logged
                 # but emitted as `flat` so the agent never tries to short BIST.
                 side = "long" if gap < 0 else "flat"
+
+                # Dedup against SHARED predictions within DEDUP_WINDOW_S so the
+                # static opening gap isn't re-written every 30s tick.
+                dedup_since = now - timedelta(seconds=DEDUP_WINDOW_S)
+                async with shared_session_scope() as shared:
+                    dup = (
+                        await shared.execute(
+                            select(Prediction.id)
+                            .where(Prediction.strategy_id == STRATEGY_ID)
+                            .where(Prediction.symbol == symbol)
+                            .where(Prediction.side == side)
+                            .where(Prediction.generated_at >= dedup_since)
+                            .limit(1)
+                        )
+                    ).first()
+                if dup is not None:
+                    continue
 
                 drafts.append(
                     PredictionDraft(
