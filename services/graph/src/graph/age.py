@@ -162,6 +162,13 @@ async def graph_summary() -> dict[str, int]:
         "Event": "MATCH (e:Event) RETURN count(e)",
         "Concept": "MATCH (c:Concept) RETURN count(c)",
         "MENTIONS": "MATCH ()-[r:MENTIONS]->() RETURN count(r)",
+        # Context-graph overlay (reasoning episodes — see overlay.py).
+        "Prediction": "MATCH (p:Prediction) RETURN count(p)",
+        "Outcome": "MATCH (o:Outcome) RETURN count(o)",
+        "Lesson": "MATCH (l:Lesson) RETURN count(l)",
+        "Strategy": "MATCH (s:Strategy) RETURN count(s)",
+        "PREDICTS": "MATCH ()-[r:PREDICTS]->() RETURN count(r)",
+        "RESULTED_IN": "MATCH ()-[r:RESULTED_IN]->() RETURN count(r)",
     }
     out: dict[str, int] = {}
     for label, cypher_q in queries.items():
