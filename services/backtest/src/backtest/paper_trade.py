@@ -21,6 +21,7 @@ from loguru import logger
 from sqlalchemy import func, select, text
 
 from matrix_shared import local_session_scope, shared_session_scope
+from matrix_shared.markets import all_markets
 from matrix_shared.models import (
     MarketBar,
     MarketTrade,
@@ -31,7 +32,25 @@ from matrix_shared.models import (
     WalletSnapshot,
 )
 
+# Crypto's seed wallet (migration 0004). Per-market wallets are resolved by
+# asset_class via _resolve_wallet; this constant remains the crypto default
+# so the historical row keeps working.
 DEFAULT_WALLET_ID = uuid.UUID("00000000-0000-0000-0000-00000000d0e1")
+
+
+async def _resolve_wallet(session, asset_class: str) -> Wallet | None:
+    """The default wallet for a market. Each asset_class has its own capital
+    pool + concurrent-position slots, so a flood of signals in one market
+    can't starve another (Phase 1 fix: BIST gap_fade was filling the shared
+    5-slot pool and crowding crypto out of the candidate queue)."""
+    return (
+        await session.execute(
+            select(Wallet)
+            .where(Wallet.asset_class == asset_class)
+            .order_by(Wallet.created_at.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
 FRESHNESS_S = 60                       # crypto: ticks every few seconds
 FRESHNESS_S_BARS = 60 * 30             # BIST 1m bars + 15min Yahoo delay window
 SLIPPAGE_BPS = Decimal("2")
@@ -157,11 +176,21 @@ async def _current_equity(session, wallet: Wallet) -> tuple[Decimal, Decimal, in
 
 
 async def snapshot_wallet() -> None:
-    """Write a WalletSnapshot for the default wallet; handle circuit breaker."""
+    """Write a WalletSnapshot for every market's wallet; handle circuit breaker
+    per wallet (one market tripping its daily-loss circuit must not freeze
+    the others)."""
     async with shared_session_scope() as session:
-        wallet = await session.get(Wallet, DEFAULT_WALLET_ID)
+        wallets = list(
+            (await session.execute(select(Wallet))).scalars()
+        )
+    for w in wallets:
+        await _snapshot_one(w.id)
+
+
+async def _snapshot_one(wallet_id: uuid.UUID) -> None:
+    async with shared_session_scope() as session:
+        wallet = await session.get(Wallet, wallet_id)
         if wallet is None:
-            logger.warning("default wallet not found, cannot snapshot")
             return
 
         equity, unrealized, n_open = await _current_equity(session, wallet)
@@ -229,16 +258,30 @@ async def expire_stale_predictions() -> int:
 
 
 async def open_due_positions() -> int:
-    """Open positions for predictions that have none yet, respecting risk caps.
+    """Open positions per market — each asset_class has its own wallet +
+    concurrent-position slots, so one market's signal flood can't starve
+    another's candidate queue."""
+    total = 0
+    for market in all_markets():
+        total += await _open_for_market(market.asset_class)
+    return total
+
+
+async def _open_for_market(asset_class: str) -> int:
+    """Open positions for one market's predictions, respecting that market's
+    own wallet caps. Candidate selection is filtered by asset_class so the
+    per-market slot budget is independent.
 
     All wallet/prediction state lives in SHARED; entry pricing is read from
-    the LOCAL tier's market_trades."""
+    the LOCAL tier's market_trades / market_bars."""
     async with shared_session_scope() as session:
-        wallet = await session.get(Wallet, DEFAULT_WALLET_ID)
+        wallet = await _resolve_wallet(session, asset_class)
         if wallet is None:
+            # No wallet seeded for this market yet — skip silently. (BIST
+            # gets one via `make bist-wallet-seed` / the 0019 data migration.)
             return 0
         if wallet.circuit_tripped_at is not None:
-            logger.debug("circuit tripped; opening blocked")
+            logger.debug(f"circuit tripped ({asset_class}); opening blocked")
             return 0
 
         open_count_stmt = (
@@ -266,6 +309,7 @@ async def open_due_positions() -> int:
             .outerjoin(PaperPosition, PaperPosition.prediction_id == Prediction.id)
             .where(PaperPosition.id.is_(None))
             .where(Prediction.status == "open")
+            .where(Prediction.asset_class == asset_class)
             .where(Prediction.side.in_(["long", "short"]))
             .where(Prediction.close_by > now)
             .order_by(Prediction.generated_at.asc())
@@ -295,7 +339,7 @@ async def open_due_positions() -> int:
         notional = notional.quantize(Decimal("0.01"))
 
         async with shared_session_scope() as session:
-            wallet = await session.get(Wallet, DEFAULT_WALLET_ID)
+            wallet = await _resolve_wallet(session, p.asset_class)
             if wallet is None:
                 continue
             if wallet.circuit_tripped_at is not None:
