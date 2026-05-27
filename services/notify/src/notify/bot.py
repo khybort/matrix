@@ -15,8 +15,14 @@ import os
 
 from loguru import logger
 from telegram import Update
-from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.constants import ChatAction, ParseMode
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from notify.alerts import (
     ALERT_INFO,
@@ -27,6 +33,7 @@ from notify.alerts import (
     format_status,
     format_strategies,
 )
+from notify.brain_client import ask_brain
 from notify.state import (
     get_active_strategies,
     get_default_wallet,
@@ -123,6 +130,26 @@ async def cmd_help(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def cmd_ask(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Route free-text (non-command) messages to the read-only Brain.
+
+    Unauthorized chats are silently ignored (same policy as commands). The
+    Telegram chat id is the Brain session's external_ref, so each chat is a
+    continuous multi-turn conversation.
+    """
+    if not _authorized(update, get_allowed_chat_ids()):
+        return
+    chat = update.effective_chat
+    question = (update.message.text or "").strip()
+    if not question:
+        return
+    await _ctx.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
+    answer = await ask_brain(question, external_ref=str(chat.id))
+    # Brain answers are plain text; send without Markdown parsing so stray
+    # underscores/asterisks in data don't trip Telegram's parser.
+    await update.message.reply_text(answer, disable_web_page_preview=True)
+
+
 # ----------------------------------------------------------------- builder
 
 
@@ -133,6 +160,8 @@ def build_application(token: str) -> Application:
     app.add_handler(CommandHandler("strategies", cmd_strategies))
     app.add_handler(CommandHandler("circuit", cmd_circuit))
     app.add_handler(CommandHandler("help", cmd_help))
+    # Any non-command text becomes a question for the Brain.
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cmd_ask))
     return app
 
 

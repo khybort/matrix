@@ -35,6 +35,12 @@ def test_sse_frame_passes_string_through():
     assert sse_frame("token", "hello") == "event: token\ndata: hello\n\n"
 
 
+def test_sse_frame_splits_multiline_string_into_data_lines():
+    # SSE requires one data: line per line of payload; a multi-line token
+    # (assistant text can contain newlines) must not break the framing.
+    assert sse_frame("token", "a\nb") == "event: token\ndata: a\ndata: b\n\n"
+
+
 # ---- history formatting ----
 
 def test_format_history_appends_current_user_turn():
