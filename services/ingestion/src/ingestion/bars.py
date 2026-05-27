@@ -68,7 +68,7 @@ FROM market_trades
 WHERE trade_ts >= :since
   AND trade_ts <  :until
 GROUP BY symbol, exchange, date_trunc('minute', trade_ts)
-ON CONFLICT (symbol, interval, ts) DO UPDATE
+ON CONFLICT (asset_class, symbol, interval, ts) DO UPDATE
   SET open   = EXCLUDED.open,
       high   = EXCLUDED.high,
       low    = EXCLUDED.low,
@@ -164,7 +164,7 @@ async def rest_backfill_symbol(
             # (those have tick-level fidelity; kline is the 1m candle Bybit
             # publishes from its own aggregation, slightly less precise).
             stmt = stmt.on_conflict_do_nothing(
-                constraint="uq_market_bars_symbol_interval_ts"
+                constraint="uq_market_bars_class_sit"
             )
             await session.execute(stmt)
         total += len(values)
