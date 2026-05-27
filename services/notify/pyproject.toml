@@ -7,6 +7,8 @@ dependencies = [
     "matrix-shared",
     "loguru>=0.7.3",
     "python-telegram-bot>=21.0",
+    "httpx>=0.28.0",
+    "orjson>=3.10.0",
 ]
 
 [tool.uv.sources]
