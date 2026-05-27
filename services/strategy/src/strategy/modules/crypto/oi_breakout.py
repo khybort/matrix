@@ -31,6 +31,8 @@ from sqlalchemy import desc, select
 from matrix_shared import session_scope
 from matrix_shared.models import MarketTrade, TickerSnapshot
 
+from matrix_shared.markets.crypto import crypto_universe
+
 from strategy.base import PredictionDraft
 
 STRATEGY_ID = "oi_breakout"
@@ -41,7 +43,7 @@ OI_CAP = Decimal("0.05")  # 5% surge → confidence ceiling
 CONFIDENCE_CEILING = Decimal("0.50")  # cap until evidence supports more
 PRICE_DRIFT_TIE_BREAKER = Decimal("0.0005")  # 0.05% — direction nudge only
 HORIZON_S = 1800  # 30-min hold matches the diagnostic's positive bucket
-DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT")
+DEFAULT_SYMBOLS = tuple(crypto_universe())
 
 
 class OiBreakout:

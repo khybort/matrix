@@ -23,14 +23,42 @@ from .registry import register
 # Suffixes that unambiguously mark a symbol as crypto-quoted.
 _QUOTE_SUFFIXES: tuple[str, ...] = ("USDT", "USDC", "USD", "BUSD", "FDUSD")
 
-# Fallback universe when CRYPTO_SYMBOLS env is unset.
+# Fallback universe when CRYPTO_SYMBOLS env is unset. The 15 most liquid
+# Bybit USDT perpetuals — broad enough that mean-reversion / OI strategies
+# have real alpha surface (the old 2-symbol BTC+ETH set was the single
+# biggest reason "new coins aren't analyzed"), liquid enough that paper
+# fills stay realistic. Override per-deployment via CRYPTO_SYMBOLS.
 _DEFAULT_UNIVERSE: tuple[str, ...] = (
     "BTCUSDT",
     "ETHUSDT",
     "SOLUSDT",
     "BNBUSDT",
     "XRPUSDT",
+    "DOGEUSDT",
+    "ADAUSDT",
+    "AVAXUSDT",
+    "LINKUSDT",
+    "DOTUSDT",
+    "TRXUSDT",
+    "NEARUSDT",
+    "APTUSDT",
+    "ARBUSDT",
+    "SUIUSDT",
 )
+
+
+def crypto_universe() -> list[str]:
+    """Single source of truth for the crypto symbol set.
+
+    Reads CRYPTO_SYMBOLS (comma-separated) if set, else the default 15.
+    Used by ingestion, every crypto strategy module, the agent, and
+    CryptoMarket.universe() so the tradable set is defined in exactly one
+    place — no more per-module DEFAULT_SYMBOLS drift.
+    """
+    env = os.environ.get("CRYPTO_SYMBOLS", "").strip()
+    if env:
+        return [s.strip().upper() for s in env.split(",") if s.strip()]
+    return list(_DEFAULT_UNIVERSE)
 
 
 class CryptoMarket(MarketAdapter):
@@ -38,10 +66,7 @@ class CryptoMarket(MarketAdapter):
     asset_class: ClassVar[str] = "crypto"
 
     async def universe(self, db: AsyncSession) -> list[str]:  # noqa: ARG002
-        env = os.environ.get("CRYPTO_SYMBOLS", "").strip()
-        if env:
-            return [s.strip().upper() for s in env.split(",") if s.strip()]
-        return list(_DEFAULT_UNIVERSE)
+        return crypto_universe()
 
     def claims_symbol(self, symbol: str) -> bool:
         s = symbol.upper()

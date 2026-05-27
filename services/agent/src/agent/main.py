@@ -37,7 +37,6 @@ from agent.features import extract_symbol_features
 AGENT_STRATEGY_ID = "matrix_agent"
 
 DEFAULT_INTERVAL_S = 15.0
-DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 
 
 def _exchange_for(asset_class: str) -> str:
@@ -171,7 +170,10 @@ async def run(symbols: list[str], interval_s: float) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Matrix decision agent")
-    parser.add_argument("--symbols", nargs="*", default=DEFAULT_SYMBOLS)
+    # Default empty → _resolve_targets falls back to the crypto market's
+    # universe (matrix_shared.markets.crypto.crypto_universe), the single
+    # source of truth. Pass --symbols to override for a focused run.
+    parser.add_argument("--symbols", nargs="*", default=[])
     parser.add_argument(
         "--interval",
         type=float,

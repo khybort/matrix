@@ -32,6 +32,8 @@ from sqlalchemy import desc, select
 from matrix_shared import session_scope, shared_session_scope
 from matrix_shared.models import MarketBar, MarketTrade, Prediction
 
+from matrix_shared.markets.crypto import crypto_universe
+
 from strategy.base import PredictionDraft
 
 STRATEGY_ID = "grid"
@@ -42,7 +44,7 @@ DEDUP_WINDOW_S = 600  # 10min
 LOOKBACK_S = 60  # look at last 60s of bars to detect a fresh cross
 BAND_LOOKBACK_S = 24 * 3600  # 24h to size the band
 DEFAULT_PRICE_BAND_PCT = Decimal("0.02")  # ±2% around the 24h median
-DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT")
+DEFAULT_SYMBOLS = tuple(crypto_universe())
 
 
 def _linspace(low: Decimal, high: Decimal, n: int) -> list[Decimal]:

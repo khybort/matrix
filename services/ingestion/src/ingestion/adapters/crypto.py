@@ -7,18 +7,17 @@ import os
 from loguru import logger
 
 from matrix_shared.markets import IngestorAdapter
+from matrix_shared.markets.crypto import crypto_universe
 
 from ingestion.connectors.bybit import BybitConnector
 from ingestion.persist import persist_events
 
 
 def _default_symbols() -> list[str]:
-    env = os.environ.get("CRYPTO_SYMBOLS", "").strip()
-    if env:
-        return [s.strip().upper() for s in env.split(",") if s.strip()]
-    # Match the historical ingestion.main default — single-symbol smoke
-    # is the most common dev path.
-    return ["BTCUSDT"]
+    # Single source of truth — same set the strategies / agent trade, so we
+    # never stream a symbol nothing analyzes or analyze a symbol we don't
+    # stream. Override via CRYPTO_SYMBOLS.
+    return crypto_universe()
 
 
 class CryptoIngestor(IngestorAdapter):
