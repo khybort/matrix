@@ -32,7 +32,7 @@ from decimal import Decimal
 from typing import Any
 
 from loguru import logger
-from sqlalchemy import and_, desc, exists, select
+from sqlalchemy import and_, desc, exists, func, select
 
 from matrix_shared import shared_session_scope
 from matrix_shared.models import LabExperiment, MutationProposal, StrategyConfig
@@ -236,10 +236,24 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
         for cfg in (await session.execute(cur_stmt)).scalars():
             cfg.status = "retired"
 
+        # `to_version` is computed when the proposal is created and can go
+        # stale if other promotions land first (the version it targets may
+        # already exist, retired) — inserting it would hit
+        # uq_strategy_configs_id_ver and silently fail the apply. Compute the
+        # real next version at apply time.
+        max_v = (
+            await session.execute(
+                select(func.max(StrategyConfig.version))
+                .where(StrategyConfig.strategy_id == proposal.strategy_id)
+                .where(StrategyConfig.asset_class == proposal.asset_class)
+            )
+        ).scalar() or 0
+        new_version = max(proposal.to_version, max_v + 1)
+
         new_cfg = StrategyConfig(
             strategy_id=proposal.strategy_id,
             asset_class=proposal.asset_class,
-            version=proposal.to_version,
+            version=new_version,
             status="active",
             params=scrubbed,
             rationale=proposal.rationale,
