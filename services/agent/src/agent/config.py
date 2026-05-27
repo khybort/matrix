@@ -15,10 +15,9 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from loguru import logger
-from sqlalchemy import select
-
 from matrix_shared import shared_session_scope
 from matrix_shared.models import StrategyConfig
+from sqlalchemy import select
 
 CACHE_TTL_S = 10.0  # tick interval is ~15s, so this triggers fresh read each tick
 
@@ -29,6 +28,9 @@ class AgentConfig:
     weights: dict[str, Decimal]
     signal_threshold: Decimal
     horizon_seconds: int
+    # Epsilon-greedy exploration rate (paper-trade only): fraction of holds
+    # converted to low-confidence exploratory trades to feed the learning loop.
+    explore_epsilon: float = 0.15
     # True when no active strategy_configs row exists for this (strategy_id,
     # asset_class). Callers should treat this as "strategy retired — skip
     # emitting predictions." The fallback is a bootstrap aid, not a
@@ -50,6 +52,7 @@ FALLBACK = AgentConfig(
     },
     signal_threshold=Decimal("0.18"),
     horizon_seconds=120,
+    explore_epsilon=0.15,
     is_fallback=True,
 )
 
@@ -100,6 +103,7 @@ async def load_agent_config(
         weights=weights,
         signal_threshold=Decimal(str(params.get("signal_threshold", "0.18"))),
         horizon_seconds=int(params.get("horizon_seconds", 120)),
+        explore_epsilon=float(params.get("explore_epsilon", 0.15)),
     )
     _cache[key] = (now, cfg)
     return cfg

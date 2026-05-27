@@ -9,15 +9,16 @@ adds context-aware reasoning when AI_GATEWAY_API_KEY is configured.
 
 from __future__ import annotations
 
+import random
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
 from loguru import logger
-
 from matrix_shared.agent_lessons import lessons_relevant_to
 
-from agent.config import AgentConfig, FALLBACK
+from agent.config import FALLBACK, AgentConfig
 from agent.features import SymbolFeatures
 from agent.llm import call_llm_decision, llm_enabled
 
@@ -31,6 +32,13 @@ LESSON_CONFIDENCE_GATE = Decimal("0.4")
 # the current AgentConfig from DB and passes it explicitly.
 WEIGHTS: dict[str, Decimal] = dict(FALLBACK.weights)
 RULE_SIGNAL_THRESHOLD = FALLBACK.signal_threshold
+
+# Epsilon-greedy exploration: probability of taking a paper trade the
+# signal_threshold would otherwise skip, to feed the learning loop more
+# samples (esp. in regions the exploit policy avoids). Tagged is_exploration
+# so outcomes are identifiable. Paper-only — never relaxes the live gate.
+EXPLORE_EPSILON_DEFAULT = float(FALLBACK.explore_epsilon)
+EXPLORE_CONFIDENCE = Decimal("0.05")
 
 
 @dataclass(slots=True)
@@ -259,11 +267,52 @@ def _llm_prompt(f: SymbolFeatures) -> str:
     return "\n".join(parts)
 
 
+def maybe_explore(
+    d: Decision,
+    *,
+    epsilon: float,
+    roll: float,
+    asset_class: str = "crypto",
+    explore_conf: Decimal = EXPLORE_CONFIDENCE,
+) -> Decision:
+    """With probability epsilon, flip a `hold` into a low-confidence trade.
+
+    Direction follows the sub-threshold signal lean (feature_dump['total']).
+    BIST is long-only, so a negative lean stays hold. Non-hold decisions are
+    returned untouched. The result is tagged is_exploration and still passes
+    through the lessons gate downstream (so `avoid` can veto it).
+    """
+    if d.side != "hold" or roll >= epsilon:
+        return d
+    try:
+        total = Decimal(str(d.feature_dump.get("total", "0")))
+    except (ArithmeticError, ValueError):
+        total = Decimal("0")
+    if total > 0:
+        side = "long"
+    elif total < 0:
+        side = "short"
+    else:
+        side = "long"  # no lean → pick a direction to gather a sample
+    if asset_class == "bist" and side == "short":
+        return d  # long-only market: don't explore shorts
+    return Decision(
+        symbol=d.symbol,
+        side=side,
+        confidence=explore_conf,
+        thesis=f"EXPLORE (ε) lean={total:.3f} | {d.thesis}"[:1000],
+        method=f"{d.method}+explore",
+        feature_dump={**d.feature_dump, "is_exploration": True},
+        last_price=d.last_price,
+    )
+
+
 async def decide(
     f: SymbolFeatures,
     cfg: AgentConfig | None = None,
     asset_class: str = "crypto",
     strategy_id: str = "matrix_agent",
+    explore_rand: Callable[[], float] = random.random,
 ) -> Decision:
     """Top-level decision: rule-based by default; LLM if enabled.
 
@@ -297,6 +346,11 @@ async def decide(
             base = rule
     else:
         base = rule
+
+    epsilon = float(cfg.explore_epsilon) if cfg is not None else EXPLORE_EPSILON_DEFAULT
+    base = maybe_explore(
+        base, epsilon=epsilon, roll=explore_rand(), asset_class=asset_class
+    )
 
     return await _apply_lessons(base, f, strategy_id)
 
