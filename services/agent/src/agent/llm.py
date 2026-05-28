@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from loguru import logger
+from matrix_shared import call_claude_json
+from matrix_shared import llm_enabled as _llm_enabled
+from matrix_shared.subscription_llm import MODEL_SONNET
 
-from matrix_shared import call_claude_json, llm_enabled as _llm_enabled
-
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = MODEL_SONNET
 
 
 @dataclass(slots=True)

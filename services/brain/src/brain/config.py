@@ -6,6 +6,13 @@ import os
 from dataclasses import dataclass
 
 
+def _default_sonnet() -> str:
+    """Late binding so the env-resolved MATRIX_MODEL_SONNET is read at
+    `load_config()` time, not at import time."""
+    from matrix_shared.subscription_llm import MODEL_SONNET
+    return MODEL_SONNET
+
+
 @dataclass(frozen=True)
 class Config:
     local_database_url: str
@@ -24,11 +31,13 @@ def load_config() -> Config:
         shared_database_url=shared,
         port=int(os.environ.get("BRAIN_PORT", "3032")),
         # Default Sonnet 4.6: most chat questions don't need Opus, and Opus on
-        # every tool-loop step burns the subscription rate budget the trading
-        # loop also draws from. Set BRAIN_MODEL=claude-opus-4-7 to flip back
-        # globally, or pass {"model":"claude-opus-4-7"} in the chat request
-        # for a single hard question.
-        model=os.environ.get("BRAIN_MODEL", "claude-sonnet-4-6"),
+        # every tool-loop step burns the rate budget the trading loop also
+        # draws from. Set BRAIN_MODEL=<id> for a global override; per-request
+        # override via {"model":"<id>"} in the chat body. The default resolves
+        # through subscription_llm so Bedrock/Vertex MATRIX_MODEL_SONNET
+        # overrides land here automatically.
+        model=os.environ.get("BRAIN_MODEL")
+        or _default_sonnet(),
         max_turns=int(os.environ.get("BRAIN_MAX_TURNS", "12")),
     )
 

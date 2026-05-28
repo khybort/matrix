@@ -15,13 +15,14 @@ from typing import Any
 
 import orjson
 from matrix_shared import call_claude_json
+from matrix_shared.subscription_llm import MODEL_SONNET
 
 from reflection.metrics import StrategyMetrics
 
 # Single source of truth for MutationDraft + risk-cap stripping.
 from reflection.parsing import MutationDraft
 
-LLM_MODEL = "claude-sonnet-4-6"
+LLM_MODEL = MODEL_SONNET
 
 # Mutation triggers
 NEG_AVG_SCORE_TRIGGER = Decimal("-0.05")  # below this avg score → propose mutation

@@ -32,11 +32,17 @@ from typing import Any
 
 import orjson
 
-from matrix_shared.subscription_llm import call_subscription, subscription_enabled
+from matrix_shared.subscription_llm import (
+    MODEL_HAIKU,
+    call_subscription,
+    subscription_enabled,
+)
 
 # Haiku 4.5 is the cheapest, fastest model in the current family. Tuned for
-# format conversion / summarization / classification — exactly the worker shape.
-HAIKU_MODEL = "claude-haiku-4-5-20251001"
+# format conversion / summarization / classification — exactly the worker
+# shape. Pulls the model ID from subscription_llm so a Bedrock/Vertex
+# operator's MATRIX_MODEL_HAIKU env override applies here automatically.
+HAIKU_MODEL = MODEL_HAIKU
 
 # Distillation output budget. Orchestrator sees at most this many tokens
 # of summary regardless of raw input size.

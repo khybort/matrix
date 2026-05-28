@@ -14,17 +14,17 @@ the next scan can skip patterns already in flight or recently shipped.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import asyncpg
 from loguru import logger
-from sqlalchemy import select
-
 from matrix_shared import shared_session_scope
 from matrix_shared.agent_lessons import active_lessons
 from matrix_shared.models import StrategyConfig
+from matrix_shared.subscription_llm import MODEL_SONNET
+from sqlalchemy import select
 
 # Lessons below this confidence don't trigger a task — too noisy.
 MIN_CONFIDENCE = Decimal("0.4")
@@ -36,7 +36,7 @@ DEDUP_DAYS = 7
 # Defaults for the dev_task that gets created. max_turns set high
 # (subscription is flat-rate so this only caps wall-clock not $) because
 # these tasks dispatch sub-agents and need room to explore + run tests.
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = MODEL_SONNET
 DEFAULT_MAX_TURNS = 60
 DEFAULT_COST_CAP_USD = 5.0
 
@@ -99,7 +99,7 @@ async def _last_feeder_task_ts(pool: asyncpg.Pool) -> datetime | None:
 async def _signature_recently_seen(
     pool: asyncpg.Pool, signature: str, within_days: int
 ) -> bool:
-    cutoff = datetime.now(timezone.utc) - timedelta(days=within_days)
+    cutoff = datetime.now(UTC) - timedelta(days=within_days)
     row = await pool.fetchrow(
         """
         SELECT 1
@@ -178,7 +178,7 @@ async def feed_once(
     try:
         last_ts = await _last_feeder_task_ts(pool)
         if last_ts is not None:
-            since = datetime.now(timezone.utc) - last_ts
+            since = datetime.now(UTC) - last_ts
             if since < timedelta(minutes=RATE_LIMIT_MINUTES):
                 mins_left = RATE_LIMIT_MINUTES - int(since.total_seconds() // 60)
                 return {
