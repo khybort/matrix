@@ -22,6 +22,7 @@ import re
 
 from loguru import logger
 from matrix_shared import call_claude_json
+from matrix_shared.subscription_llm import MODEL_SONNET
 
 from graph.agent_extract import run_extract_agent
 from graph.parsing import (
@@ -32,7 +33,7 @@ from graph.parsing import (
     parse_extraction,
 )
 
-LLM_MODEL = "claude-sonnet-4-6"
+LLM_MODEL = MODEL_SONNET
 
 
 # Canonical asset map: lowercase keyword → canonical ticker

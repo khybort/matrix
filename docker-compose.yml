@@ -33,6 +33,22 @@ x-python-env: &python-env
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
   CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+  # Alternative LLM backends. Set CLAUDE_CODE_USE_BEDROCK=1 (or USE_VERTEX=1)
+  # in .env to route the SDK's spawned `claude` CLI through AWS Bedrock or
+  # Google Vertex instead of the Anthropic subscription. Standard AWS env
+  # vars pass through. Model IDs differ on Bedrock/Vertex — override via
+  # MATRIX_MODEL_<HAIKU|SONNET|OPUS> with the provider-specific identifier
+  # (e.g. MATRIX_MODEL_SONNET=us.anthropic.claude-sonnet-4-6-20250929-v1:0).
+  CLAUDE_CODE_USE_BEDROCK: ${CLAUDE_CODE_USE_BEDROCK:-}
+  CLAUDE_CODE_USE_VERTEX: ${CLAUDE_CODE_USE_VERTEX:-}
+  AWS_REGION: ${AWS_REGION:-}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+  AWS_PROFILE: ${AWS_PROFILE:-}
+  MATRIX_MODEL_HAIKU: ${MATRIX_MODEL_HAIKU:-}
+  MATRIX_MODEL_SONNET: ${MATRIX_MODEL_SONNET:-}
+  MATRIX_MODEL_OPUS: ${MATRIX_MODEL_OPUS:-}
   NODE_ID: ${NODE_ID:-default-node}
   NODE_ROLES: ${NODE_ROLES:-dev,ingestion,graph,strategy,backtest,reflection,labs}
   MAX_POSITION_PCT: ${MAX_POSITION_PCT:-2.0}

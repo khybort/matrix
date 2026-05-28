@@ -22,12 +22,13 @@ from graph.age import link_typed_edge, upsert_entity
 from loguru import logger
 from matrix_shared import call_claude_json, local_session_scope
 from matrix_shared.models import RawDocument
+from matrix_shared.subscription_llm import MODEL_SONNET
 from sqlalchemy import desc, select
 
 from synthesis.agent import run_synthesis_agent
 from synthesis.themes import Theme, extract_themes_json, themes_from_parsed
 
-LLM_MODEL = "claude-sonnet-4-6"
+LLM_MODEL = MODEL_SONNET
 
 MAX_DOCS_PER_RUN = 60       # context budget cap (fallback path)
 TITLE_CHARS = 200

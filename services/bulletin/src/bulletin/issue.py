@@ -11,14 +11,14 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from decimal import Decimal
 
 from loguru import logger
+from matrix_shared.subscription_llm import MODEL_SONNET
 
 from bulletin.state import BulletinSnapshot
 
-LLM_MODEL = "claude-sonnet-4-6"
+LLM_MODEL = MODEL_SONNET
 
 
 @dataclass(slots=True)

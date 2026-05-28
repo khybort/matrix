@@ -31,7 +31,6 @@ import argparse
 import asyncio
 import itertools
 import json
-import os
 import random
 import sys
 from dataclasses import asdict, dataclass, field
@@ -40,6 +39,7 @@ from decimal import Decimal
 from typing import Any
 
 from loguru import logger
+from matrix_shared.subscription_llm import MODEL_SONNET
 
 from backtest.historical import BacktestResult, run_backtest
 
@@ -238,7 +238,7 @@ async def _maybe_llm_rationale(
         parsed = await call_claude_json(
             system="You are a quant explaining backtest results to a trader.",
             user=user_prompt,
-            model="claude-sonnet-4-6",
+            model=MODEL_SONNET,
             max_tokens=120,
             temperature=0.2,
         )

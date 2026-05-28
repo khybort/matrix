@@ -18,12 +18,37 @@ from typing import Any
 import orjson
 from loguru import logger
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+# Model indirection — env-resolvable so a Bedrock/Vertex operator can swap
+# the IDs without code changes. Defaults match the Anthropic API short names
+# used by the subscription path (claude_agent_sdk → claude CLI on
+# CLAUDE_CODE_OAUTH_TOKEN). For Bedrock, set e.g.
+#   MATRIX_MODEL_SONNET=us.anthropic.claude-sonnet-4-6-20250929-v1:0
+# in .env; for Vertex, the equivalent vertex-style ID.
+MODEL_HAIKU = os.environ.get("MATRIX_MODEL_HAIKU", "claude-haiku-4-5-20251001")
+MODEL_SONNET = os.environ.get("MATRIX_MODEL_SONNET", "claude-sonnet-4-6")
+MODEL_OPUS = os.environ.get("MATRIX_MODEL_OPUS", "claude-opus-4-7")
+
+DEFAULT_MODEL = MODEL_SONNET
 
 
 def subscription_enabled() -> bool:
-    """True when the Claude Code OAuth token is configured."""
-    return bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
+    """True when any supported LLM backend is configured.
+
+    Backends, in priority order:
+      1. Claude Code subscription — `CLAUDE_CODE_OAUTH_TOKEN` set. Default.
+      2. AWS Bedrock — `CLAUDE_CODE_USE_BEDROCK=1` + AWS creds in env.
+      3. Google Vertex — `CLAUDE_CODE_USE_VERTEX=1` + Google creds in env.
+
+    The `claude_agent_sdk` (via the bundled `claude` CLI) handles backend
+    selection itself based on these env vars; we just need *one* of them to
+    be true for the LLM path to fire. The historical name `subscription_*`
+    is kept for backward compatibility — read it as "is LLM path ready?".
+    """
+    return bool(
+        os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+        or os.environ.get("CLAUDE_CODE_USE_BEDROCK")
+        or os.environ.get("CLAUDE_CODE_USE_VERTEX")
+    )
 
 
 async def call_subscription(
