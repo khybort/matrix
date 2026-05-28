@@ -12,6 +12,7 @@ from the operator's standpoint; the new bottleneck is rate limits.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
@@ -29,6 +30,53 @@ MODEL_SONNET = os.environ.get("MATRIX_MODEL_SONNET", "claude-sonnet-4-6")
 MODEL_OPUS = os.environ.get("MATRIX_MODEL_OPUS", "claude-opus-4-7")
 
 DEFAULT_MODEL = MODEL_SONNET
+
+
+# Quota-aware circuit breaker — when the Claude Code subscription hits its
+# rolling cap, every call comes back instantly as ResultMessage(is_error=True,
+# cost=0). Without a breaker the system burns rate budget in a tight loop
+# (observed: 33/52 graph_extract calls failed during a 4h quota window).
+# After N consecutive errors we open the breaker for COOLDOWN_S seconds; while
+# open, callers get None immediately and fall back to deterministic paths.
+_BREAKER_THRESHOLD = int(os.environ.get("MATRIX_LLM_BREAKER_THRESHOLD", "5"))
+_BREAKER_COOLDOWN_S = float(os.environ.get("MATRIX_LLM_BREAKER_COOLDOWN_S", "900"))
+_breaker_consecutive_errors = 0
+_breaker_cooldown_until = 0.0
+
+
+def breaker_is_open() -> bool:
+    return time.monotonic() < _breaker_cooldown_until
+
+
+def breaker_state() -> dict[str, float | int | bool]:
+    now = time.monotonic()
+    remaining = max(0.0, _breaker_cooldown_until - now)
+    return {
+        "open": now < _breaker_cooldown_until,
+        "consecutive_errors": _breaker_consecutive_errors,
+        "cooldown_remaining_s": remaining,
+    }
+
+
+def _breaker_record(is_error: bool | None) -> None:
+    global _breaker_consecutive_errors, _breaker_cooldown_until
+    if is_error:
+        _breaker_consecutive_errors += 1
+        if _breaker_consecutive_errors >= _BREAKER_THRESHOLD and not breaker_is_open():
+            _breaker_cooldown_until = time.monotonic() + _BREAKER_COOLDOWN_S
+            logger.warning(
+                f"subscription_llm: circuit breaker OPEN after "
+                f"{_breaker_consecutive_errors} consecutive errors; "
+                f"cooling down {_BREAKER_COOLDOWN_S:.0f}s"
+            )
+    else:
+        if _breaker_consecutive_errors > 0 or _breaker_cooldown_until > 0:
+            logger.info(
+                f"subscription_llm: circuit breaker reset after success "
+                f"(was {_breaker_consecutive_errors} consecutive errors)"
+            )
+        _breaker_consecutive_errors = 0
+        _breaker_cooldown_until = 0.0
 
 
 def subscription_enabled() -> bool:
@@ -67,6 +115,8 @@ async def call_subscription(
     informational. If a future SDK version exposes them, plumb through.
     """
     if not subscription_enabled():
+        return None
+    if breaker_is_open():
         return None
 
     try:
@@ -124,6 +174,7 @@ async def call_subscription(
         c=f"{result_cost:.6f}" if result_cost is not None else None,
         e=result_is_err,
     )
+    _breaker_record(result_is_err)
     return text or None
 
 
@@ -179,6 +230,8 @@ async def call_subscription_agent(
     """
     if not subscription_enabled():
         return
+    if breaker_is_open():
+        return
 
     try:
         from claude_agent_sdk import ClaudeAgentOptions, query
@@ -226,4 +279,5 @@ async def call_subscription_agent(
                 e=is_err, x=extras,
             )
             payload.setdefault("model", resolved_model)
+            _breaker_record(is_err)
         yield ev

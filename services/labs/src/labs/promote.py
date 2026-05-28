@@ -41,6 +41,45 @@ from matrix_shared.models import LabExperiment, MutationProposal, StrategyConfig
 MIN_EVAL_FOR_PROMOTION = 30
 MIN_FITNESS_FOR_PROMOTION = Decimal("0.05")
 
+# Per-strategy overrides. Keys are strategy_id strings; values are
+# (min_eval, min_fitness) tuples. Falls back to the global defaults above.
+# Rationale per strategy:
+#   matrix_agent    — LLM-guided, high-stakes; keep the global bar.
+#   funding_reversion — validated signal (+$1.79/24h); lower bar lets lab
+#                       refine params sooner without waiting 30 evals.
+#   grid            — mean-reversion, noisy; needs more evidence than default.
+#   oi_delta        — small sample history; standard bar.
+#   oi_breakout     — 7% win at retire (2026-05-28); raise bar until signal
+#                     demonstrates real edge (fitness >= 0.08, n >= 40).
+#   dca             — long-only accumulator; re-entry only on strong evidence.
+#   bist_*          — BIST has short session hours, so 30 evals takes longer
+#                     wall-clock; lower n to 15 but keep fitness bar.
+# Strategies that have an active lab evolution pool — only these are scanned
+# by scan_all_strategies(). Labs currently evolve matrix_agent genomes
+# (signal weights, threshold, horizon). Deterministic strategies (funding_reversion,
+# grid, etc.) need their own genome schema + seed population before they qualify.
+# Add a strategy here once its labs are wired up.
+STRATEGIES_WITH_LAB_EVOLUTION: frozenset[str] = frozenset({"matrix_agent"})
+
+STRATEGY_THRESHOLDS: dict[str, tuple[int, Decimal]] = {
+    "matrix_agent":      (30, Decimal("0.05")),
+    "funding_reversion": (20, Decimal("0.04")),
+    "grid":              (40, Decimal("0.05")),
+    "oi_delta":          (30, Decimal("0.05")),
+    "oi_breakout":       (40, Decimal("0.08")),  # raised: was retiring at 7% win
+    "dca":               (40, Decimal("0.07")),  # raised: -$8.67/24h at retire
+    "bist_gap_fade":     (15, Decimal("0.05")),
+    "bist_intraday_reversion": (15, Decimal("0.05")),
+    "bist_news_event":   (15, Decimal("0.05")),
+    "bist_volume_breakout": (15, Decimal("0.05")),
+}
+
+
+def _thresholds_for(strategy_id: str) -> tuple[int, Decimal]:
+    return STRATEGY_THRESHOLDS.get(
+        strategy_id, (MIN_EVAL_FOR_PROMOTION, MIN_FITNESS_FOR_PROMOTION)
+    )
+
 # Risk-cap fields that must NEVER ride along with a proposal's after_params.
 FORBIDDEN_FIELDS = {
     "max_position_pct",
@@ -71,9 +110,19 @@ async def scan_for_promotions(
     strategy_id: str = "matrix_agent",
     *,
     asset_class: str = "crypto",
-    min_eval: int = MIN_EVAL_FOR_PROMOTION,
-    min_fitness: Decimal = MIN_FITNESS_FOR_PROMOTION,
+    min_eval: int | None = None,
+    min_fitness: Decimal | None = None,
 ) -> uuid.UUID | None:
+    """Detect a promotable lab experiment and write a MutationProposal.
+
+    min_eval / min_fitness default to per-strategy values from STRATEGY_THRESHOLDS,
+    falling back to MIN_EVAL_FOR_PROMOTION / MIN_FITNESS_FOR_PROMOTION if not set.
+    """
+    _default_eval, _default_fit = _thresholds_for(strategy_id)
+    if min_eval is None:
+        min_eval = _default_eval
+    if min_fitness is None:
+        min_fitness = _default_fit
     """Detect a promotable lab experiment and write a MutationProposal.
 
     Returns the new proposal id, or None if no candidate qualifies or a
@@ -280,6 +329,29 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
         f"v{proposal.from_version} → v{proposal.to_version}"
     )
     return True
+
+
+async def scan_all_strategies() -> list[uuid.UUID]:
+    """Run scan_for_promotions for every strategy that has lab evolution.
+
+    Only strategies in STRATEGIES_WITH_LAB_EVOLUTION are scanned — labs
+    currently evolve matrix_agent genomes (weights/threshold params). Other
+    deterministic strategies (funding_reversion, grid, etc.) use empty params
+    and must be seeded with dedicated lab experiments before they qualify.
+    When a new strategy gets its own lab genome pool, add it to this set.
+
+    Returns list of newly created proposal ids.
+    """
+    created: list[uuid.UUID] = []
+    for sid in STRATEGIES_WITH_LAB_EVOLUTION:
+        ac = "bist" if sid.startswith("bist_") else "crypto"
+        try:
+            pid = await scan_for_promotions(sid, asset_class=ac)
+            if pid is not None:
+                created.append(pid)
+        except Exception as e:
+            logger.warning(f"scan_all_strategies: {sid} scan failed: {e}")
+    return created
 
 
 async def apply_best_pending(strategy_id: str = "matrix_agent") -> uuid.UUID | None:

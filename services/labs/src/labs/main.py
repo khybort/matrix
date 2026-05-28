@@ -33,6 +33,7 @@ from labs.evolve import seed_initial_population, run_evolution_cycle
 from labs.promote import (
     apply_best_pending,
     apply_proposal,
+    scan_all_strategies,
     scan_for_promotions,
 )
 
@@ -140,8 +141,8 @@ async def run(
 
         if loop_started - last_promote_scan >= promote_scan_interval_s:
             try:
-                pid = await scan_for_promotions()
-                if pid is not None:
+                pids = await scan_all_strategies()
+                for pid in pids:
                     logger.info(f"promotion proposed: {pid}")
                     if auto_apply:
                         ok = await apply_proposal(pid)

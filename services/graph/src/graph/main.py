@@ -25,10 +25,9 @@ import sys
 from datetime import UTC, datetime
 
 from loguru import logger
-from sqlalchemy import desc, select
-
 from matrix_shared import session_scope
 from matrix_shared.models import RawDocument
+from sqlalchemy import desc, select
 
 from graph.age import (
     graph_summary,
