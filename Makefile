@@ -310,13 +310,13 @@ bulletin-publish: ## Publish a draft. Usage: make bulletin-publish SLUG=<slug>
 .PHONY: diagnose-matrix-agent
 diagnose-matrix-agent: ## Horizon/threshold sweep + signal attribution for matrix_agent
 	$(DC) $(DC_BASE) exec backtest uv run matrix-backtest-diagnose \
-		--symbol=$${SYMBOL:-BTCUSDT} --days=$${DAYS:-7}
+		$${SYMBOL:+--symbol=$${SYMBOL}} --days=$${DAYS:-7}
 
 .PHONY: suggest
 suggest: ## AI param suggester. Args: STRATEGY (default grid) SYMBOL DAYS RISK SAMPLES TOP_K
 	$(DC) $(DC_BASE) exec backtest uv run matrix-backtest-suggester \
 		--strategy=$${STRATEGY:-grid} \
-		--symbol=$${SYMBOL:-BTCUSDT} \
+		$${SYMBOL:+--symbol=$${SYMBOL}} \
 		--days=$${DAYS:-7} \
 		--risk=$${RISK:-balanced} \
 		$${SAMPLES:+--samples $${SAMPLES}} \
@@ -372,7 +372,7 @@ install-hooks: ## Install git hooks (pre-push: blocks dev-agent/* branches)
 backtest-historical: ## Historical replay. Vars: STRATEGY SYMBOL DAYS N_GRIDS BAND HORIZON
 	$(DC) $(DC_BASE) exec backtest uv run matrix-backtest-historical \
 		--strategy=$${STRATEGY:-grid} \
-		--symbol=$${SYMBOL:-BTCUSDT} \
+		$${SYMBOL:+--symbol=$${SYMBOL}} \
 		--asset-class=$${ASSET_CLASS:-crypto} \
 		--days=$${DAYS:-7} \
 		--n-grids=$${N_GRIDS:-10} \

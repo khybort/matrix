@@ -26,12 +26,17 @@ from fastapi import FastAPI, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from matrix_shared.markets.crypto import crypto_universe
+
 from backtest.historical import run_backtest
 
 
 class BacktestRequest(BaseModel):
     strategy: str = Field(..., examples=["grid"])
-    symbol: str = Field(..., examples=["BTCUSDT"])
+    # `symbol` is optional; when omitted on a crypto request the server fills
+    # it with crypto_universe()[0] so the UI doesn't need a hardcoded fallback.
+    # BIST callers must supply it explicitly (the BIST universe is DB-driven).
+    symbol: str | None = Field(default=None, examples=[None])
     asset_class: str = "crypto"
     days: int = 7
     # Strategy-specific knobs (Grid: n_grids, price_band_pct, horizon_s)
@@ -66,10 +71,19 @@ def build_app() -> FastAPI:
 
     @app.post("/backtest")
     async def backtest(req: BacktestRequest) -> dict[str, Any]:
+        symbol = req.symbol
+        if not symbol:
+            if req.asset_class == "crypto":
+                symbol = crypto_universe()[0]
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"symbol is required for asset_class={req.asset_class}",
+                )
         try:
             params = _coerce_params(req.params)
             result = await run_backtest(
-                req.strategy, req.symbol, req.asset_class, req.days, params,
+                req.strategy, symbol, req.asset_class, req.days, params,
             )
         except ValueError as e:
             # Unknown strategy or bad arg — operator error, return 400 not 500.

@@ -46,7 +46,9 @@ class Dca:
         symbols: Sequence[str] = DEFAULT_SYMBOLS,
         interval_minutes: int = INTERVAL_MINUTES,
     ) -> None:
-        self.symbols = list(symbols)
+        # Empty list → use full universe (UI templates pass [] so the module
+        # tracks the operator's CRYPTO_SYMBOLS env without hardcoded picks).
+        self.symbols = list(symbols) if symbols else list(crypto_universe())
         self.interval_minutes = interval_minutes
 
     async def generate(self) -> list[PredictionDraft]:

@@ -433,9 +433,13 @@ function TemplatesPanel() {
     setPreviewBusy(t.id);
     setPreviews((p) => { const n = { ...p }; delete n[t.id]; return n; });
     try {
+      // symbol omitted → backtest-api server picks crypto_universe()[0] for
+      // crypto. BIST templates must declare a symbol in their params.
+      const sym = (t.params as { symbols?: string[]; symbol?: string }).symbol
+        ?? (t.params as { symbols?: string[] }).symbols?.[0];
       const r = await fetch("/api/strategy/preview", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ strategy: t.strategy_id, symbol: "BTCUSDT", asset_class: t.asset_class, days: 7, params: t.params }),
+        body: JSON.stringify({ strategy: t.strategy_id, ...(sym ? { symbol: sym } : {}), asset_class: t.asset_class, days: 7, params: t.params }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error ?? "preview failed");
@@ -546,7 +550,9 @@ type WizardState = {
 };
 
 const WIZARD_DEFAULTS: WizardState = {
-  strategy: "grid", symbol: "BTCUSDT", asset_class: "crypto", days: 7,
+  // Empty symbol → backend resolves to crypto_universe()[0] for crypto. The
+  // form input shows a placeholder so the operator can still override.
+  strategy: "grid", symbol: "", asset_class: "crypto", days: 7,
   n_grids: 10, price_band_pct: "0.02", horizon_s: 300,
   weight_trade_flow: "0.35", weight_funding: "0.20", weight_oi_delta: "0.20",
   weight_ob_imbalance: "0.15", weight_news: "0.10", signal_threshold: "0.18",
@@ -584,7 +590,7 @@ function WizardPanel() {
     try {
       const r = await fetch("/api/strategy/preview", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ strategy: s.strategy, symbol: s.symbol, asset_class: s.asset_class, days: s.days, params: wizardParams(s) }),
+        body: JSON.stringify({ strategy: s.strategy, ...(s.symbol ? { symbol: s.symbol } : {}), asset_class: s.asset_class, days: s.days, params: wizardParams(s) }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error ?? "preview failed");
@@ -633,8 +639,12 @@ function WizardPanel() {
           </select>
         </Field>
         <Field label="Preview symbol">
-          <input className="bg-transparent border border-current px-2 py-1 mono" value={s.symbol}
-            onChange={(e) => set("symbol", e.target.value.toUpperCase())} />
+          <input
+            className="bg-transparent border border-current px-2 py-1 mono"
+            value={s.symbol}
+            placeholder="auto (universe[0])"
+            onChange={(e) => set("symbol", e.target.value.toUpperCase())}
+          />
         </Field>
         <Field label="Preview days">
           <input type="number" min={1} max={30} className="bg-transparent border border-current px-2 py-1 mono"
@@ -674,7 +684,7 @@ function WizardPanel() {
           onClick={deploy} disabled={busy !== null}>
           {busy === "deploy" ? "Deploying…" : "Deploy"}
         </button>
-        <span className="muted text-xs">Preview uses {s.days}d of {s.symbol} {s.asset_class} bars.</span>
+        <span className="muted text-xs">Preview uses {s.days}d of {s.symbol || "universe[0]"} {s.asset_class} bars.</span>
       </div>
 
       {pv !== null && (

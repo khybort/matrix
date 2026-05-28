@@ -363,9 +363,16 @@ async def run_backtest(
 
 
 def main() -> None:
+    from matrix_shared.markets.crypto import crypto_universe
+
     parser = argparse.ArgumentParser(description="Matrix historical backtest")
     parser.add_argument("--strategy", default="grid")
-    parser.add_argument("--symbol", default="BTCUSDT")
+    parser.add_argument(
+        "--symbol",
+        default=None,
+        help="Symbol to replay. Defaults to first symbol from crypto_universe(); "
+             "required when --asset-class=bist.",
+    )
     parser.add_argument("--asset-class", default="crypto")
     parser.add_argument("--days", type=int, default=7)
     parser.add_argument("--n-grids", type=int, default=10)
@@ -373,6 +380,12 @@ def main() -> None:
     parser.add_argument("--horizon-s", type=int, default=300)
     parser.add_argument("--positions", action="store_true", help="Include full positions list in JSON output")
     args = parser.parse_args()
+
+    if args.symbol is None:
+        if args.asset_class == "crypto":
+            args.symbol = crypto_universe()[0]
+        else:
+            parser.error(f"--symbol is required for asset_class={args.asset_class}")
 
     params: dict[str, Any] = {
         "n_grids": args.n_grids,

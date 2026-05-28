@@ -105,7 +105,9 @@ export const STRATEGY_TEMPLATES: StrategyTemplate[] = [
     risk: "balanced",
     params: {
       interval_minutes: 60,
-      symbols: ["BTCUSDT", "ETHUSDT"],
+      // Empty array → strategy module falls back to crypto_universe(). Operator
+      // can override by typing a comma-separated list in the form.
+      symbols: [],
     },
   },
 ];

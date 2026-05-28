@@ -337,9 +337,16 @@ def _serialize_candidate(c: Candidate, *, positions: bool = False) -> dict[str, 
 
 
 def main() -> None:
+    from matrix_shared.markets.crypto import crypto_universe
+
     parser = argparse.ArgumentParser(description="Matrix AI Strategy Suggester")
     parser.add_argument("--strategy", default="grid", choices=list(STRATEGY_PARAM_GRIDS))
-    parser.add_argument("--symbol", default="BTCUSDT")
+    parser.add_argument(
+        "--symbol",
+        default=None,
+        help="Symbol to scan. Defaults to first symbol from crypto_universe(); "
+             "required when --asset-class=bist.",
+    )
     parser.add_argument("--asset-class", default="crypto")
     parser.add_argument("--days", type=int, default=7)
     parser.add_argument("--risk", default="balanced",
@@ -353,6 +360,12 @@ def main() -> None:
     parser.add_argument("--positions", action="store_true",
                         help="Include full positions in each candidate's JSON")
     args = parser.parse_args()
+
+    if args.symbol is None:
+        if args.asset_class == "crypto":
+            args.symbol = crypto_universe()[0]
+        else:
+            parser.error(f"--symbol is required for asset_class={args.asset_class}")
 
     logger.remove()
     logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level: <5} | {message}")
