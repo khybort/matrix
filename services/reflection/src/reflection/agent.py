@@ -158,23 +158,28 @@ def _build_registry(strategy_id: str) -> ToolRegistry:
     return reg
 
 
-def _system_prompt() -> str:
-    forbidden = ", ".join(sorted(FORBIDDEN_RISK_FIELDS))
-    return (
-        "You are Matrix Reflection — propose ONE conservative parameter "
-        "mutation that could improve a strategy's average score over the "
-        "next window.\n"
-        "Use the read-only tools to ground your proposal in actual outcomes, "
-        "active lessons, and peer-strategy configs (don't speculate).\n"
-        f"NEVER propose changes to risk caps: {forbidden}. The reflection layer "
-        "is forbidden from touching them; any such field will be stripped.\n"
-        "Allowed proposal_type values: weight_tune | threshold_change | "
-        "prompt_change.\n"
-        "End your reply with ONLY this JSON object:\n"
-        '{"proposal_type":"weight_tune","after_params":{"weights":{...}},'
-        '"rationale":"<concise grounded reasoning>"}\n'
-        "Return {} if no change is warranted."
-    )
+_FORBIDDEN_LIST = ", ".join(sorted(FORBIDDEN_RISK_FIELDS))
+
+# Module-level literal so the string is identical byte-for-byte across calls
+# AND across process restarts (sorted() makes the forbidden list deterministic).
+# A stable system_prompt is the only thing we can do at our layer to give the
+# Claude Code CLI's internal prompt cache a chance to hit.
+SYSTEM_PROMPT = (
+    "You are Matrix Reflection — propose ONE conservative parameter "
+    "mutation that could improve a strategy's average score over the "
+    "next window.\n"
+    "Use the read-only tools to ground your proposal in actual outcomes, "
+    "active lessons, and peer-strategy configs (don't speculate).\n"
+    f"NEVER propose changes to risk caps: {_FORBIDDEN_LIST}. "
+    "The reflection layer is forbidden from touching them; any such "
+    "field will be stripped.\n"
+    "Allowed proposal_type values: weight_tune | threshold_change | "
+    "prompt_change.\n"
+    "End your reply with ONLY this JSON object:\n"
+    '{"proposal_type":"weight_tune","after_params":{"weights":{...}},'
+    '"rationale":"<concise grounded reasoning>"}\n'
+    "Return {} if no change is warranted."
+)
 
 
 async def run_reflection_agent(
@@ -203,7 +208,7 @@ async def run_reflection_agent(
     try:
         async for ev in call_subscription_agent(
             prompt=user,
-            system=_system_prompt(),
+            system=SYSTEM_PROMPT,
             mcp_servers={_SERVER: server},
             allowed_tools=allowed,
             disallowed_tools=["Bash", "Write", "Edit", "NotebookEdit"],

@@ -87,25 +87,27 @@ def _build_registry() -> ToolRegistry:
     return reg
 
 
-def _system_prompt() -> str:
-    entity_list = "|".join(ALLOWED_ENTITY_TYPES)
-    edge_list = ", ".join(ALLOWED_EDGE_TYPES)
-    return (
-        "You are a graph-extraction agent for financial news. "
-        "First, optionally call `existing_assets` / `existing_companies` so your "
-        "canonicals align with what is already in the graph. Then extract typed "
-        "entities and inter-entity relations from the article.\n"
-        f"Allowed entity types: {entity_list}.\n"
-        f"Allowed edge types: {edge_list}.\n"
-        "Use canonical tickers for Asset (BTC, ETH, ...), legal names for Company, "
-        "full names for Person. Events are categories (e.g. 'ETF approval'); "
-        "Concepts are abstract themes. Emit a relation only when the article "
-        "clearly supports it. Max 12 entities and 12 relations.\n"
-        "Your tools are read-only. End your reply with ONLY a JSON object:\n"
-        '{"entities":[{"type":"Asset","canonical":"BTC","display":"Bitcoin"}],'
-        '"relations":[{"source":{"type":"Company","canonical":"BlackRock"},'
-        '"edge":"OWNS","target":{"type":"Asset","canonical":"BTC"}}]}'
-    )
+# Module-level literal — byte-stable across processes (ALLOWED_*_TYPES are
+# constant tuples with deterministic iteration order). Stable system_prompt
+# is the only handle we have at our layer toward CLI-side prompt caching.
+_ENTITY_LIST = "|".join(ALLOWED_ENTITY_TYPES)
+_EDGE_LIST = ", ".join(ALLOWED_EDGE_TYPES)
+SYSTEM_PROMPT = (
+    "You are a graph-extraction agent for financial news. "
+    "First, optionally call `existing_assets` / `existing_companies` so your "
+    "canonicals align with what is already in the graph. Then extract typed "
+    "entities and inter-entity relations from the article.\n"
+    f"Allowed entity types: {_ENTITY_LIST}.\n"
+    f"Allowed edge types: {_EDGE_LIST}.\n"
+    "Use canonical tickers for Asset (BTC, ETH, ...), legal names for Company, "
+    "full names for Person. Events are categories (e.g. 'ETF approval'); "
+    "Concepts are abstract themes. Emit a relation only when the article "
+    "clearly supports it. Max 12 entities and 12 relations.\n"
+    "Your tools are read-only. End your reply with ONLY a JSON object:\n"
+    '{"entities":[{"type":"Asset","canonical":"BTC","display":"Bitcoin"}],'
+    '"relations":[{"source":{"type":"Company","canonical":"BlackRock"},'
+    '"edge":"OWNS","target":{"type":"Asset","canonical":"BTC"}}]}'
+)
 
 
 async def run_extract_agent(
@@ -127,7 +129,7 @@ async def run_extract_agent(
     try:
         async for ev in call_subscription_agent(
             prompt=user,
-            system=_system_prompt(),
+            system=SYSTEM_PROMPT,
             mcp_servers={_SERVER: server},
             allowed_tools=allowed,
             disallowed_tools=["Bash", "Write", "Edit", "NotebookEdit"],
