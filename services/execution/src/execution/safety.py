@@ -19,6 +19,7 @@ Layers, in order of cheapness to evaluate:
     4. Per-trade position cap (notional <= equity * max_position_pct)
     5. Wallet hasn't exceeded LIVE_CAPITAL_CAP_USD (env ceiling)
     6. max_concurrent_positions cap
+    7. Per-strategy slot cap (via strategy_slot_configs table)
 
 Notes on what's NOT here:
 - We don't load BROKER_API_KEY or talk to any exchange. That's Phase 5
@@ -42,7 +43,8 @@ from matrix_shared import (
     has_valid_certificate,
     shared_session_scope,
 )
-from matrix_shared.models import PaperPosition, Wallet
+from matrix_shared.models import PaperPosition, Prediction, Wallet
+from matrix_shared.models.slot_config import StrategySlotConfig
 
 
 @dataclass(slots=True)
@@ -89,6 +91,15 @@ async def should_submit_live(
     Callers should ASSERT `allowed is True` before submitting. Logs/audits
     should record `snapshot` regardless of outcome — denied attempts are
     the most interesting events.
+
+    Gates:
+        1. LIVE_EXECUTION_ENABLED env flag
+        2. paper_trade_certificate gate
+        3. Wallet circuit_tripped_at (daily loss circuit breaker)
+        4. Per-trade position cap (notional <= equity * max_position_pct)
+        5. Wallet hasn't exceeded LIVE_CAPITAL_CAP_USD (env ceiling)
+        6. max_concurrent_positions cap
+        7. Per-strategy slot cap (via strategy_slot_configs table)
     """
     reasons: list[str] = []
     snapshot: dict[str, object] = {
@@ -174,6 +185,31 @@ async def should_submit_live(
         reasons.append(
             f"projected locked_usd={projected_locked} > LIVE_CAPITAL_CAP_USD={cap}"
         )
+
+    # 7. Per-strategy slot cap
+    async with shared_session_scope() as session:
+        slot_cfg = await session.get(
+            StrategySlotConfig, (strategy_id, asset_class, wallet_id)
+        )
+        if slot_cfg is not None:
+            open_for_strategy = (
+                await session.execute(
+                    select(func.count(PaperPosition.id))
+                    .join(Prediction, Prediction.id == PaperPosition.prediction_id)
+                    .where(PaperPosition.wallet_id == wallet_id)
+                    .where(PaperPosition.status == "open")
+                    .where(Prediction.strategy_id == strategy_id)
+                )
+            ).scalar_one()
+            snapshot["strategy_open_positions"] = open_for_strategy
+            snapshot["strategy_allocated_slots"] = slot_cfg.allocated_slots
+            if open_for_strategy >= slot_cfg.allocated_slots:
+                reasons.append(
+                    f"strategy {strategy_id} at slot cap "
+                    f"({open_for_strategy}/{slot_cfg.allocated_slots})"
+                )
+        else:
+            snapshot["strategy_allocated_slots"] = "unregistered"
 
     return GateDecision(
         allowed=len(reasons) == 0,
