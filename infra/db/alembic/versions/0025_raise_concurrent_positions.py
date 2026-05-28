@@ -24,10 +24,12 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.execute(
-        "UPDATE wallets SET max_concurrent_positions = 50 WHERE asset_class = 'crypto'"
+        "UPDATE wallets SET max_concurrent_positions = 50 "
+        "WHERE asset_class = 'crypto' AND max_concurrent_positions = 15"
     )
     op.execute(
-        "UPDATE wallets SET max_concurrent_positions = 20 WHERE asset_class = 'bist'"
+        "UPDATE wallets SET max_concurrent_positions = 20 "
+        "WHERE asset_class = 'bist' AND max_concurrent_positions = 3"
     )
     op.execute(
         "ALTER TABLE wallets ALTER COLUMN max_concurrent_positions SET DEFAULT 50"
@@ -36,10 +38,12 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute(
-        "UPDATE wallets SET max_concurrent_positions = 15 WHERE asset_class = 'crypto'"
+        "UPDATE wallets SET max_concurrent_positions = 15 "
+        "WHERE asset_class = 'crypto' AND max_concurrent_positions = 50"
     )
     op.execute(
-        "UPDATE wallets SET max_concurrent_positions = 3 WHERE asset_class = 'bist'"
+        "UPDATE wallets SET max_concurrent_positions = 3 "
+        "WHERE asset_class = 'bist' AND max_concurrent_positions = 20"
     )
     op.execute(
         "ALTER TABLE wallets ALTER COLUMN max_concurrent_positions SET DEFAULT 15"
