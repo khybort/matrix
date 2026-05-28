@@ -20,14 +20,12 @@ from matrix_shared.agent_runtime.worker import haiku_distill
 from matrix_shared.models import RawDocument
 from sqlalchemy import desc, select
 
-# Default caps tuned for the agent loop: tool result re-enters context every
-# turn, so smaller is cheaper. The agent has `verbose=true` if it genuinely
-# needs the full corpus (e.g. very quiet news window — wider trawl helps).
+# How many docs the Haiku worker sees as raw input. The orchestrator never
+# sees these directly — only the distilled summary. Adjusting this trades
+# Haiku input tokens for summary completeness, not orchestrator context size.
 MAX_DOCS_DEFAULT = 20
-MAX_DOCS_VERBOSE = 60
 TITLE_CHARS = 140
 BODY_CHARS_DEFAULT = 180
-BODY_CHARS_VERBOSE = 400
 
 
 def _text(payload: Any) -> dict:
@@ -44,53 +42,49 @@ def build_registry(*, window_hours: float) -> ToolRegistry:
 
     @tool(
         "recent_documents",
-        "Recent news/filings/transcripts in the configured window. Default "
-        "response is a Haiku-distilled bullet summary (themes, mentioned "
-        "tickers/companies, sentiment per theme, source mix) — orchestrator "
-        "never sees the raw bodies, context stays small. Pass verbose=true "
-        "for the structured doc list (up to 60 docs / 400-char bodies) when "
-        "you need the underlying titles/bodies (e.g. to quote a specific "
-        "headline).",
-        {"hours": float, "verbose": bool},
+        "Returns a Haiku-distilled BULLET SUMMARY of the last N hours of "
+        "news/filings/transcripts. The summary covers emerging themes (≥2 "
+        "docs each), mentioned tickers/companies, sentiment per theme, "
+        "anchor doc indices, and source mix. You do NOT get raw doc bodies "
+        "here — the summary is sufficient for theme synthesis. If you need a "
+        "specific headline quote, use the graph (Concept/Document nodes via "
+        "cypher_query in other contexts).",
+        {"hours": float},
     )
     async def recent_documents(args: dict) -> dict:
         hours = float(args.get("hours", window_hours))
-        verbose = bool(args.get("verbose", False))
-        max_docs = MAX_DOCS_VERBOSE if verbose else MAX_DOCS_DEFAULT
-        body_chars = BODY_CHARS_VERBOSE if verbose else BODY_CHARS_DEFAULT
         cutoff = datetime.now(UTC) - timedelta(hours=hours)
         async with local_session_scope() as session:
             stmt = (
                 select(RawDocument)
                 .where(RawDocument.published_at >= cutoff)
                 .order_by(desc(RawDocument.published_at))
-                .limit(max_docs)
+                .limit(MAX_DOCS_DEFAULT)
             )
             docs = list((await session.execute(stmt)).scalars())
+        if not docs:
+            return _text({"summary": "(no recent documents)", "n_docs": 0,
+                          "window_hours": hours})
         rows = [
             {
                 "i": i,
                 "source": d.source,
                 "published_at": d.published_at.isoformat() if d.published_at else None,
                 "title": (d.title or "")[:TITLE_CHARS],
-                "body": (d.body or "")[:body_chars],
+                "body": (d.body or "")[:BODY_CHARS_DEFAULT],
             }
             for i, d in enumerate(docs, 1)
         ]
-        if verbose:
-            return _text(rows)
-        if not rows:
-            return _text({"summary": "(no recent documents)", "n_docs": 0,
-                          "window_hours": hours})
-        # Default: Haiku worker distills the corpus before it reaches the
-        # orchestrator. The orchestrator sees ~600 tokens of bullets instead
-        # of N*600ch of raw doc text re-entering context every turn.
+        # The Haiku worker distills the corpus BEFORE it reaches the
+        # orchestrator — context discipline is enforced by the tool, not by
+        # the model's restraint. Orchestrator sees ~600 tokens of bullets
+        # instead of N*600 ch of raw doc text re-entering context every turn.
         summary = await haiku_distill(
             raw=rows,
             instruction=(
                 f"You are summarizing the last {hours:.0f}h of financial news for a "
                 "synthesis orchestrator. Produce 5-10 short bullets covering: "
-                "(a) emerging themes spanning ≥ 2 docs, "
+                "(a) emerging themes spanning at least 2 docs, "
                 "(b) the canonical assets / companies each theme touches, "
                 "(c) sentiment per theme (bullish / bearish / mixed / neutral), "
                 "(d) headline anchor docs by index (e.g. 'see [3], [7]'), "
