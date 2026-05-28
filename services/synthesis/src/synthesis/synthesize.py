@@ -1,41 +1,37 @@
-"""Hourly thematic synthesis.
+"""Hourly thematic synthesis — agent-driven, with single-shot fallback.
 
-Takes the last N hours of raw_documents, sends their titles + body
-samples to an LLM, gets back a list of *emerging themes* with the
-assets/companies each one impacts. Each theme becomes a Concept node
-in the AGE graph, linked via IMPACTS edges to mentioned entities.
+Takes the last N hours of raw_documents and produces a list of *emerging
+themes* (Concept nodes + IMPACTS edges in the AGE graph).
 
-Without AI_GATEWAY_API_KEY this module is a no-op — keyword-based
-theme detection is far too noisy to be worth the complexity.
+Primary path: `synthesis.agent.run_synthesis_agent` — drives the shared SDK
+tool loop with read-only tools (recent_documents / existing_concepts /
+existing_assets) so the LLM grounds themes in actual graph coverage and avoids
+duplicates.
+
+Fallback path: legacy single-shot LLM call (no tools). Triggered when the
+subscription is unavailable OR the agent loop returns nothing parseable.
+The persist step (Concept upsert + IMPACTS edges) is the same for both paths
+— the LLM never touches the graph; the service does.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+from graph.age import link_typed_edge, upsert_entity
 from loguru import logger
-from sqlalchemy import desc, select
-
 from matrix_shared import call_claude_json, local_session_scope
 from matrix_shared.models import RawDocument
+from sqlalchemy import desc, select
 
-from graph.age import link_typed_edge, upsert_entity
+from synthesis.agent import run_synthesis_agent
+from synthesis.themes import Theme, extract_themes_json, themes_from_parsed
 
 LLM_MODEL = "claude-sonnet-4-6"
 
-MAX_DOCS_PER_RUN = 60       # context budget cap
+MAX_DOCS_PER_RUN = 60       # context budget cap (fallback path)
 TITLE_CHARS = 200
 BODY_CHARS = 400            # snippet per doc
-
-
-@dataclass(slots=True)
-class Theme:
-    canonical: str           # short slug, used as Concept canonical
-    display: str             # human-readable name
-    summary: str             # 1-2 sentence rationale
-    impacted_assets: list[str] = field(default_factory=list)     # ["BTC","ETH"]
-    impacted_companies: list[str] = field(default_factory=list)
 
 
 async def _fetch_recent_docs(hours: float) -> list[RawDocument]:
@@ -60,15 +56,16 @@ def _pack_corpus(docs: list[RawDocument]) -> str:
     return "\n\n".join(lines)
 
 
-async def _call_llm(corpus: str, hours: float) -> list[Theme] | None:
+async def _single_shot_fallback(corpus: str, hours: float) -> list[Theme] | None:
+    """Legacy path — kept as a safety net while the agent path is being
+    validated against prod data."""
     system = (
-        "You are a financial-news synthesis agent. Given a recent "
-        "corpus of headlines + body snippets, identify 3-8 *emerging "
-        "themes* — concepts that span multiple documents and would "
-        "matter to a trader. For each theme, list the assets and "
-        "companies it impacts (canonical tickers/names only). Skip "
-        "themes supported by fewer than 2 distinct documents.\n\n"
-        "Return ONLY a JSON object: "
+        "You are a financial-news synthesis agent. Given a recent corpus of "
+        "headlines + body snippets, identify 3-8 *emerging themes* — concepts "
+        "that span multiple documents and would matter to a trader. For each "
+        "theme, list the assets and companies it impacts (canonical tickers/"
+        "names only). Skip themes supported by fewer than 2 distinct documents."
+        "\n\nReturn ONLY a JSON object: "
         '{"themes":[{"canonical":"<slug>","display":"<short name>",'
         '"summary":"<1-2 sentences>","impacted_assets":["BTC",...],'
         '"impacted_companies":["BlackRock",...]}]}'
@@ -79,56 +76,37 @@ async def _call_llm(corpus: str, hours: float) -> list[Theme] | None:
     )
     if parsed is None:
         return None
-
-    raw_themes = parsed.get("themes") or []
-    themes: list[Theme] = []
-    for t in raw_themes[:8]:
-        if not isinstance(t, dict):
-            continue
-        canonical = str(t.get("canonical", "")).strip()[:96]
-        display = str(t.get("display", canonical))[:200]
-        summary = str(t.get("summary", ""))[:1000]
-        if not canonical:
-            continue
-        assets = [str(x).strip()[:32] for x in (t.get("impacted_assets") or []) if x]
-        companies = [str(x).strip()[:128] for x in (t.get("impacted_companies") or []) if x]
-        themes.append(
-            Theme(
-                canonical=canonical,
-                display=display,
-                summary=summary,
-                impacted_assets=assets,
-                impacted_companies=companies,
-            )
-        )
-    return themes
+    # call_claude_json already returns a dict; re-parse via extract_themes_json
+    # is unnecessary, but themes_from_parsed handles validation/clamping.
+    themes = themes_from_parsed(parsed)
+    return themes or None
 
 
 async def run_synthesis(window_hours: float = 6.0) -> int:
-    """One synthesis cycle. Returns number of themes upserted (0 if no key or
-    no recent docs).
-    """
+    """One synthesis cycle. Returns number of themes upserted."""
     docs = await _fetch_recent_docs(window_hours)
     if not docs:
         logger.info("synthesis: no recent documents")
         return 0
 
-    corpus = _pack_corpus(docs)
-    themes = await _call_llm(corpus, window_hours)
-    if themes is None:
-        logger.info("synthesis: LLM unavailable or returned no parseable themes")
-        return 0
+    # Primary path: agent tool loop. Reads docs + existing graph coverage on its own.
+    themes = await run_synthesis_agent(window_hours)
+    if themes:
+        logger.info(f"synthesis: agent path produced {len(themes)} themes")
+    else:
+        # Fallback to single-shot with a packed corpus.
+        corpus = _pack_corpus(docs)
+        themes = await _single_shot_fallback(corpus, window_hours)
+        if themes:
+            logger.info(f"synthesis: single-shot fallback produced {len(themes)} themes")
+
     if not themes:
         logger.info("synthesis: no themes emerged")
         return 0
 
     for theme in themes:
         try:
-            # Concept node — keyed by canonical slug. display + summary stored
-            # via the upsert helper (only display is set on the node today; we
-            # don't have a generic prop sink yet, which is fine for v1).
             await upsert_entity("Concept", theme.canonical, theme.display)
-            # IMPACTS edges
             for asset in theme.impacted_assets:
                 await link_typed_edge(
                     "Concept", theme.canonical, "IMPACTS", "Asset", asset
@@ -145,3 +123,8 @@ async def run_synthesis(window_hours: float = 6.0) -> int:
             f"assets={theme.impacted_assets} companies={theme.impacted_companies}"
         )
     return len(themes)
+
+
+# Backwards-compat re-export — anything that used `synthesis.synthesize.Theme`
+# still works. The dataclass moved to themes.py during the agent conversion.
+__all__ = ["Theme", "extract_themes_json", "run_synthesis", "themes_from_parsed"]
