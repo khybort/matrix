@@ -6,10 +6,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import case, func, select
-
 from matrix_shared import shared_session_scope
 from matrix_shared.models import Outcome, Prediction
+from sqlalchemy import case, func, select
 
 
 @dataclass(slots=True)

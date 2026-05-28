@@ -24,9 +24,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from loguru import logger
-from sqlalchemy import text
-
 from matrix_shared import session_scope
+from sqlalchemy import text
 
 # Bullish / bearish keyword vocabularies.
 BULLISH_KW = (

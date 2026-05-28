@@ -9,7 +9,7 @@ Build a handoff payload from the current conversation:
 3. List the files we've opened, edited, or referenced (best effort from session memory).
 4. Append the user's free-text continuation instruction (the args to this slash command).
 
-POST to http://localhost:8009/tasks with:
+POST to http://agent.matrix.local/tasks with:
 ```json
 {
   "description": "<continuation instruction>",

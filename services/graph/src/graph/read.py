@@ -12,10 +12,9 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from loguru import logger
-from sqlalchemy import desc, select
-
 from matrix_shared import shared_session_scope
 from matrix_shared.models import GraphSignal
+from sqlalchemy import desc, select
 
 from graph.queries import GraphAssetContext
 

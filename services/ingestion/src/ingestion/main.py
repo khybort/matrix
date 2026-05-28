@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import signal
 import sys
 from dataclasses import dataclass
@@ -67,6 +68,12 @@ async def run(market_names: list[str], cfg: _IngestCfg) -> None:
         asyncio.create_task(_run_market(name, cfg), name=f"ingest-{name}")
         for name in market_names
     ]
+    # Screener runs alongside ingestion — pure REST, no WebSocket dependency.
+    # Disabled when SCREENER_ENABLED=false (e.g. non-crypto-only deploys).
+    if os.environ.get("SCREENER_ENABLED", "true").strip().lower() != "false":
+        from ingestion.screener import run as run_screener
+        tasks.append(asyncio.create_task(run_screener(), name="screener"))
+
     if not tasks:
         logger.warning("no markets to ingest; exiting")
         return
@@ -87,17 +94,27 @@ async def run(market_names: list[str], cfg: _IngestCfg) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Matrix unified ingestion daemon")
+    # Positional symbols kept for backward-compat with the legacy
+    # `python -m ingestion.main BTCUSDT ETHUSDT --mainnet` invocation
+    # still used by docker-compose.dev.yml. `--symbols` is the preferred
+    # form and overrides positional when both are passed.
     parser.add_argument(
-        "--markets",
+        "symbols_positional",
         nargs="*",
         default=None,
-        help="Markets to ingest (default: all registered)",
+        help="Crypto symbols (positional, legacy form)",
     )
     parser.add_argument(
         "--symbols",
         nargs="*",
         default=None,
         help="Crypto symbol override (other markets use their adapter's universe)",
+    )
+    parser.add_argument(
+        "--markets",
+        nargs="*",
+        default=None,
+        help="Markets to ingest (default: all registered)",
     )
     parser.add_argument(
         "--mainnet",
@@ -113,6 +130,7 @@ def main() -> None:
         format="{time:HH:mm:ss} | {level: <5} | {message}",
     )
 
+    crypto_symbols = args.symbols or args.symbols_positional or None
     market_names = args.markets if args.markets else [m.name for m in all_markets()]
     testnet = not args.mainnet
     if not testnet:
@@ -120,9 +138,9 @@ def main() -> None:
             "MAINNET mode (crypto) — recording live data, no execution yet but be aware"
         )
 
-    cfg = _IngestCfg(symbols=args.symbols, testnet=testnet)
+    cfg = _IngestCfg(symbols=crypto_symbols, testnet=testnet)
     logger.info(
-        f"ingestion start: markets={market_names} crypto_symbols={args.symbols} "
+        f"ingestion start: markets={market_names} crypto_symbols={crypto_symbols} "
         f"testnet={testnet}"
     )
 

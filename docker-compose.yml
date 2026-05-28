@@ -219,6 +219,10 @@ services:
       BULLETIN_AUTO_PUBLISH: ${BULLETIN_AUTO_PUBLISH:-false}
     command: ["bulletin.main"]
     restart: unless-stopped
+    # Bulletin is the Phase 6+ deferred product (CLAUDE.md). Until then the
+    # weekly compose call is pure idle cost. Bring it up explicitly with
+    # `docker compose --profile phase6 up -d bulletin` when needed.
+    profiles: ["phase6"]
     logging: *default_logging
 
   # Telegram bot: alert push (circuit/cert/live-flag/equity drop) + /status,
@@ -378,6 +382,13 @@ services:
       <<: *python-env
     command: ["synthesis.main", "--interval", "3600", "--hours", "6"]
     restart: unless-stopped
+    # Hourly theme synthesis writes Concept nodes consumed by matrix_agent's
+    # feature extraction and the bulletin compose step. Both consumers are
+    # either gated (bulletin → Phase 6) or rule-dominated (matrix_agent
+    # feature space mostly uses graph mention counts, not narrative themes),
+    # so this is idle LLM burn for the survivor strategy set. Re-enable with
+    # `docker compose --profile phase6 up -d synthesis` when bulletin returns.
+    profiles: ["phase6"]
     logging: *default_logging
 
   dev_agent:

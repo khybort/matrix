@@ -19,10 +19,8 @@ from __future__ import annotations
 import time
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from decimal import Decimal
 
 from loguru import logger
-
 from matrix_shared import get_settings, shared_session_scope
 from matrix_shared.models import GraphSignal
 

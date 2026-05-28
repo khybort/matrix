@@ -2,7 +2,7 @@
 description: File a dev_agent task / accept / discard / revise / kill / pause / resume / lesson-approve
 ---
 
-Dispatch a request to the Matrix dev_agent at http://localhost:8009. Use the Bash tool to run `curl`.
+Dispatch a request to the Matrix dev_agent at http://agent.matrix.local. Use the Bash tool to run `curl`.
 
 Parse the first argument as an optional sub-command. Supported sub-commands:
 
