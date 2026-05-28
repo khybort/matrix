@@ -16,6 +16,7 @@ import orjson
 from graph.age import _exec_cypher
 from matrix_shared import local_session_scope
 from matrix_shared.agent_runtime.tool import ToolRegistry, tool
+from matrix_shared.agent_runtime.worker import haiku_distill
 from matrix_shared.models import RawDocument
 from sqlalchemy import desc, select
 
@@ -43,10 +44,13 @@ def build_registry(*, window_hours: float) -> ToolRegistry:
 
     @tool(
         "recent_documents",
-        "Return the last N hours of news/filings/transcripts (titles + body snippets). "
-        "Defaults to the loop's configured window. Pass verbose=true to widen "
-        "the trawl (up to 60 docs / 400-char bodies) when the default 20x180 "
-        "shape isn't enough.",
+        "Recent news/filings/transcripts in the configured window. Default "
+        "response is a Haiku-distilled bullet summary (themes, mentioned "
+        "tickers/companies, sentiment per theme, source mix) — orchestrator "
+        "never sees the raw bodies, context stays small. Pass verbose=true "
+        "for the structured doc list (up to 60 docs / 400-char bodies) when "
+        "you need the underlying titles/bodies (e.g. to quote a specific "
+        "headline).",
         {"hours": float, "verbose": bool},
     )
     async def recent_documents(args: dict) -> dict:
@@ -63,7 +67,7 @@ def build_registry(*, window_hours: float) -> ToolRegistry:
                 .limit(max_docs)
             )
             docs = list((await session.execute(stmt)).scalars())
-        out = [
+        rows = [
             {
                 "i": i,
                 "source": d.source,
@@ -73,7 +77,29 @@ def build_registry(*, window_hours: float) -> ToolRegistry:
             }
             for i, d in enumerate(docs, 1)
         ]
-        return _text(out)
+        if verbose:
+            return _text(rows)
+        if not rows:
+            return _text({"summary": "(no recent documents)", "n_docs": 0,
+                          "window_hours": hours})
+        # Default: Haiku worker distills the corpus before it reaches the
+        # orchestrator. The orchestrator sees ~600 tokens of bullets instead
+        # of N*600ch of raw doc text re-entering context every turn.
+        summary = await haiku_distill(
+            raw=rows,
+            instruction=(
+                f"You are summarizing the last {hours:.0f}h of financial news for a "
+                "synthesis orchestrator. Produce 5-10 short bullets covering: "
+                "(a) emerging themes spanning ≥ 2 docs, "
+                "(b) the canonical assets / companies each theme touches, "
+                "(c) sentiment per theme (bullish / bearish / mixed / neutral), "
+                "(d) headline anchor docs by index (e.g. 'see [3], [7]'), "
+                "(e) the source mix at the end (one line). Skip any theme "
+                "supported by fewer than 2 distinct docs."
+            ),
+            max_tokens=700,
+        )
+        return _text({"summary": summary, "n_docs": len(rows), "window_hours": hours})
 
     @tool(
         "existing_concepts",
