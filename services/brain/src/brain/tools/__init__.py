@@ -42,7 +42,15 @@ ALLOWED_TABLES: frozenset[str] = frozenset(
     }
 )
 
-_MAX_ROWS = 500
+# Default summary cap. Tool result re-enters the model's context every loop
+# turn, so smaller is cheaper. `verbose=true` raises it (the model has to
+# explicitly opt in, making the cost decision visible in the trace).
+_MAX_ROWS_DEFAULT = 25
+_MAX_ROWS_VERBOSE = 100
+# Per-field char cap before truncation. Brain answers usually want the
+# *shape* of a row, not its blob fields (thesis text, json context, ...).
+_DEFAULT_CHARS = 300
+_VERBOSE_CHARS = 500
 
 
 def _dumps(value: object) -> str:
@@ -55,6 +63,32 @@ def _text(payload: object) -> dict:
 
 def _error(message: str) -> dict:
     return {"content": [{"type": "text", "text": f"ERROR: {message}"}], "is_error": True}
+
+
+def _truncate_row(row: dict, max_chars: int = _DEFAULT_CHARS) -> dict:
+    """Cap each string value at `max_chars`. Non-strings pass through. Returns
+    a new dict (caller-mutation-safe)."""
+    out: dict = {}
+    for k, v in row.items():
+        if isinstance(v, str) and len(v) > max_chars:
+            out[k] = v[: max_chars - 1] + "…"
+        else:
+            out[k] = v
+    return out
+
+
+def _summarize_rows(rows: list, *, head: int = 10, tail: int = 10) -> dict:
+    """If rows ≤ head+tail return them whole; otherwise return head + tail +
+    total + omitted so the model sees compressed but still useful shape."""
+    total = len(rows)
+    if total <= head + tail:
+        return {"rows": rows, "total": total}
+    return {
+        "head": rows[:head],
+        "tail": rows[-tail:],
+        "total": total,
+        "omitted": total - head - tail,
+    }
 
 
 def build_registry(pools: Pools) -> ToolRegistry:
@@ -96,13 +130,19 @@ def build_registry(pools: Pools) -> ToolRegistry:
     @tool(
         "sql_read",
         "Run a single read-only SELECT/WITH query over the allow-listed tables. "
-        "Routed to the correct DB tier automatically. Auto-LIMITed.",
-        {"sql": str},
+        "Routed to the correct DB tier automatically. Default response is "
+        "summarized (head 10 + tail 10 + total) with each string field capped "
+        "to 300 chars. Pass verbose=true for the full payload (up to 100 rows, "
+        "500-char fields) — only when you actually need the body content.",
+        {"sql": str, "verbose": bool},
     )
     async def sql_read(args) -> dict:
         raw = str(args.get("sql", ""))
+        verbose = bool(args.get("verbose", False))
+        cap = _MAX_ROWS_VERBOSE if verbose else _MAX_ROWS_DEFAULT
+        chars = _VERBOSE_CHARS if verbose else _DEFAULT_CHARS
         try:
-            safe = ensure_read_only_sql(raw, set(ALLOWED_TABLES), default_limit=_MAX_ROWS)
+            safe = ensure_read_only_sql(raw, set(ALLOWED_TABLES), default_limit=cap)
         except UnsafeQueryError as e:
             return _error(str(e))
         tier = choose_tier(safe)
@@ -110,17 +150,22 @@ def build_registry(pools: Pools) -> ToolRegistry:
             rows = await pools.for_tier(tier).fetch(safe)
         except Exception as e:  # surface DB errors to the model, don't crash the loop
             return _error(f"query failed: {e}")
-        return _text([dict(r) for r in rows[:_MAX_ROWS]])
+        truncated = [_truncate_row(dict(r), max_chars=chars) for r in rows[:cap]]
+        return _text(truncated if verbose else _summarize_rows(truncated))
 
     @tool(
         "cypher_query",
         "Run a read-only Cypher query against the AGE knowledge graph "
         "'matrix_graph' (nodes: Document/Asset/Company/Person/Event/Concept). "
-        "RETURN a single column/map, e.g. MATCH (a:Asset) RETURN a LIMIT 20.",
-        {"query": str},
+        "RETURN a single column/map, e.g. MATCH (a:Asset) RETURN a LIMIT 20. "
+        "Default response is summarized (head 10 + tail 10 + total). "
+        "Pass verbose=true for the full list (up to 100 rows).",
+        {"query": str, "verbose": bool},
     )
     async def cypher_query(args) -> dict:
         raw = str(args.get("query", ""))
+        verbose = bool(args.get("verbose", False))
+        cap = _MAX_ROWS_VERBOSE if verbose else _MAX_ROWS_DEFAULT
         try:
             safe = ensure_read_only_cypher(raw)
         except UnsafeQueryError as e:
@@ -135,7 +180,8 @@ def build_registry(pools: Pools) -> ToolRegistry:
                 rows = await conn.fetch(select)
         except Exception as e:
             return _error(f"cypher failed: {e}")
-        return _text([str(r["result"]) for r in rows[:_MAX_ROWS]])
+        out = [str(r["result"]) for r in rows[:cap]]
+        return _text(out if verbose else _summarize_rows(out))
 
     for t in (list_tables, describe_table, sql_read, cypher_query):
         reg.add(t)

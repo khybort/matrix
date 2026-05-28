@@ -6,6 +6,7 @@ from brain.access import make_deny_hook
 from brain.history import format_history
 from brain.sse import sse_frame
 from brain.tier import choose_tier
+from brain.tools import _summarize_rows, _truncate_row
 
 
 # ---- tier routing ----
@@ -71,3 +72,40 @@ def test_deny_hook_blocks_builtin_write_tools():
 def test_deny_hook_blocks_unknown_tool():
     hook = make_deny_hook({"mcp__matrix__sql_read"})
     assert hook("mcp__matrix__delete_everything", {}) is False
+
+
+# ---- _truncate_row / _summarize_rows ----
+
+def test_truncate_row_caps_long_strings_and_appends_ellipsis():
+    row = {"thesis": "x" * 800, "side": "long"}
+    out = _truncate_row(row, max_chars=300)
+    assert len(out["thesis"]) == 300
+    assert out["thesis"].endswith("…")
+    # Short field untouched.
+    assert out["side"] == "long"
+
+
+def test_truncate_row_preserves_short_values_and_non_strings():
+    row = {"id": None, "confidence": 0.7, "n": 42, "side": "short"}
+    out = _truncate_row(row, max_chars=300)
+    assert out == row
+    # Returns a new dict — caller is free to mutate.
+    out["side"] = "long"
+    assert row["side"] == "short"
+
+
+def test_summarize_rows_passes_short_lists_unchanged():
+    rows = [{"i": i} for i in range(5)]
+    out = _summarize_rows(rows, head=10, tail=10)
+    assert out == {"rows": rows, "total": 5}
+
+
+def test_summarize_rows_compresses_long_lists_with_total():
+    rows = [{"i": i} for i in range(50)]
+    out = _summarize_rows(rows, head=10, tail=10)
+    assert out["total"] == 50
+    assert out["omitted"] == 30
+    assert out["head"] == rows[:10]
+    assert out["tail"] == rows[-10:]
+    # No "rows" key in compressed mode — model sees head/tail/omitted only.
+    assert "rows" not in out

@@ -421,7 +421,11 @@ services:
       # it runs on subscription auth (CLAUDE_CODE_OAUTH_TOKEN) like dev_agent.
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       BRAIN_PORT: "3032"
-      BRAIN_MODEL: ${BRAIN_MODEL:-claude-opus-4-7}
+      # Default Sonnet 4.6 — Opus on every chat turn (incl. trivial ones) drains
+      # the subscription rate budget the trading loop also draws from. Set
+      # BRAIN_MODEL=claude-opus-4-7 in .env for global Opus, or pass
+      # {"model":"claude-opus-4-7"} per-request for one-off hard questions.
+      BRAIN_MODEL: ${BRAIN_MODEL:-claude-sonnet-4-6}
       BRAIN_MAX_TURNS: ${BRAIN_MAX_TURNS:-12}
       AGENT_MAX_CONCURRENCY: ${AGENT_MAX_CONCURRENCY:-3}
     expose:
