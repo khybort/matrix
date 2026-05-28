@@ -31,6 +31,7 @@ from matrix_shared.models import (
     Wallet,
     WalletSnapshot,
 )
+from matrix_shared.models.slot_config import StrategySlotConfig
 
 # Crypto's seed wallet (migration 0004). Per-market wallets are resolved by
 # asset_class via _resolve_wallet; this constant remains the crypto default
@@ -268,9 +269,9 @@ async def open_due_positions() -> int:
 
 
 async def _open_for_market(asset_class: str) -> int:
-    """Open positions for one market's predictions, respecting that market's
-    own wallet caps. Candidate selection is filtered by asset_class so the
-    per-market slot budget is independent.
+    """Open positions for one market's predictions, enforcing two-layer slot caps:
+    1. Wallet-level: total open positions < wallet.max_concurrent_positions
+    2. Per-strategy: open positions for strategy < config.allocated_slots
 
     All wallet/prediction state lives in SHARED; entry pricing is read from
     the LOCAL tier's market_trades / market_bars."""
@@ -284,18 +285,43 @@ async def _open_for_market(asset_class: str) -> int:
             logger.debug(f"circuit tripped ({asset_class}); opening blocked")
             return 0
 
-        open_count_stmt = (
-            select(func.count(PaperPosition.id))
-            .where(PaperPosition.wallet_id == wallet.id)
-            .where(PaperPosition.status == "open")
-        )
-        open_count = (await session.execute(open_count_stmt)).scalar_one()
-        slots_left = wallet.max_concurrent_positions - open_count
-        if slots_left <= 0:
+        total_open = (
+            await session.execute(
+                select(func.count(PaperPosition.id))
+                .where(PaperPosition.wallet_id == wallet.id)
+                .where(PaperPosition.status == "open")
+            )
+        ).scalar_one()
+        wallet_slots_left = wallet.max_concurrent_positions - total_open
+        if wallet_slots_left <= 0:
             return 0
 
         equity, _unrealized, _n = await _current_equity(session, wallet)
         max_notional = equity * wallet.max_position_pct
+
+        # Pre-fetch open counts per strategy for this wallet
+        strategy_open_rows = (
+            await session.execute(
+                select(Prediction.strategy_id, func.count(PaperPosition.id))
+                .join(Prediction, Prediction.id == PaperPosition.prediction_id)
+                .where(PaperPosition.wallet_id == wallet.id)
+                .where(PaperPosition.status == "open")
+                .group_by(Prediction.strategy_id)
+            )
+        ).all()
+        strategy_open: dict[str, int] = {sid: cnt for sid, cnt in strategy_open_rows}
+
+        # Pre-fetch slot configs for this wallet
+        slot_configs: dict[str, StrategySlotConfig] = {
+            cfg.strategy_id: cfg
+            for cfg in (
+                await session.execute(
+                    select(StrategySlotConfig).where(
+                        StrategySlotConfig.wallet_id == wallet.id
+                    )
+                )
+            ).scalars()
+        }
 
         # Skip predictions whose horizon already lapsed before we could open
         # them. Without this filter, a backlog (e.g. after a crash or queue
@@ -313,11 +339,14 @@ async def _open_for_market(asset_class: str) -> int:
             .where(Prediction.side.in_(["long", "short"]))
             .where(Prediction.close_by > now)
             .order_by(Prediction.generated_at.asc())
-            .limit(slots_left)
+            .limit(wallet_slots_left)
         )
         candidates = list((await session.execute(pred_stmt)).scalars())
 
+    # Track newly opened counts per strategy to avoid re-querying mid-loop
+    newly_opened: dict[str, int] = {}
     opened = 0
+
     for p in candidates:
         # BIST is long-only (T+2 settlement, retail short restrictions). The
         # strategy/agent layers already filter shorts, but this is a defensive
@@ -325,6 +354,17 @@ async def _open_for_market(asset_class: str) -> int:
         if p.asset_class == "bist" and p.side == "short":
             logger.warning(f"skip {p.id}: short on BIST disallowed ({p.symbol})")
             continue
+
+        # Per-strategy slot gate (layer 2)
+        cfg = slot_configs.get(p.strategy_id)
+        if cfg is not None:
+            current_open = strategy_open.get(p.strategy_id, 0) + newly_opened.get(p.strategy_id, 0)
+            if current_open >= cfg.allocated_slots:
+                logger.debug(
+                    f"skip {p.id}: {p.strategy_id} at slot cap "
+                    f"({current_open}/{cfg.allocated_slots})"
+                )
+                continue
 
         last_px = await _latest_price(p.symbol, p.asset_class)
         if last_px is None:
@@ -363,6 +403,7 @@ async def _open_for_market(asset_class: str) -> int:
                     status="open",
                 )
             )
+        newly_opened[p.strategy_id] = newly_opened.get(p.strategy_id, 0) + 1
         opened += 1
         logger.info(
             f"opened {p.side} {p.symbol} [{p.asset_class}] notional={notional:.2f} "
