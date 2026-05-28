@@ -61,8 +61,19 @@ async def call_subscription(
     )
 
     chunks: list[str] = []
+    result_cost: float | None = None
+    result_is_err: bool | None = None
     try:
         async for ev in query(prompt=user, options=options):
+            # ResultMessage carries the per-call cost / error flag so we can
+            # surface single-shot usage (Haiku workers, fallback LLM paths)
+            # via the same `agent.usage` channel as the agent loop.
+            if type(ev).__name__ == "ResultMessage":
+                rc = getattr(ev, "total_cost_usd", None)
+                if isinstance(rc, (int, float)):
+                    result_cost = float(rc)
+                result_is_err = bool(getattr(ev, "is_error", False))
+                continue
             # Assistant messages carry content blocks; concatenate text.
             content = getattr(ev, "content", None)
             if not content:
@@ -81,6 +92,13 @@ async def call_subscription(
         return None
 
     text = "".join(chunks).strip()
+    # One agent.usage line per single-shot call too — turns=1 by definition.
+    logger.info(
+        "agent.usage session=single_shot model={m} turns=1 cost_usd={c} is_error={e}",
+        m=model or DEFAULT_MODEL,
+        c=f"{result_cost:.6f}" if result_cost is not None else None,
+        e=result_is_err,
+    )
     return text or None
 
 
