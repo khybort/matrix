@@ -112,3 +112,15 @@ Risks tracked: subscription rate/latency × many multi-step agents (mitigated by
 - `CLAUDE.md`: "Birincil amaç — her zaman yüksek profit" bölümü en üste eklendi; her teknik
   kararın aktif süzgeci olarak. Token tasarrufu kendi başına amaç değil — rate-budget'ın
   decision loop'a kalması içindir.
+
+## 2026-05-28 (later) — Worker pattern (Haiku distillation) — proven live
+
+3 commit'lik mini-tur: orchestrator/worker model tieringi gerçek koda taşındı.
+
+- `matrix_shared.agent_runtime.worker.haiku_distill`: tek-atış Haiku 4.5 çağrısı (subscription path), opsiyonel/ücretsiz; subscription kapalıysa deterministic truncate fallback.
+- İlk uygulama: `synthesis.recent_documents` tool'u artık DAİMA Haiku-distilled 5-10 bullet özeti döner. `verbose=true` opt-out kaldırıldı (operatör memory'sindeki ders: model verbose'a kaçıyor — distillation tool seviyesinde *yapısal* enforce edilmeli).
+- `call_subscription` single-shot path da `agent.usage` log atıyor (Haiku worker + legacy fallback'ler artık `make agent-usage`'da görünür).
+
+Canlı ölçüm (aynı synthesis tick'i, öncesi/sonrası): Sonnet orkestratör cost **$0.183 → $0.086 (−53%)**, Haiku worker $0.032 eklenince **total $0.118 (−35%)**. Tema sayısı 7 → 4 (recall düştü, precision yüksek; özetin verdiği focus daha az gürültü demek).
+
+Sonraki uygulama alanları (canlı veri toplandıkça): brain `sql_read` (büyük tablolar), reflection `recent_outcomes` (uzun PnL izleri), brain `cypher_query` (uzun sonuç listeleri).
