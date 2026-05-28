@@ -21,6 +21,10 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     surface: str = "api"
     external_ref: str | None = None
+    # Per-request model override. Omit to use BRAIN_MODEL (default
+    # claude-sonnet-4-6). Pass "claude-opus-4-7" for a single hard question
+    # without flipping the global default.
+    model: str | None = None
 
 
 class SessionCreate(BaseModel):
@@ -78,7 +82,9 @@ def build_app(*, shared_pool: asyncpg.Pool, runtime: BrainRuntime) -> FastAPI:
             answer_parts: list[str] = []
             tool_trace: list[dict] = []
             try:
-                async for ev in runtime.run(prompt, session_id=session_id):
+                async for ev in runtime.run(
+                    prompt, session_id=session_id, model=payload.model
+                ):
                     if ev.type == "assistant_text":
                         text = ev.payload.get("text", "")
                         answer_parts.append(text)

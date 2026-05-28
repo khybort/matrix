@@ -23,7 +23,12 @@ def load_config() -> Config:
         local_database_url=local,
         shared_database_url=shared,
         port=int(os.environ.get("BRAIN_PORT", "3032")),
-        model=os.environ.get("BRAIN_MODEL", "claude-opus-4-7"),
+        # Default Sonnet 4.6: most chat questions don't need Opus, and Opus on
+        # every tool-loop step burns the subscription rate budget the trading
+        # loop also draws from. Set BRAIN_MODEL=claude-opus-4-7 to flip back
+        # globally, or pass {"model":"claude-opus-4-7"} in the chat request
+        # for a single hard question.
+        model=os.environ.get("BRAIN_MODEL", "claude-sonnet-4-6"),
         max_turns=int(os.environ.get("BRAIN_MAX_TURNS", "12")),
     )
 

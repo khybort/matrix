@@ -31,12 +31,16 @@ class BrainRuntime:
         self.model = model
         self.max_turns = max_turns
 
-    async def run(self, prompt: str, *, session_id: str) -> AsyncIterator[Any]:
-        """Yield AgentEvents for one prompt (with replayed history inline)."""
+    async def run(
+        self, prompt: str, *, session_id: str, model: str | None = None
+    ) -> AsyncIterator[Any]:
+        """Yield AgentEvents for one prompt. `model` overrides the configured
+        default for this turn only (e.g. operator wants Opus for one hard
+        question)."""
         async for ev in call_subscription_agent(
             prompt=prompt,
             system=BRAIN_SYSTEM,
-            model=self.model,
+            model=model or self.model,
             mcp_servers={_SERVER_NAME: self.server},
             allowed_tools=self.allowed,
             disallowed_tools=WRITE_BUILTINS,
