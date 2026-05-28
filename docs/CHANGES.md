@@ -124,3 +124,36 @@ Risks tracked: subscription rate/latency × many multi-step agents (mitigated by
 Canlı ölçüm (aynı synthesis tick'i, öncesi/sonrası): Sonnet orkestratör cost **$0.183 → $0.086 (−53%)**, Haiku worker $0.032 eklenince **total $0.118 (−35%)**. Tema sayısı 7 → 4 (recall düştü, precision yüksek; özetin verdiği focus daha az gürültü demek).
 
 Sonraki uygulama alanları (canlı veri toplandıkça): brain `sql_read` (büyük tablolar), reflection `recent_outcomes` (uzun PnL izleri), brain `cypher_query` (uzun sonuç listeleri).
+
+## 2026-05-28 (later still) — Provider-portable LLM (subscription / Bedrock / Vertex)
+
+`claude_agent_sdk` zaten backend seçimini standart env'lerle yapıyor; iki düzeltme yetti:
+
+1. **Hardcoded model adları indirection'a alındı.** `matrix_shared.subscription_llm`'de
+   `MODEL_HAIKU / MODEL_SONNET / MODEL_OPUS` modül-seviye sabitleri, `MATRIX_MODEL_<role>`
+   env'inden çözülür (yoksa Anthropic kısa adları — eski davranış). 10 call site bu sabitleri
+   kullanır.
+2. **Compose env passthrough.** `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`,
+   `AWS_REGION/AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN/AWS_PROFILE`,
+   `MATRIX_MODEL_<HAIKU|SONNET|OPUS>` artık `*python-env` anchor'ında.
+
+`subscription_enabled()` tek bir provider'dan biri yapılandırıldıysa True döner (subscription /
+Bedrock / Vertex) — isim geriye dönük uyum için korundu, anlamı "LLM yolu hazır mı?".
+
+**Subscription operatörü için**: hiçbir değişiklik gerekmiyor.
+
+**Bedrock'a geçmek için** `.env`'e şunları yaz, `make build && docker compose up -d` ile yenile:
+
+```
+CLAUDE_CODE_USE_BEDROCK=1
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+MATRIX_MODEL_HAIKU=us.anthropic.claude-haiku-4-5-20251001-v1:0
+MATRIX_MODEL_SONNET=us.anthropic.claude-sonnet-4-6-20250929-v1:0
+MATRIX_MODEL_OPUS=us.anthropic.claude-opus-4-7-20251022-v1:0
+```
+
+Brain + 5 backend agent (synthesis / graph extract / reflection / decision LLM / bulletin) + Haiku
+worker birlikte flip eder. `CLAUDE_CODE_OAUTH_TOKEN` set'liyse Bedrock yine de override eder
+(CLI'nın iç önceliği bu yönde).
