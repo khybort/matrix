@@ -12,6 +12,7 @@ from matrix_shared.models.market_trade import MarketTrade
 from matrix_shared.models.paper_trade_certificate import PaperTradeCertificate
 from matrix_shared.models.prediction import Outcome, PaperPosition, Prediction
 from matrix_shared.models.raw_document import RawDocument
+from matrix_shared.models.slot_config import StrategySlotConfig
 from matrix_shared.models.strategy_config import MutationProposal, StrategyConfig
 from matrix_shared.models.wallet import Wallet, WalletSnapshot
 
@@ -35,6 +36,7 @@ __all__ = [
     "Prediction",
     "RawDocument",
     "StrategyConfig",
+    "StrategySlotConfig",
     "TickerSnapshot",
     "Wallet",
     "WalletSnapshot",
