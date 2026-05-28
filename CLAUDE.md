@@ -2,6 +2,20 @@
 
 > Bu dosya bütün node'lar tarafından okunur. N tane PC bu sistemi çalıştırabilir; sabit rol yok.
 
+## Birincil amaç — her zaman yüksek profit
+
+Projenin tek birincil amacı **yüksek profit elde etmektir**. Her teknik karar — yeni
+feature, refactor, model seçimi, token bütçesi, abstraction, optimizasyon — şu süzgeçten
+geçer: *"Bu canlı PnL'i iyileştirir mi (doğrudan veya öğrenme döngüsünü hızlandırarak)?"*
+Geçmiyorsa ya ertelenir ya iptal edilir. **Tek non-negotiable kısıt**: risk gates ve
+`paper_trade_certificate` (bkz. `docs/TRADING.md`) — bunlar PnL'in *sürdürülebilirliğini*
+korur, dolayısıyla aynı hedefin uzun-vadeli versiyonu. Onları gevşetmek = hedeften
+sapma; onları korumak = hedefin parçası.
+
+Cost/rate bütçesi de bu çerçevede okunur: token tasarrufu kendi başına amaç değil,
+**rate-budget'ın 15s decision loop'a kalmasını ve onun PnL'ini düşürmemesini sağlamak**
+için yapılır.
+
 ## Proje özeti
 
 **Matrix** = kendi kendini güncelleyen, context-graph tabanlı, multi-market AI fintech araştırma + **otonom trading** motoru. Birincil hedef: sistemin paper-trade'i validate ettikten sonra küçük canlı sermaye ile **doğrudan piyasada para kazanması**. Bülten ürünü ertelenmiş ikincil ürün.
@@ -116,4 +130,4 @@ Docker Postgres (AGE + pgvector). Detay: `docs/MULTI_PC_SETUP.md`.
 - Kullanıcı (Muhsin) senior engineer; basic açıklama yok, tradeoff söyle
 - Kullanıcı direktif istiyor — sonu açık sorularda öneri + tradeoff + ilerle
 - Her node Claude Code çalıştırıyor; iletişim docs/ ve git üzerinden
-- "Para kazanan, kendi kendini geliştiren" — bu birincil hedef. Her feature kararını "bu sistemin live PnL'ini iyileştirir mi?" sorusuyla tart.
+- **Birincil amaç = yüksek profit** (dosyanın en üstündeki "Birincil amaç" bölümüne bak). Bu yumuşak bir motto değil, her teknik kararın aktif süzgeci. "Para kazanan, kendi kendini geliştiren" sloganı bu hedefin uzun-vadeli özetidir.
