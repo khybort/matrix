@@ -22,9 +22,9 @@ import uuid
 from typing import Any
 
 from loguru import logger
+from matrix_shared import session_scope
 from sqlalchemy import text
 
-from matrix_shared import session_scope
 
 def _cypher_str(s: str) -> str:
     """Escape a string for inclusion in a Cypher literal."""
