@@ -95,3 +95,20 @@ Operator brief: re-architect the system to be agent-driven, keep context in the 
 Remaining conversions (sequencing — each behind the stable `predictions` interface, with `rule_decide` fallback preserved on the hot path): graph extraction → reflection + agent_lessons → labs → decision agent (last) → execution (only when broker connector lands; `submit_order` will be `risk-gated`, never converted to an agent decision).
 
 Risks tracked: subscription rate/latency × many multi-step agents (mitigated by the shared `agent_runtime.ratelimit` semaphore and deterministic fallbacks on the hot path); graph/SQL divergence (SQL is source of truth, graph writes idempotent + best-effort, never read money/cert from graph); brain data exposure (read-only belt + SQL/Cypher gates + `disallowed_tools` + deny-hook, defense in depth).
+
+## 2026-05-28 — Token optimization + birincil amaç netleştirildi
+
+- Operatör gözlemi: Brain her sorguda Opus 4.7 koşturuyordu (~$0.20/turn); rate bütçesi
+  decision loop ile paylaşılıyor. 6 commit'lik token-disiplini turu:
+  - `agent.usage` telemetrisi (`subscription_llm` tek nokta, brain SSE result.model). Önce ölç.
+  - Brain default `claude-sonnet-4-6`, `BRAIN_MODEL=opus` veya per-istek `{"model":"…"}` opt-in.
+    Aynı sorguda **Opus $0.197 → Sonnet $0.022, ~9× ucuz**.
+  - Tool çıktıları: brain `sql_read`/`cypher_query` default head/tail+summary (`_truncate_row`
+    + `_summarize_rows`), `verbose=true` ile eski davranış. Synthesis/graph/reflection backend
+    agent'larında MAX_DOCS, BODY_CHARS, recent_outcomes LIMIT'leri sıkıştırıldı (verbose opt-in).
+  - System prompt'lar modül-seviye literal'a alındı (reflection/graph extract): CLI içi prompt
+    cache'e tek seviyemizden uygun zemin. `claude_agent_sdk`'da explicit `cache_control` yok.
+  - `make agent-usage` operatör görünürlüğü.
+- `CLAUDE.md`: "Birincil amaç — her zaman yüksek profit" bölümü en üste eklendi; her teknik
+  kararın aktif süzgeci olarak. Token tasarrufu kendi başına amaç değil — rate-budget'ın
+  decision loop'a kalması içindir.
