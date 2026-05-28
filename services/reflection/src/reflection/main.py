@@ -18,11 +18,10 @@ import signal
 import sys
 from decimal import Decimal
 
-from loguru import logger  # noqa: I001
-from sqlalchemy import select
-
+from loguru import logger
 from matrix_shared import shared_session_scope
 from matrix_shared.models import MutationProposal, StrategyConfig
+from sqlalchemy import select
 
 from reflection.metrics import metrics_window
 from reflection.mutate import llm_propose, rule_propose
@@ -52,7 +51,16 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
 
         draft = None
         if use_llm:
-            draft = await llm_propose(cfg.strategy_id, cfg.params, m)
+            # Agent tool-loop first: grounds the proposal in recent outcomes,
+            # active lessons, and peer-strategy configs. Falls back to the
+            # legacy single-shot LLM if subscription unavailable or no parse.
+            try:
+                from reflection.agent import run_reflection_agent
+                draft = await run_reflection_agent(cfg.strategy_id, cfg.params, m)
+            except Exception as e:
+                logger.warning(f"reflection agent path raised: {e}")
+            if draft is None:
+                draft = await llm_propose(cfg.strategy_id, cfg.params, m)
         if draft is None:
             draft = rule_propose(
                 cfg.params,

@@ -10,16 +10,16 @@ are off-limits to this module. See docs/TRADING.md.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
 import orjson
-from loguru import logger
-
 from matrix_shared import call_claude_json
 
 from reflection.metrics import StrategyMetrics
+
+# Single source of truth for MutationDraft + risk-cap stripping.
+from reflection.parsing import MutationDraft
 
 LLM_MODEL = "claude-sonnet-4-6"
 
@@ -30,15 +30,6 @@ MIN_N_OUTCOMES = 10  # need at least this many outcomes to act
 # How aggressive each mutation step is
 WEIGHT_PERTURB = Decimal("0.1")  # max ±10% relative to current weight
 THRESHOLD_PERTURB = Decimal("0.05")  # absolute step
-
-
-@dataclass(slots=True)
-class MutationDraft:
-    proposal_type: str
-    before_params: dict[str, Any]
-    after_params: dict[str, Any]
-    rationale: str
-    source: str  # "rule" | "llm"
 
 
 def _normalize_weights(weights: dict[str, Decimal]) -> dict[str, Decimal]:
@@ -142,30 +133,7 @@ async def llm_propose(
         system=system, user=user_prompt, model=LLM_MODEL,
         max_tokens=400, temperature=0.3,
     )
-    if not parsed:
-        return None
-
-    proposal_type = str(parsed.get("proposal_type", "")).strip()
-    if proposal_type not in ("weight_tune", "threshold_change", "prompt_change"):
-        return None
-    after = parsed.get("after_params", {})
-    if not isinstance(after, dict) or not after:
-        return None
-    # Strip any attempted risk-cap fields just in case
-    for forbidden in (
-        "max_position_pct",
-        "daily_loss_circuit_pct",
-        "max_concurrent_positions",
-        "live_capital_cap_usd",
-        "live_execution_enabled",
-    ):
-        after.pop(forbidden, None)
-
-    rationale = str(parsed.get("rationale", "(no rationale)"))[:2000]
-    return MutationDraft(
-        proposal_type=proposal_type,
-        before_params=current_params,
-        after_params=after,
-        rationale=rationale,
-        source="llm",
-    )
+    # Centralized validation + risk-cap stripping lives in reflection.parsing
+    # so the legacy path and the agent path share one chokepoint.
+    from reflection.parsing import parse_mutation_draft
+    return parse_mutation_draft(parsed, current_params=current_params, source="llm")
