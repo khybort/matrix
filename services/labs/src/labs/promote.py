@@ -35,7 +35,8 @@ from loguru import logger
 from sqlalchemy import and_, desc, exists, func, select
 
 from matrix_shared import shared_session_scope
-from matrix_shared.models import LabExperiment, MutationProposal, StrategyConfig
+from matrix_shared.models import LabExperiment, MutationProposal, StrategyConfig, Wallet
+from matrix_shared.models.slot_config import StrategySlotConfig
 
 # Eligibility thresholds — promotion is *consequential*, so defaults are strict.
 MIN_EVAL_FOR_PROMOTION = 30
@@ -309,6 +310,43 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
             promoted_at=datetime.now(UTC),
         )
         session.add(new_cfg)
+
+        # Ensure slot config exists for this strategy in every wallet of this
+        # asset class (first-promotion bootstrap). Each wallet gets an entry.
+        wallets = (
+            await session.execute(
+                select(Wallet)
+                .where(Wallet.asset_class == proposal.asset_class)
+            )
+        ).scalars().all()
+        for wallet_row in wallets:
+            existing_slot = await session.get(
+                StrategySlotConfig,
+                (proposal.strategy_id, proposal.asset_class, wallet_row.id),
+            )
+            if existing_slot is None:
+                n_active = (
+                    await session.execute(
+                        select(func.count(StrategySlotConfig.strategy_id)).where(
+                            StrategySlotConfig.wallet_id == wallet_row.id
+                        )
+                    )
+                ).scalar_one() or 0
+                share = max(1, wallet_row.max_concurrent_positions // (n_active + 1))
+                session.add(
+                    StrategySlotConfig(
+                        strategy_id=proposal.strategy_id,
+                        asset_class=proposal.asset_class,
+                        wallet_id=wallet_row.id,
+                        allocated_slots=share,
+                        perf_score=0.5,
+                        consecutive_losses=0,
+                    )
+                )
+                logger.info(
+                    f"slot config created: {proposal.strategy_id}/{proposal.asset_class} "
+                    f"wallet={wallet_row.id} allocated_slots={share}"
+                )
 
         proposal.status = "applied"
         proposal.applied_at = datetime.now(UTC)
