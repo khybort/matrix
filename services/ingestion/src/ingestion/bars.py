@@ -29,6 +29,8 @@ from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from matrix_shared.markets.crypto import crypto_universe
+
 from matrix_shared import session_scope
 from matrix_shared.models import MarketBar
 
@@ -287,12 +289,14 @@ def main() -> None:
     parser.add_argument("--once", action="store_true", help="Run one tick and exit")
     parser.add_argument("--backfill-all", action="store_true",
                         help="Rebuild every bar from earliest trade to now, then exit")
+    _env_backfill = os.environ.get("BARS_REST_BACKFILL_SYMBOLS", "").strip()
     parser.add_argument(
         "--rest-backfill-symbols",
         nargs="*",
-        default=os.environ.get("BARS_REST_BACKFILL_SYMBOLS", "BTCUSDT,ETHUSDT").split(","),
-        help="Symbols to fetch from Bybit kline REST on startup (default: BTCUSDT,ETHUSDT). "
-             "Empty list disables REST backfill.",
+        default=[s for s in _env_backfill.split(",") if s] if _env_backfill else crypto_universe(),
+        help="Symbols to fetch from Bybit kline REST on startup. "
+             "Default is the full crypto_universe() (overridable via "
+             "BARS_REST_BACKFILL_SYMBOLS env or this flag). Empty list disables REST backfill.",
     )
     parser.add_argument(
         "--rest-backfill-hours",

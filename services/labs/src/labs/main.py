@@ -26,6 +26,7 @@ from loguru import logger
 from sqlalchemy import desc, select
 
 from matrix_shared import shared_session_scope
+from matrix_shared.markets.crypto import crypto_universe
 from matrix_shared.models import LabEvaluation, LabExperiment
 
 from labs.evaluate import emit_signals, score_due_evaluations
@@ -37,7 +38,9 @@ from labs.promote import (
     scan_for_promotions,
 )
 
-DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT")
+# Lab evaluates candidate genomes against the full crypto universe (env-driven,
+# falls back to the canonical list in matrix_shared.markets.crypto). The
+# previous BTC+ETH-only default caused genomes to overfit two symbols.
 DEFAULT_EVAL_INTERVAL_S = 20.0
 DEFAULT_EVOLVE_INTERVAL_S = 300.0
 DEFAULT_PROMOTE_SCAN_INTERVAL_S = 180.0
@@ -161,7 +164,7 @@ async def run(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Matrix labs (evolutionary algorithm search)")
-    parser.add_argument("--symbols", nargs="*", default=list(DEFAULT_SYMBOLS))
+    parser.add_argument("--symbols", nargs="*", default=crypto_universe())
     parser.add_argument("--eval-interval", type=float, default=DEFAULT_EVAL_INTERVAL_S)
     parser.add_argument("--evolve-interval", type=float, default=DEFAULT_EVOLVE_INTERVAL_S)
     parser.add_argument("--once", action="store_true", help="Run one eval tick + score + try evolve")

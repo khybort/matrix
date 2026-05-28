@@ -24,13 +24,16 @@ FEATURES = ("trade_flow", "funding", "oi_delta", "ob_imbalance", "news")
 # Mutation hyperparameters
 WEIGHT_MUT_SIGMA = 0.08
 THRESHOLD_MUT_SIGMA = 0.04
-HORIZON_MUT_SIGMA = 30  # seconds
+HORIZON_MUT_SIGMA = 180  # seconds (was 30; needs to traverse a wider range)
 
-# Bounds
+# Bounds — 2026-05-29: was [30, 600]. All converged genomes sat at 199-224s and
+# bled paper money because slippage > signal at <5min horizons. Memory of
+# matrix_agent alpha diagnosis: direction works at 1800s+, breaks down below.
+# Expanding floor + ceiling so evolution can find the actual signal regime.
 THRESHOLD_MIN = Decimal("0.05")
 THRESHOLD_MAX = Decimal("0.50")
-HORIZON_MIN = 30
-HORIZON_MAX = 600
+HORIZON_MIN = 600
+HORIZON_MAX = 3600
 WEIGHT_MIN_EACH = Decimal("0.01")  # avoid zero-weight features
 
 
@@ -38,7 +41,7 @@ WEIGHT_MIN_EACH = Decimal("0.01")  # avoid zero-weight features
 class Genome:
     weights: dict[str, Decimal] = field(default_factory=dict)
     signal_threshold: Decimal = Decimal("0.18")
-    horizon_seconds: int = 120
+    horizon_seconds: int = 1800
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -56,7 +59,7 @@ class Genome:
         return cls(
             weights=w,
             signal_threshold=Decimal(str(d.get("signal_threshold", "0.18"))),
-            horizon_seconds=int(d.get("horizon_seconds", 120)),
+            horizon_seconds=int(d.get("horizon_seconds", 1800)),
         )
 
 
@@ -85,7 +88,7 @@ def random_genome(rng: random.Random | None = None) -> Genome:
     g = Genome(
         weights=normalize_weights(raw_w),
         signal_threshold=clamp_threshold(Decimal(str(rng.uniform(0.10, 0.30)))),
-        horizon_seconds=clamp_horizon(rng.randint(60, 240)),
+        horizon_seconds=clamp_horizon(rng.randint(900, 2700)),
     )
     return g
 

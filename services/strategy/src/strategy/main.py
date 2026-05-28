@@ -29,6 +29,7 @@ from matrix_shared.models import StrategyConfig
 from sqlalchemy import select
 
 from strategy.base import PredictionDraft
+from strategy.lessons import filter_drafts
 from strategy.modules import STRATEGIES_BY_MARKET
 from strategy.persist import persist_drafts
 
@@ -105,6 +106,11 @@ async def _tick() -> int:
                 drafts.extend(ds)
             except Exception as e:
                 logger.exception(f"strategy {strat.id} ({market.name}) failed: {e}")
+
+    # Data-driven filter: drop candidates that match an active 'avoid' lesson.
+    # Keeps strategy modules symbol-agnostic; lessons are produced by the
+    # lessons feeder and can be added/removed without code changes.
+    drafts = await filter_drafts(drafts)
     return await persist_drafts(drafts)
 
 
