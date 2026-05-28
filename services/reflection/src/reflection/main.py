@@ -141,6 +141,15 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
     except Exception:
         logger.exception("auto-grant pass failed (non-fatal)")
 
+    # Slot scoring pass — update per-strategy slot allocations
+    try:
+        from reflection.slot_scorer import score_strategy_slots
+        n_slot_updates = await score_strategy_slots()
+        if n_slot_updates:
+            logger.info(f"slot scorer: {n_slot_updates} allocations updated")
+    except Exception:
+        logger.exception("slot scoring pass failed (non-fatal)")
+
     return proposals_written
 
 
