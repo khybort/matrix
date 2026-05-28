@@ -155,6 +155,7 @@ async def call_subscription_agent(
         setting_sources=[],
     )
 
+    resolved_model = model or DEFAULT_MODEL
     async for ev in run_agent_stream(
         prompt=prompt,
         query_fn=query,
@@ -164,4 +165,22 @@ async def call_subscription_agent(
         session_id=session_id,
         limiter=limiter,
     ):
+        # One structured `agent.usage` line per completion — feeds `make
+        # agent-usage`. Subscription is flat-$ so cost is informational; the
+        # number that matters for the trading loop is `turns` (rate budget).
+        if ev.type == "result":
+            payload = ev.payload or {}
+            cost = payload.get("total_cost_usd")
+            turns = payload.get("num_turns")
+            is_err = payload.get("is_error")
+            reason = payload.get("reason")
+            extras = f" reason={reason}" if reason else ""
+            logger.info(
+                "agent.usage session={s} model={m} turns={t} "
+                "cost_usd={c} is_error={e}{x}",
+                s=session_id, m=resolved_model, t=turns,
+                c=f"{cost:.6f}" if isinstance(cost, (int, float)) else cost,
+                e=is_err, x=extras,
+            )
+            payload.setdefault("model", resolved_model)
         yield ev
