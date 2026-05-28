@@ -187,6 +187,12 @@ logs-labs: ## Follow only the labs service
 logs-brain: ## Follow only the brain (chat) service
 	$(DC) $(DC_BASE) logs -f --tail=200 brain
 
+.PHONY: agent-usage
+agent-usage: ## Recent agent.usage log lines across services (cost + turns)
+	$(DC) $(DC_BASE) logs --no-log-prefix --tail=4000 \
+	  brain synthesis graph reflection agent 2>&1 \
+	  | grep -F 'agent.usage' | tail -200
+
 .PHONY: dashboard
 dashboard: ## Open the dashboard in your browser
 	@open http://matrix.local 2>/dev/null || xdg-open http://matrix.local 2>/dev/null || \
