@@ -51,13 +51,17 @@ def _build_registry(strategy_id: str) -> ToolRegistry:
 
     @tool(
         "recent_outcomes",
-        "Recent outcomes (score, pnl_usd, reason) for this strategy. "
-        "Useful for spotting per-symbol or per-side bias.",
-        {"hours": float, "limit": int},
+        "Recent outcomes for this strategy. Default returns the most recent "
+        "30 rows; if more exist, the response is summarized to top_15 + "
+        "bottom_15 + per-symbol aggregates so the model sees shape without "
+        "the full payload. Pass verbose=true (≤ 60 rows) only when you need "
+        "the full list.",
+        {"hours": float, "verbose": bool},
     )
     async def recent_outcomes(args: dict) -> dict:
         hours = float(args.get("hours", 24.0))
-        limit = min(int(args.get("limit", 100)), 200)
+        verbose = bool(args.get("verbose", False))
+        cap = 60 if verbose else 30
         sql = text(
             "SELECT o.score, o.pnl_usd, o.reason, p.symbol, p.side, p.confidence, "
             "       p.asset_class, p.created_at "
@@ -69,17 +73,39 @@ def _build_registry(strategy_id: str) -> ToolRegistry:
         try:
             async with shared_session_scope() as session:
                 rows = (await session.execute(
-                    sql, {"sid": strategy_id, "hours": str(hours), "lim": limit}
+                    sql, {"sid": strategy_id, "hours": str(hours), "lim": cap}
                 )).mappings().all()
         except Exception as e:
             return _error(f"query failed: {e}")
-        return _text([dict(r) for r in rows])
+        items = [dict(r) for r in rows]
+        if verbose or len(items) <= 30:
+            return _text(items)
+        # Compress: top 15 / bottom 15 + per-symbol aggregates.
+        by_symbol: dict[str, dict] = {}
+        for it in items:
+            sym = str(it.get("symbol", ""))
+            agg = by_symbol.setdefault(sym, {"n": 0, "wins": 0, "pnl": 0.0})
+            agg["n"] += 1
+            try:
+                pnl = float(it.get("pnl_usd") or 0)
+                agg["pnl"] += pnl
+                if pnl > 0:
+                    agg["wins"] += 1
+            except (TypeError, ValueError):
+                pass
+        return _text({
+            "head": items[:15],
+            "tail": items[-15:],
+            "total": len(items),
+            "by_symbol": by_symbol,
+        })
 
     @tool(
         "active_lessons",
         "Active agent_lessons for this strategy (avoid/prefer patterns "
-        "synthesized from outcomes). Align mutations with these — don't "
-        "propose changes that contradict a high-confidence 'avoid'.",
+        "synthesized from outcomes). Top 20 by confidence — align mutations "
+        "with these; don't propose changes that contradict a high-confidence "
+        "'avoid'.",
         {},
     )
     async def active_lessons(_args: dict) -> dict:
@@ -87,7 +113,7 @@ def _build_registry(strategy_id: str) -> ToolRegistry:
             "SELECT pattern_kind, pattern_description, verdict, confidence, "
             "       n_observations, win_rate, total_pnl_usd "
             "FROM agent_lessons WHERE strategy_id = :sid AND status = 'active' "
-            "ORDER BY confidence DESC NULLS LAST LIMIT 50"
+            "ORDER BY confidence DESC NULLS LAST LIMIT 20"
         )
         try:
             async with shared_session_scope() as session:
@@ -111,7 +137,7 @@ def _build_registry(strategy_id: str) -> ToolRegistry:
                     .where(StrategyConfig.status == "active")
                     .where(StrategyConfig.strategy_id != strategy_id)
                     .order_by(desc(StrategyConfig.version))
-                    .limit(20)
+                    .limit(10)
                 )
                 rows = (await session.execute(stmt)).scalars().all()
         except Exception as e:

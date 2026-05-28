@@ -30,7 +30,9 @@ from graph.parsing import (
     parse_extraction,
 )
 
-BODY_CHARS = 4000
+# Per-doc body cap in the prompt. 1800 char ≈ 450 token covers headline + lede
+# + 2-3 paragraphs, which is where entities live; the tail rarely adds new ones.
+BODY_CHARS = 1800
 MAX_TURNS = 6
 _SERVER = "graph_extract"
 
