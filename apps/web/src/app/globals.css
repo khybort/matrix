@@ -1,57 +1,354 @@
 @import "tailwindcss";
 
+/* ───────────────────────────────────────────────────────────────────────
+   matrix · trading terminal · design tokens
+   Phosphor amber on near-black, paper-tone ink, hairlines, no rounding.
+   ─────────────────────────────────────────────────────────────────────── */
+
 :root {
-  --background: #0a0a0b;
-  --foreground: #e4e4e7;
-  --panel: #131316;
-  --border: #27272a;
-  --accent: #22d3ee;
-  --pos: #22c55e;
-  --neg: #ef4444;
-  --muted: #71717a;
+  --bg:        #08080a;
+  --bg-deep:   #050507;
+  --panel:     #0d0d10;
+  --panel-2:   #131318;
+  --panel-3:   #17171c;
+
+  --ink:       #e8e2cf;   /* paper-tone primary text */
+  --ink-2:     #a8a294;
+  --ink-3:     #6b6759;
+  --ink-4:     #46453d;
+
+  --rule:      #1c1c22;
+  --rule-2:    #2a2a32;
+
+  --amber:     #ffb627;   /* phosphor accent */
+  --amber-dim: #b88011;
+  --amber-glow: rgba(255, 182, 39, 0.12);
+
+  --pos:       #5fc97a;
+  --neg:       #ef6961;
+
+  --crypto:    #3aaf8e;   /* market stripe — teal */
+  --bist:      #d4a017;   /* market stripe — saffron */
+
+  --font-mono:  var(--font-jetbrains), ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-serif: var(--font-instrument), "Times New Roman", serif;
+
+  /* shadcn-y compatibility for tailwind v4 */
+  --background: var(--bg);
+  --foreground: var(--ink);
 }
 
 html, body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-feature-settings: "ss01", "cv11";
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-feature-settings: "ss01", "ss02", "cv11", "zero";
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  line-height: 1.5;
   margin: 0;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
 }
 
-.mono {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+/* Faint dot grain — only visible against dark panels, gives CRT atmosphere */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background-image: radial-gradient(rgba(232, 226, 207, 0.014) 1px, transparent 1.2px);
+  background-size: 3px 3px;
 }
 
-.panel {
+/* ── Typography helpers ──────────────────────────────────────────────── */
+
+.serif       { font-family: var(--font-serif); font-weight: 400; }
+.serif-i     { font-family: var(--font-serif); font-weight: 400; font-style: italic; letter-spacing: -0.01em; }
+.mono        { font-family: var(--font-mono); }
+.tnum        { font-variant-numeric: tabular-nums; }
+.tracker     { letter-spacing: 0.18em; text-transform: uppercase; }
+.tracker-sm  { letter-spacing: 0.14em; text-transform: uppercase; }
+
+.muted   { color: var(--ink-2); }
+.dim     { color: var(--ink-3); }
+.faint   { color: var(--ink-4); }
+.pos     { color: var(--pos); }
+.neg     { color: var(--neg); }
+.accent  { color: var(--amber); }
+
+.hairline   { border-color: var(--rule); }
+.hairline-2 { border-color: var(--rule-2); }
+
+/* ── Frame: sharp-cornered panel with bracket corners ────────────────── */
+
+.frame {
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
+  border: 1px solid var(--rule);
+  position: relative;
 }
 
-.muted {
-  color: var(--muted);
+/* L-bracket corners — amber, 8px, top-left + bottom-right */
+.frame::before,
+.frame::after {
+  content: "";
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  pointer-events: none;
+  border-color: var(--amber);
+}
+.frame::before {
+  top: -1px;
+  left: -1px;
+  border-top: 1px solid;
+  border-left: 1px solid;
+}
+.frame::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 1px solid;
+  border-right: 1px solid;
 }
 
-.pos { color: var(--pos); }
-.neg { color: var(--neg); }
-.accent { color: var(--accent); }
+.frame-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 1rem 0.55rem;
+  border-bottom: 1px solid var(--rule);
+  background: linear-gradient(180deg, var(--panel-2), transparent);
+}
+.frame-title-marker {
+  width: 6px;
+  height: 6px;
+  background: var(--amber);
+  flex-shrink: 0;
+}
+.frame-title-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.frame-title-rule {
+  flex: 1;
+  height: 1px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--rule) 0 4px,
+    transparent 4px 8px
+  );
+}
+.frame-body { padding: 1rem; }
+.frame-body-tight { padding: 0.75rem 1rem; }
+
+/* ── Tables ──────────────────────────────────────────────────────────── */
 
 table.matrix {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.875rem;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
-table.matrix th, table.matrix td {
-  padding: 0.5rem 0.75rem;
+table.matrix thead th {
   text-align: left;
-  border-bottom: 1px solid var(--border);
-}
-table.matrix th {
   font-weight: 500;
-  color: var(--muted);
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  font-size: 0.7rem;
-  letter-spacing: 0.05em;
+  color: var(--ink-3);
+  padding: 0.45rem 0.7rem;
+  border-bottom: 1px solid var(--rule-2);
+  white-space: nowrap;
 }
-table.matrix tr:last-child td { border-bottom: none; }
+table.matrix tbody td {
+  padding: 0.42rem 0.7rem;
+  border-bottom: 1px dotted var(--rule);
+  color: var(--ink);
+  vertical-align: top;
+}
+table.matrix tbody tr:last-child td { border-bottom: none; }
+table.matrix tbody tr:hover { background: var(--amber-glow); }
+
+/* ── Sidebar nav ─────────────────────────────────────────────────────── */
+
+.nav-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.4rem 0.5rem 0.4rem 0.85rem;
+  border-left: 1px solid var(--rule);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  transition: color 80ms linear, border-color 80ms linear, background 80ms linear;
+}
+.nav-row:hover {
+  color: var(--ink);
+  border-left-color: var(--ink-3);
+  background: linear-gradient(90deg, var(--panel-2), transparent);
+}
+.nav-row.active {
+  color: var(--ink);
+  border-left: 1px solid var(--amber);
+  background: linear-gradient(90deg, var(--amber-glow), transparent 70%);
+}
+.nav-row .num {
+  color: var(--ink-4);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+.nav-row.active .num { color: var(--amber); }
+.nav-row .lead {
+  flex: 1;
+  align-self: center;
+  height: 1px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--rule) 0 2px,
+    transparent 2px 5px
+  );
+}
+
+/* ── Pulse (live indicator) — square-wave, not soft ──────────────────── */
+
+@keyframes pulse-sq {
+  0%, 49%   { opacity: 1; }
+  50%, 100% { opacity: 0.35; }
+}
+.pulse-sq {
+  animation: pulse-sq 1.4s steps(1, end) infinite;
+}
+
+/* ── Equity scanlines ────────────────────────────────────────────────── */
+
+.scanlines {
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      transparent 0 3px,
+      rgba(232, 226, 207, 0.012) 3px 4px
+    );
+}
+
+/* ── Ledger market stripe ────────────────────────────────────────────── */
+
+.ledger {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  padding: 0.15rem 0.65rem 0.15rem 0.55rem;
+  border-left: 3px solid var(--bar, var(--ink-3));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--bar, var(--ink-3)) 14%, transparent), transparent 80%);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.ledger .glyph {
+  width: 4px;
+  height: 4px;
+  background: var(--bar, var(--ink-3));
+  display: inline-block;
+  transform: translateY(-1px);
+}
+
+/* ── Headline numbers (serif italic) ─────────────────────────────────── */
+
+.headline {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 0.95;
+}
+
+/* ── KPI row used on Wallet panel ────────────────────────────────────── */
+
+.kpi-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px dotted var(--rule);
+  font-variant-numeric: tabular-nums;
+}
+.kpi-row:last-child { border-bottom: none; }
+.kpi-row .k {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.kpi-row .v {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+/* ── Teletype line (sidebar footer) ──────────────────────────────────── */
+
+.teletype {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.teletype .arrow { color: var(--amber); }
+
+/* ── Buttons (deploy / approve / etc) ────────────────────────────────── */
+
+button.btn-term {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 0.35rem 0.7rem;
+  background: transparent;
+  border: 1px solid var(--ink-3);
+  color: var(--ink);
+  transition: all 80ms linear;
+}
+button.btn-term:hover:not(:disabled) {
+  border-color: var(--amber);
+  color: var(--amber);
+  background: var(--amber-glow);
+}
+button.btn-term:disabled { opacity: 0.35; cursor: not-allowed; }
+button.btn-term.danger { border-color: var(--neg); color: var(--neg); }
+button.btn-term.danger:hover:not(:disabled) { background: rgba(239,105,97,0.08); }
+button.btn-term.good { border-color: var(--pos); color: var(--pos); }
+button.btn-term.good:hover:not(:disabled) { background: rgba(95,201,122,0.08); }
+
+/* ── Pill / chip ─────────────────────────────────────────────────────── */
+
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  padding: 0.05rem 0.4rem;
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  border: 1px solid currentColor;
+  color: var(--ink-2);
+}
+
+/* ── Bar (entity counts, weights) ────────────────────────────────────── */
+
+.bar-track {
+  background: var(--panel-3);
+  height: 6px;
+  position: relative;
+}
+.bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--bar, var(--amber));
+}
