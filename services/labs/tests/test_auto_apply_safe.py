@@ -221,3 +221,107 @@ async def test_safe_apply_takes_slot_adjustment_high_losses(test_wallet):
         assert await _get_proposal_status(pid) == "applied"
     finally:
         await _cleanup(sid)
+
+
+@pytest.mark.asyncio
+async def test_safe_apply_takes_param_tune_for_grid(test_wallet):
+    """param_tune proposal with source='rule' for grid must be applied automatically."""
+    from labs.promote import apply_best_pending_safe
+
+    sid = "grid"
+    # Insert a real strategy config for grid (cleanup at end)
+    async with shared_session_scope() as session:
+        from sqlalchemy import select as sa_select
+        existing = (
+            await session.execute(
+                sa_select(StrategyConfig)
+                .where(StrategyConfig.strategy_id == "grid")
+                .where(StrategyConfig.status == "active")
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            session.add(
+                StrategyConfig(
+                    strategy_id="grid",
+                    asset_class="crypto",
+                    version=1,
+                    status="active",
+                    params={"price_band_pct": "0.02", "horizon_s": 300, "n_grids": 10},
+                    rationale="test-param-tune",
+                )
+            )
+            inserted_grid = True
+        else:
+            inserted_grid = False
+
+    pid = await _insert_proposal(
+        "grid",
+        proposal_type="param_tune",
+        metrics_window={},
+        source="rule",
+    )
+
+    try:
+        applied = await apply_best_pending_safe(min_fitness=Decimal("0.10"))
+        assert pid in applied, "param_tune for grid (rule source) should be applied"
+        assert await _get_proposal_status(pid) == "applied"
+    finally:
+        # Clean up only the proposal; leave existing grid config intact if it was there
+        async with shared_session_scope() as session:
+            await session.execute(
+                delete(MutationProposal).where(MutationProposal.id == pid)
+            )
+            if inserted_grid:
+                await session.execute(
+                    delete(StrategySlotConfig).where(StrategySlotConfig.strategy_id == "grid")
+                )
+                await session.execute(
+                    delete(StrategyConfig)
+                    .where(StrategyConfig.strategy_id == "grid")
+                    .where(StrategyConfig.rationale == "test-param-tune")
+                )
+
+
+@pytest.mark.asyncio
+async def test_safe_apply_skips_param_tune_for_unknown_strategy():
+    """param_tune for a strategy_id not in SAFE_PARAM_TUNE_STRATEGIES stays pending."""
+    from labs.promote import apply_best_pending_safe
+
+    # Use a unique test strategy_id (not in SAFE_PARAM_TUNE_STRATEGIES)
+    sid = _make_sid()
+    await _insert_strategy(sid)
+    pid = await _insert_proposal(
+        sid,
+        proposal_type="param_tune",
+        metrics_window={},
+        source="rule",
+    )
+
+    try:
+        applied = await apply_best_pending_safe(min_fitness=Decimal("0.10"))
+        assert pid not in applied, "param_tune for unknown strategy should stay pending"
+        assert await _get_proposal_status(pid) == "pending"
+    finally:
+        await _cleanup(sid)
+
+
+@pytest.mark.asyncio
+async def test_safe_apply_skips_param_tune_llm_source():
+    """param_tune with source='llm' (not 'rule') must not be auto-applied."""
+    from labs.promote import apply_best_pending_safe
+
+    sid = _make_sid()
+    await _insert_strategy(sid)
+    pid = await _insert_proposal(
+        sid,
+        proposal_type="param_tune",
+        metrics_window={},
+        source="llm",
+    )
+
+    try:
+        applied = await apply_best_pending_safe(min_fitness=Decimal("0.10"))
+        assert pid not in applied, "param_tune from llm source should not be auto-applied"
+        assert await _get_proposal_status(pid) == "pending"
+    finally:
+        await _cleanup(sid)

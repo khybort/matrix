@@ -1,0 +1,211 @@
+"""Pure unit tests for reflection.mutate.rule_propose_param_tune.
+
+No DB, no LLM. Verifies the param_tune path for deterministic strategies
+(grid/dca/oi_delta). matrix_agent is excluded from this path.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+
+import pytest
+
+from reflection.metrics import StrategyMetrics
+from reflection.mutate import rule_propose_param_tune
+
+
+def _metrics(
+    strategy_id: str = "grid",
+    n_outcomes: int = 50,
+    avg_score: Decimal = Decimal("-0.08"),
+    win_rate: Decimal = Decimal("0.30"),
+    total_pnl_usd: Decimal = Decimal("-12.0"),
+) -> StrategyMetrics:
+    return StrategyMetrics(
+        strategy_id=strategy_id,
+        version=1,
+        n_outcomes=n_outcomes,
+        avg_score=avg_score,
+        win_rate=win_rate,
+        total_pnl_usd=total_pnl_usd,
+        by_symbol={},
+    )
+
+
+def _grid_params() -> dict:
+    return {
+        "n_grids": 10,
+        "price_band_pct": "0.02",
+        "horizon_s": 300,
+    }
+
+
+def _dca_params() -> dict:
+    return {"interval_minutes": 60}
+
+
+def _oi_delta_params() -> dict:
+    return {
+        "oi_threshold_pct": "0.015",
+        "horizon_s": 300,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Grid tests
+# ---------------------------------------------------------------------------
+
+def test_param_tune_grid_widens_band_on_poor_winrate():
+    """Low win_rate (<0.5) should push a grid param upward (widen/lengthen)."""
+    m = _metrics(strategy_id="grid", win_rate=Decimal("0.30"), n_outcomes=50)
+    draft = rule_propose_param_tune("grid", _grid_params(), m)
+    assert draft is not None
+    assert draft.proposal_type == "param_tune"
+    assert draft.source == "rule"
+
+    # Determine which knob was selected (n_outcomes=50, 50 % 2 = 0 → 'horizon_s')
+    # sorted(["price_band_pct", "horizon_s"]) = ["horizon_s", "price_band_pct"]
+    # idx = 50 % 2 = 0 → "horizon_s"
+    after_horizon = draft.after_params.get("horizon_s")
+    assert after_horizon is not None
+    assert int(after_horizon) > 300, "horizon_s should increase (widen) when win_rate < 0.5"
+
+
+def test_param_tune_grid_price_band_knob():
+    """n_outcomes=51 → idx=1 → price_band_pct knob selected."""
+    # sorted(["price_band_pct", "horizon_s"]) = ["horizon_s", "price_band_pct"]
+    # idx = 51 % 2 = 1 → "price_band_pct"
+    m = _metrics(strategy_id="grid", win_rate=Decimal("0.25"), n_outcomes=51)
+    draft = rule_propose_param_tune("grid", _grid_params(), m)
+    assert draft is not None
+    after_band = Decimal(draft.after_params["price_band_pct"])
+    assert after_band > Decimal("0.02"), "price_band_pct should increase with poor win_rate"
+
+
+def test_param_tune_grid_tightens_on_high_winrate():
+    """win_rate >= 0.5 but avg_score still negative → tighten (direction -1)."""
+    m = _metrics(strategy_id="grid", win_rate=Decimal("0.60"), avg_score=Decimal("-0.08"), n_outcomes=50)
+    draft = rule_propose_param_tune("grid", _grid_params(), m)
+    assert draft is not None
+    # horizon_s selected (idx=0), direction=-1 → should decrease
+    after_horizon = int(draft.after_params["horizon_s"])
+    assert after_horizon < 300, "horizon_s should decrease when win_rate >= 0.5"
+
+
+# ---------------------------------------------------------------------------
+# DCA tests
+# ---------------------------------------------------------------------------
+
+def test_param_tune_dca_lengthens_interval_on_poor_winrate():
+    """DCA with poor win_rate should lengthen interval_minutes."""
+    m = _metrics(strategy_id="dca", win_rate=Decimal("0.30"), n_outcomes=50)
+    draft = rule_propose_param_tune("dca", _dca_params(), m)
+    assert draft is not None
+    assert draft.proposal_type == "param_tune"
+    after = int(draft.after_params["interval_minutes"])
+    assert after > 60, "interval_minutes should increase with poor win_rate"
+
+
+def test_param_tune_dca_shortens_interval_on_good_winrate():
+    """DCA win_rate >= 0.5 but losing → shorten cadence."""
+    m = _metrics(strategy_id="dca", win_rate=Decimal("0.55"), avg_score=Decimal("-0.06"), n_outcomes=50)
+    draft = rule_propose_param_tune("dca", _dca_params(), m)
+    assert draft is not None
+    after = int(draft.after_params["interval_minutes"])
+    assert after < 60, "interval_minutes should decrease when win_rate >= 0.5"
+
+
+def test_param_tune_dca_clamps_at_min():
+    """interval_minutes must not go below the minimum (15)."""
+    params = {"interval_minutes": 15}
+    m = _metrics(strategy_id="dca", win_rate=Decimal("0.55"), avg_score=Decimal("-0.06"), n_outcomes=50)
+    draft = rule_propose_param_tune("dca", params, m)
+    # Already at min with direction=-1 → clamped → no change → None
+    assert draft is None, "should return None when already at the minimum"
+
+
+def test_param_tune_dca_clamps_at_max():
+    """interval_minutes must not exceed 240."""
+    params = {"interval_minutes": 240}
+    m = _metrics(strategy_id="dca", win_rate=Decimal("0.30"), avg_score=Decimal("-0.08"), n_outcomes=50)
+    draft = rule_propose_param_tune("dca", params, m)
+    assert draft is None, "should return None when already at the maximum"
+
+
+# ---------------------------------------------------------------------------
+# OI-delta tests
+# ---------------------------------------------------------------------------
+
+def test_param_tune_oi_delta_raises_threshold_on_poor_winrate():
+    """Poor win_rate → raise oi_threshold_pct (require bigger OI surge)."""
+    m = _metrics(strategy_id="oi_delta", win_rate=Decimal("0.20"), n_outcomes=50)
+    draft = rule_propose_param_tune("oi_delta", _oi_delta_params(), m)
+    assert draft is not None
+    # sorted(["horizon_s", "oi_threshold_pct"]) = ["horizon_s", "oi_threshold_pct"]
+    # idx = 50 % 2 = 0 → "horizon_s"
+    after_horizon = int(draft.after_params["horizon_s"])
+    assert after_horizon > 300
+
+
+def test_param_tune_oi_delta_threshold_knob():
+    """n_outcomes=51 → idx=1 → oi_threshold_pct selected."""
+    m = _metrics(strategy_id="oi_delta", win_rate=Decimal("0.20"), n_outcomes=51)
+    draft = rule_propose_param_tune("oi_delta", _oi_delta_params(), m)
+    assert draft is not None
+    after_thr = Decimal(draft.after_params["oi_threshold_pct"])
+    assert after_thr > Decimal("0.015")
+
+
+# ---------------------------------------------------------------------------
+# Guard-rail tests
+# ---------------------------------------------------------------------------
+
+def test_param_tune_unknown_strategy_returns_none():
+    """A strategy_id not in PARAM_TUNERS should return None."""
+    m = _metrics(strategy_id="matrix_agent", n_outcomes=50)
+    draft = rule_propose_param_tune("matrix_agent", {"weights": {}}, m)
+    assert draft is None, "matrix_agent is not in PARAM_TUNERS"
+
+
+def test_param_tune_unknown_strategy_foo_returns_none():
+    """Completely unknown strategy returns None."""
+    m = _metrics(strategy_id="foo", n_outcomes=50)
+    draft = rule_propose_param_tune("foo", {}, m)
+    assert draft is None
+
+
+def test_param_tune_high_score_no_proposal():
+    """avg_score above trigger → no proposal even for a known strategy."""
+    m = _metrics(strategy_id="grid", avg_score=Decimal("-0.03"), n_outcomes=50)
+    draft = rule_propose_param_tune("grid", _grid_params(), m)
+    assert draft is None, "score above NEG_AVG_SCORE_TRIGGER (-0.05); should not fire"
+
+
+def test_param_tune_below_min_outcomes_no_proposal():
+    """n_outcomes below MIN_N_OUTCOMES → no proposal."""
+    m = _metrics(strategy_id="grid", n_outcomes=5)
+    draft = rule_propose_param_tune("grid", _grid_params(), m)
+    assert draft is None
+
+
+def test_param_tune_missing_param_returns_none():
+    """If the selected knob is not present in current_params → None."""
+    # Empty params for grid — no price_band_pct or horizon_s
+    m = _metrics(strategy_id="grid", n_outcomes=50)
+    draft = rule_propose_param_tune("grid", {}, m)
+    assert draft is None, "missing param should skip gracefully"
+
+
+def test_param_tune_preserves_other_params():
+    """After proposal, params not being tuned should be preserved."""
+    params = {
+        "n_grids": 10,
+        "price_band_pct": "0.02",
+        "horizon_s": 300,
+    }
+    m = _metrics(strategy_id="grid", win_rate=Decimal("0.30"), n_outcomes=50)
+    draft = rule_propose_param_tune("grid", params, m)
+    assert draft is not None
+    # All keys from before should still appear in after_params
+    for k in params:
+        assert k in draft.after_params, f"key {k!r} missing from after_params"

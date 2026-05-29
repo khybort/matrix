@@ -92,6 +92,11 @@ FORBIDDEN_FIELDS = {
 
 LAB_PROMOTION_TYPE = "lab_promotion"
 
+# Deterministic strategies whose rule-generated param_tune proposals are
+# eligible for auto-apply. matrix_agent is intentionally excluded — its
+# weight_tune proposals still require manual or lab-driven review.
+SAFE_PARAM_TUNE_STRATEGIES: frozenset[str] = frozenset({"grid", "dca", "oi_delta"})
+
 
 def _scrub_forbidden(params: dict[str, Any]) -> dict[str, Any]:
     """Recursively drop any forbidden_fields keys."""
@@ -451,6 +456,19 @@ async def apply_best_pending_safe(
                 logger.debug(
                     f"apply-safe: proposal {pid} slot_adjustment losses "
                     f"{losses} < 5; skipping"
+                )
+
+        elif ptype == "param_tune" and proposal.source == "rule":
+            if proposal.strategy_id in SAFE_PARAM_TUNE_STRATEGIES:
+                eligible_ids.append(pid)
+                logger.debug(
+                    f"apply-safe: proposal {pid} param_tune for "
+                    f"{proposal.strategy_id} is eligible"
+                )
+            else:
+                logger.debug(
+                    f"apply-safe: proposal {pid} param_tune for "
+                    f"{proposal.strategy_id} not in SAFE_PARAM_TUNE_STRATEGIES; skipping"
                 )
 
         else:

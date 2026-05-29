@@ -24,7 +24,7 @@ from matrix_shared.models import MutationProposal, StrategyConfig
 from sqlalchemy import select
 
 from reflection.metrics import metrics_window
-from reflection.mutate import llm_propose, rule_propose
+from reflection.mutate import llm_propose, rule_propose, rule_propose_param_tune
 
 DEFAULT_INTERVAL_S = 600.0
 DEFAULT_WINDOW_HOURS = 24.0
@@ -63,6 +63,16 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
                 draft = await llm_propose(cfg.strategy_id, cfg.params, m)
         if draft is None:
             draft = rule_propose(
+                cfg.params,
+                m,
+                min_outcomes=min_outcomes,
+                score_trigger=Decimal(str(score_trigger)),
+            )
+        if draft is None:
+            # For deterministic strategies (grid/dca/oi_delta), try the
+            # param_tune heuristic. matrix_agent uses the weight tuner above.
+            draft = rule_propose_param_tune(
+                cfg.strategy_id,
                 cfg.params,
                 m,
                 min_outcomes=min_outcomes,

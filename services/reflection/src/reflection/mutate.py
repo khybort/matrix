@@ -22,6 +22,31 @@ from reflection.metrics import StrategyMetrics
 # Single source of truth for MutationDraft + risk-cap stripping.
 from reflection.parsing import MutationDraft
 
+# ---------------------------------------------------------------------------
+# Param-tune table for deterministic strategies (grid / dca / oi_delta).
+# Keys: strategy_id → { param_name → (step, min, max) }.
+# matrix_agent is intentionally absent — it uses the weight tuner path.
+# ---------------------------------------------------------------------------
+PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
+    "grid": {
+        # price_band_pct: widen/narrow ±price band around the 24h median.
+        "price_band_pct": (Decimal("0.005"), Decimal("0.005"), Decimal("0.10")),
+        # horizon_s: prediction close window; stored as int in params.
+        "horizon_s": (Decimal("60"), Decimal("60"), Decimal("1800")),
+        # n_grids: tweak handled via int arithmetic (±2) separately.
+    },
+    "dca": {
+        # interval_minutes: accumulation cadence; stored as int in params.
+        "interval_minutes": (Decimal("15"), Decimal("15"), Decimal("240")),
+    },
+    "oi_delta": {
+        # oi_threshold_pct: maps to OI_JUMP_THRESHOLD in the module.
+        "oi_threshold_pct": (Decimal("0.005"), Decimal("0.005"), Decimal("0.10")),
+        # horizon_s: prediction close window; stored as int in params.
+        "horizon_s": (Decimal("60"), Decimal("60"), Decimal("1800")),
+    },
+}
+
 LLM_MODEL = MODEL_SONNET
 
 # Mutation triggers
@@ -99,6 +124,86 @@ def rule_propose(
         proposal_type="weight_tune",
         before_params=before_serializable,
         after_params=after,
+        rationale=rationale,
+        source="rule",
+    )
+
+
+def rule_propose_param_tune(
+    strategy_id: str,
+    current_params: dict[str, Any],
+    m: StrategyMetrics,
+    *,
+    min_outcomes: int = MIN_N_OUTCOMES,
+    score_trigger: Decimal = NEG_AVG_SCORE_TRIGGER,
+) -> MutationDraft | None:
+    """For deterministic strategies (grid/dca/oi_delta), perturb numeric params
+    when win-rate / avg_score signals underperformance.
+
+    Heuristic per strategy:
+      grid:     loss → widen price_band_pct (fewer false fills) or raise horizon_s
+      dca:      sustained loss → lengthen interval_minutes (slower accumulator)
+      oi_delta: low win rate → raise oi_threshold_pct (only react to bigger moves)
+
+    Direction: when win_rate < 0.5 we assume the signal fires too often →
+    widen / lengthen (direction = +1). When win_rate >= 0.5 the signal is
+    accurate but still losing money → tighten slightly (direction = -1).
+
+    The knob to tune is selected deterministically by rotating over
+    sorted param names using (n_outcomes mod n_knobs) so consecutive
+    proposals explore different parts of the search space.
+    """
+    if strategy_id not in PARAM_TUNERS:
+        return None
+    if m.n_outcomes < min_outcomes or m.avg_score >= score_trigger:
+        return None
+
+    tuner = PARAM_TUNERS[strategy_id]
+    if not tuner:
+        return None
+
+    # Pick one knob deterministically based on outcome count.
+    param_names = sorted(tuner.keys())
+    idx = m.n_outcomes % len(param_names)
+    knob = param_names[idx]
+    step, lo, hi = tuner[knob]
+
+    # Read current value — skip if missing (params not seeded yet).
+    raw_current = current_params.get(knob)
+    if raw_current is None:
+        return None
+    try:
+        current = Decimal(str(raw_current))
+    except (ArithmeticError, ValueError):
+        return None
+
+    # Direction: widen/lengthen when win_rate is poor (signal fires too often).
+    direction = Decimal("1") if m.win_rate < Decimal("0.5") else Decimal("-1")
+    new_value = current + direction * step
+    new_value = max(lo, min(hi, new_value))
+    if new_value == current:
+        return None
+
+    # Build after_params preserving all existing keys.
+    after_params = dict(current_params)
+    before_params = dict(current_params)
+
+    # Integer params stay integer; decimal params serialized as strings.
+    if knob in {"horizon_s", "interval_minutes"}:
+        after_params[knob] = int(new_value)
+    else:
+        after_params[knob] = str(new_value.quantize(Decimal("0.0001")))
+
+    rationale = (
+        f"{strategy_id}: avg_score={m.avg_score:.4f}, win_rate={m.win_rate:.3f}, "
+        f"total_pnl_usd={m.total_pnl_usd:.2f} over {m.n_outcomes} outcomes. "
+        f"Adjusting {knob}: {current} → {new_value}."
+    )
+
+    return MutationDraft(
+        proposal_type="param_tune",
+        before_params=before_params,
+        after_params=after_params,
         rationale=rationale,
         source="rule",
     )
