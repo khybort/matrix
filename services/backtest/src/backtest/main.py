@@ -29,6 +29,7 @@ from backtest.paper_trade import (
     close_due_positions,
     expire_stale_predictions,
     open_due_positions,
+    reconcile_wallets,
     snapshot_wallet,
 )
 
@@ -79,6 +80,10 @@ async def _check_certificates() -> None:
 
 
 async def _tick() -> tuple[int, int, int]:
+    # Self-heal the wallet ledger first: any phantom-locked capital (from a lost
+    # close-decrement) is returned to cash before open_due_positions runs, so the
+    # freed capital is immediately deployable this tick.
+    await reconcile_wallets()
     # Order matters: expire stale predictions first so they're not seen as
     # candidates by open_due_positions. Then close due open positions
     # (frees slots), then fill freed slots with fresh candidates.

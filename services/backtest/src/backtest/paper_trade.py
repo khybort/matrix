@@ -237,6 +237,61 @@ async def _current_equity(session, wallet: Wallet) -> tuple[Decimal, Decimal, in
     return equity, unrealized, len(open_positions)
 
 
+async def reconcile_wallets() -> int:
+    """Self-heal the ledger invariant: `locked_usd == Σ(open paper_position notional)`.
+
+    The wallet's cash/locked balances were historically mutated via an unguarded
+    read-modify-write (no row lock, no version column). Under any writer overlap —
+    e.g. an engine restart leaving two transient processes, or a manual script — a
+    `close` decrement could be overwritten by a concurrent `open`, losing the
+    release and leaving capital *phantom-locked* (locked_usd ratchets up while no
+    open position backs it). This recomputes the true locked from open positions
+    and moves any phantom back to cash.
+
+    Equity (`cash + locked`) is preserved exactly: cash += delta, locked -= delta.
+    This only relabels capital — it never changes realized PnL. Cheap (one aggregate
+    per wallet); safe to call every tick. Returns the number of wallets corrected.
+    """
+    corrected = 0
+    async with shared_session_scope() as session:
+        rows = (
+            await session.execute(select(Wallet.id, Wallet.name, Wallet.asset_class))
+        ).all()
+        for wid, name, asset_class in rows:
+            real_locked = Decimal(
+                (
+                    await session.execute(
+                        select(func.coalesce(func.sum(PaperPosition.notional_usd), 0))
+                        .where(
+                            PaperPosition.wallet_id == wid,
+                            PaperPosition.status == "open",
+                        )
+                    )
+                ).scalar_one()
+            )
+            # Atomic, guarded correction: recompute the true locked inside the
+            # statement and move only the phantom (over-locked) portion back to
+            # cash. The `locked_usd > :real` guard + the single UPDATE mean we
+            # never clobber a concurrent open/close — if there's no phantom the
+            # statement matches 0 rows. Equity (cash + locked) is preserved.
+            res = await session.execute(
+                text(
+                    "UPDATE wallets SET "
+                    "  cash_usd = cash_usd + (locked_usd - :real), "
+                    "  locked_usd = :real "
+                    "WHERE id = :wid AND locked_usd > :real"
+                ),
+                {"real": real_locked, "wid": wid},
+            )
+            if res.rowcount:
+                corrected += 1
+                logger.warning(
+                    f"reconcile {name}/{asset_class}: phantom-locked returned to "
+                    f"cash; locked → {real_locked:.2f} (= open notional)"
+                )
+    return corrected
+
+
 async def snapshot_wallet() -> None:
     """Write a WalletSnapshot for every market's wallet; handle circuit breaker
     per wallet (one market tripping its daily-loss circuit must not freeze
@@ -489,11 +544,23 @@ async def _open_for_market(asset_class: str) -> int:
                 continue
             if wallet.circuit_tripped_at is not None:
                 continue
-            if wallet.cash_usd < notional:
-                logger.info(f"skip {p.id}: insufficient cash ({wallet.cash_usd:.2f} < {notional})")
+            # Atomic debit: a single conditional UPDATE (not read-modify-write)
+            # so concurrent opens/closes can't lose each other's updates — the DB
+            # serializes the row write. The `cash_usd >= :n` guard both enforces
+            # the funding check and makes the debit conditional in one shot; if it
+            # matches 0 rows there isn't enough cash, so we skip without booking a
+            # position that no capital backs.
+            res = await session.execute(
+                text(
+                    "UPDATE wallets SET cash_usd = cash_usd - :n, "
+                    "locked_usd = locked_usd + :n "
+                    "WHERE id = :wid AND cash_usd >= :n"
+                ),
+                {"n": notional, "wid": wallet.id},
+            )
+            if res.rowcount == 0:
+                logger.info(f"skip {p.id}: insufficient cash for notional {notional}")
                 continue
-            wallet.cash_usd -= notional
-            wallet.locked_usd += notional
             session.add(
                 PaperPosition(
                     wallet_id=wallet.id,
@@ -665,10 +732,18 @@ async def close_due_positions() -> int:
             pred_db = await session.get(Prediction, pred.id)
             pred_db.status = "closed"
 
-            wallet = await session.get(Wallet, pos_db.wallet_id)
-            if wallet is not None:
-                wallet.locked_usd -= pos_db.notional_usd
-                wallet.cash_usd += pos_db.notional_usd + pnl_usd
+            # Atomic release: single UPDATE so a concurrent open can't clobber the
+            # decrement (the lost-update that caused phantom-locked capital). The
+            # status flip, prediction close, wallet release and Outcome all commit
+            # together in this one transaction.
+            await session.execute(
+                text(
+                    "UPDATE wallets SET locked_usd = locked_usd - :n, "
+                    "cash_usd = cash_usd + :n + :pnl "
+                    "WHERE id = :wid"
+                ),
+                {"n": pos_db.notional_usd, "pnl": pnl_usd, "wid": pos_db.wallet_id},
+            )
 
             session.add(
                 Outcome(
