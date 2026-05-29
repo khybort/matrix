@@ -349,7 +349,10 @@ services:
         condition: service_healthy
     environment:
       <<: *python-env
-    command: ["reflection.main", "--interval", "600", "--no-llm"]
+    # --score-trigger -0.20 (was default -0.05): only re-mutate clearly-failing
+    # strategies, not marginally-negative ones. Stops the matrix_agent version
+    # thrash (v6→v20 in 2 days, never converging) that re-tuned on -0.057 noise.
+    command: ["reflection.main", "--interval", "600", "--no-llm", "--score-trigger", "-0.20"]
     restart: unless-stopped
     logging: *default_logging
 
