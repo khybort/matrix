@@ -61,6 +61,17 @@ type Proposal = {
   created_at: string;
 };
 
+type ScreenerSignal = {
+  symbol: string;
+  signal_type: string;
+  funding_rate: string | number | null;
+  oi_value: string | number | null;
+  score: string | number;
+  passes: number;
+  status: "signal" | "candidate";
+  observed_at: string;
+};
+
 type Dashboard = {
   ok: boolean;
   wallet: { starting_capital_usd: string; cash_usd: string; locked_usd: string; circuit_tripped_at: string | null };
@@ -73,6 +84,7 @@ type Dashboard = {
     max_gen?: number; evals_open?: number; evals_scored?: number; evals_stale?: number;
   };
   mutationProposals: Proposal[];
+  screenerCandidates: ScreenerSignal[];
   now: string;
 };
 
@@ -203,6 +215,10 @@ export default function StrategiesPage() {
 
       <Panel title="Mutation proposals · self-modification">
         <ProposalsTable rows={data.mutationProposals} />
+      </Panel>
+
+      <Panel title="Screener candidates (6h)">
+        <ScreenerPanel rows={data.screenerCandidates ?? []} />
       </Panel>
 
       <Panel title="Templates · starter configs">
@@ -457,6 +473,52 @@ function ProposalsTable({ rows }: { rows: Proposal[] }) {
       </div>
       {msg && <p className="muted text-xs mt-2 mono">{msg}</p>}
     </>
+  );
+}
+
+// ─── Screener ─────────────────────────────────────────────────────────────
+
+function ScreenerPanel({ rows }: { rows: ScreenerSignal[] }) {
+  if (rows.length === 0) {
+    return <EmptyHint>screener idle — no thresholds crossed in last 6h</EmptyHint>;
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="matrix">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Type</th>
+            <th className="text-right">Score</th>
+            <th className="text-right">Passes</th>
+            <th>Status</th>
+            <th className="text-right">Age</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={`${r.symbol}-${r.signal_type}-${i}`}>
+              <td className="mono">{r.symbol}</td>
+              <td className="mono text-xs muted">{r.signal_type}</td>
+              <td className="mono text-right">{Number(r.score).toFixed(4)}</td>
+              <td className="mono text-right">{r.passes}</td>
+              <td>
+                {r.status === "candidate" ? (
+                  <span className="accent mono text-xs border border-current px-1 rounded">
+                    candidate
+                  </span>
+                ) : (
+                  <span className="muted mono text-xs border border-current px-1 rounded">
+                    signal
+                  </span>
+                )}
+              </td>
+              <td className="mono text-right muted">{formatAge(r.observed_at)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

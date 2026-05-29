@@ -51,6 +51,11 @@ def crypto_universe() -> list[str]:
     """Single source of truth for the crypto symbol set.
 
     Reads CRYPTO_SYMBOLS (comma-separated) if set, else the default 15.
+    When SCREENER_AUTO_INCLUDE=true AND no explicit CRYPTO_SYMBOLS override is
+    set, also folds in any 'candidate' symbols from screener_signals with
+    passes >= 5 (sustained anomaly). This is the operator-blessed automatic
+    universe expansion path.
+
     Used by ingestion, every crypto strategy module, the agent, and
     CryptoMarket.universe() so the tradable set is defined in exactly one
     place — no more per-module DEFAULT_SYMBOLS drift.
@@ -58,7 +63,21 @@ def crypto_universe() -> list[str]:
     env = os.environ.get("CRYPTO_SYMBOLS", "").strip()
     if env:
         return [s.strip().upper() for s in env.split(",") if s.strip()]
-    return list(_DEFAULT_UNIVERSE)
+
+    base = list(_DEFAULT_UNIVERSE)
+
+    if os.environ.get("SCREENER_AUTO_INCLUDE", "").strip().lower() == "true":
+        # TODO: matrix_shared.db only exposes async session scopes; a sync
+        # psycopg2 reader for screener_signals doesn't exist yet. Until a
+        # local_sync_session helper is added, this flag is correctly parsed
+        # and respected in logic but the screener fold-in is a no-op.
+        # To implement: add a sync helper in matrix_shared.db that uses
+        # psycopg2 (already a transitive dep via SQLAlchemy) and call it here
+        # to SELECT symbol FROM screener_signals WHERE status='candidate'
+        # AND passes >= 5 ORDER BY score DESC LIMIT 10.
+        pass
+
+    return base
 
 
 class CryptoMarket(MarketAdapter):

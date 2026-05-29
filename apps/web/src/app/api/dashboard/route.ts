@@ -252,6 +252,24 @@ export async function GET(req: Request) {
       WHERE computed_at > NOW() - INTERVAL '24 hours'
     `;
 
+    // Screener candidates from LOCAL DB (screener_signals is local-only).
+    // Wrapped defensively — table may be empty or DB unreachable.
+    let screenerCandidates: Record<string, unknown>[] = [];
+    try {
+      const rows = await sqlLocal`
+        SELECT symbol, signal_type, funding_rate, oi_value, score, passes, status, observed_at
+        FROM screener_signals
+        WHERE observed_at > now() - interval '6 hours'
+        ORDER BY
+          CASE status WHEN 'candidate' THEN 0 ELSE 1 END,
+          score DESC
+        LIMIT 30
+      `;
+      screenerCandidates = rows as Record<string, unknown>[];
+    } catch (e) {
+      console.warn("screener_signals query failed:", (e as Error).message);
+    }
+
     // ---- LOCAL: AGE graph topology (node counts per label, edge counts per type)
     const entityLabels = ["Document", "Asset", "Company", "Person", "Event", "Concept"];
     const entityCounts: Record<string, number> = {};
@@ -346,6 +364,7 @@ export async function GET(req: Request) {
         positions: bistPositionStats ?? {},
         predictions: bistPredictionStats ?? {},
       },
+      screenerCandidates,
       now: new Date().toISOString(),
     });
   } catch (e) {
