@@ -96,7 +96,7 @@ async def _leaderboard(limit: int = 15, asset_class: str | None = None) -> None:
 
 
 async def run(
-    symbols: list[str],
+    symbols: list[str] | None,
     eval_interval_s: float,
     evolve_interval_s: float,
     min_evals: int = 5,
@@ -105,6 +105,12 @@ async def run(
     auto_apply_safe: bool = False,
     auto_apply_min_fitness: Decimal = Decimal("0.10"),
 ) -> None:
+    # Resolve symbols inside the event loop so crypto_universe() (which uses
+    # asyncio.run() internally) doesn't bind the lru_cache'd asyncpg engine
+    # to a pre-main loop before asyncio.run() creates the real one.
+    if not symbols:
+        symbols = crypto_universe()
+
     await seed_initial_population(asset_class="crypto")
     await seed_initial_population(asset_class="bist")
 
@@ -334,20 +340,15 @@ def main() -> None:
     _min_fitness_str = args.auto_apply_min_fitness or os.environ.get("AUTO_APPLY_MIN_FITNESS", "0.10")
     auto_apply_min_fitness = Decimal(_min_fitness_str)
 
-    # Resolve symbols lazily (inside asyncio.run) so that crypto_universe() is
-    # not called before the event loop starts — avoids a lru_cache'd asyncpg
-    # engine being bound to a pre-main event loop.
-    symbols = args.symbols if args.symbols is not None else crypto_universe()
-
     logger.info(
-        f"labs start: symbols={symbols} eval={args.eval_interval}s "
+        f"labs start: eval={args.eval_interval}s "
         f"evolve={args.evolve_interval}s min_evals={args.min_evals} "
         f"promote_scan={args.promote_scan_interval}s auto_apply={args.auto_apply} "
         f"auto_apply_safe={args.auto_apply_safe} min_fitness={auto_apply_min_fitness}"
     )
     asyncio.run(
         run(
-            symbols,
+            args.symbols,
             args.eval_interval,
             args.evolve_interval,
             args.min_evals,
