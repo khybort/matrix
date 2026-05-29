@@ -66,9 +66,19 @@ def _today_tr_open_utc(now_utc: datetime) -> datetime:
 class BistIntradayReversion:
     id: str = STRATEGY_ID
     version: int = STRATEGY_VERSION
-    horizon_seconds: int = HORIZON_S
     market: str = "bist"
     asset_class: str = "bist"
+
+    def __init__(
+        self,
+        *,
+        drop_threshold: Decimal = DROP_THRESHOLD,
+        drop_cap: Decimal = DROP_CAP,
+        horizon_s: int = HORIZON_S,
+    ) -> None:
+        self.drop_threshold = drop_threshold
+        self.drop_cap = drop_cap
+        self.horizon_seconds = horizon_s
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -115,11 +125,11 @@ class BistIntradayReversion:
                 last_px = Decimal(cur_bar.close)
 
                 drop = safe_pct(last_px - open_px, open_px)
-                if drop > -DROP_THRESHOLD:
+                if drop > -self.drop_threshold:
                     # Not enough drawdown to call this an intraday weak hand.
                     continue
 
-                magnitude = min(abs(drop) / DROP_CAP, Decimal("1"))
+                magnitude = min(abs(drop) / self.drop_cap, Decimal("1"))
                 confidence = max(Decimal("0.1"), magnitude)
 
                 drafts.append(

@@ -43,9 +43,19 @@ HORIZON_S = 900  # 15min
 class BistVolumeBreakout:
     id: str = STRATEGY_ID
     version: int = STRATEGY_VERSION
-    horizon_seconds: int = HORIZON_S
     market: str = "bist"
     asset_class: str = "bist"
+
+    def __init__(
+        self,
+        *,
+        vol_mult: Decimal = VOL_MULT,
+        vol_mult_cap: Decimal = VOL_MULT_CAP,
+        horizon_s: int = HORIZON_S,
+    ) -> None:
+        self.vol_mult = vol_mult
+        self.vol_mult_cap = vol_mult_cap
+        self.horizon_seconds = horizon_s
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -56,7 +66,7 @@ class BistVolumeBreakout:
         async with session_scope() as session:
             symbols = await active_bist_symbols(session)
             for symbol in symbols:
-                bars = await recent_bars(session, symbol, interval="1m", n=WINDOW)
+                bars = await recent_bars(session, symbol, interval="1m", n=WINDOW)  # WINDOW is fixed
                 if len(bars) < WINDOW:
                     continue
 
@@ -69,7 +79,7 @@ class BistVolumeBreakout:
                     continue
                 cur_vol = Decimal(current.volume)
                 vol_ratio = cur_vol / avg_vol
-                if vol_ratio < VOL_MULT:
+                if vol_ratio < self.vol_mult:
                     continue
 
                 highest_prior = max(Decimal(b.high) for b in lookback)
@@ -77,7 +87,7 @@ class BistVolumeBreakout:
                 if cur_close <= highest_prior:
                     continue
 
-                magnitude = min(vol_ratio / VOL_MULT_CAP, Decimal("1"))
+                magnitude = min(vol_ratio / self.vol_mult_cap, Decimal("1"))
                 confidence = max(Decimal("0.10"), magnitude)
 
                 drafts.append(

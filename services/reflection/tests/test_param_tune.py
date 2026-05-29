@@ -209,3 +209,100 @@ def test_param_tune_preserves_other_params():
     # All keys from before should still appear in after_params
     for k in params:
         assert k in draft.after_params, f"key {k!r} missing from after_params"
+
+
+# ---------------------------------------------------------------------------
+# Coverage assertions: new strategies are registered in PARAM_TUNERS
+# ---------------------------------------------------------------------------
+
+def test_new_strategies_in_param_tuners():
+    """All four newly added strategies must appear in PARAM_TUNERS with at
+    least one tunable knob each."""
+    from reflection.mutate import PARAM_TUNERS
+    new_strategies = [
+        "funding_reversion",
+        "bist_gap_fade",
+        "bist_intraday_reversion",
+        "bist_volume_breakout",
+    ]
+    for sid in new_strategies:
+        assert sid in PARAM_TUNERS, f"{sid!r} missing from PARAM_TUNERS"
+        assert PARAM_TUNERS[sid], f"PARAM_TUNERS[{sid!r}] is empty"
+
+
+def test_funding_reversion_param_tune():
+    """funding_reversion: poor win_rate triggers a param proposal."""
+    from reflection.mutate import PARAM_TUNERS
+    params = {
+        "high_funding": "0.0002",
+        "funding_cap": "0.0005",
+        "horizon_s": 600,
+    }
+    m = _metrics(strategy_id="funding_reversion", win_rate=Decimal("0.30"), n_outcomes=50)
+    draft = rule_propose_param_tune("funding_reversion", params, m)
+    assert draft is not None
+    assert draft.proposal_type == "param_tune"
+    # One of the knobs must change
+    changed = any(
+        str(draft.after_params.get(k)) != str(params[k])
+        for k in PARAM_TUNERS["funding_reversion"]
+        if k in params
+    )
+    assert changed, "No param changed for funding_reversion"
+
+
+def test_bist_gap_fade_param_tune():
+    """bist_gap_fade: poor win_rate triggers a param proposal."""
+    from reflection.mutate import PARAM_TUNERS
+    params = {
+        "gap_threshold": "0.015",
+        "gap_cap": "0.05",
+        "horizon_s": 1800,
+    }
+    m = _metrics(strategy_id="bist_gap_fade", win_rate=Decimal("0.30"), n_outcomes=50)
+    draft = rule_propose_param_tune("bist_gap_fade", params, m)
+    assert draft is not None
+    changed = any(
+        str(draft.after_params.get(k)) != str(params[k])
+        for k in PARAM_TUNERS["bist_gap_fade"]
+        if k in params
+    )
+    assert changed, "No param changed for bist_gap_fade"
+
+
+def test_bist_intraday_reversion_param_tune():
+    """bist_intraday_reversion: poor win_rate triggers a param proposal."""
+    from reflection.mutate import PARAM_TUNERS
+    params = {
+        "drop_threshold": "0.03",
+        "drop_cap": "0.07",
+        "horizon_s": 3600,
+    }
+    m = _metrics(strategy_id="bist_intraday_reversion", win_rate=Decimal("0.30"), n_outcomes=50)
+    draft = rule_propose_param_tune("bist_intraday_reversion", params, m)
+    assert draft is not None
+    changed = any(
+        str(draft.after_params.get(k)) != str(params[k])
+        for k in PARAM_TUNERS["bist_intraday_reversion"]
+        if k in params
+    )
+    assert changed, "No param changed for bist_intraday_reversion"
+
+
+def test_bist_volume_breakout_param_tune():
+    """bist_volume_breakout: poor win_rate triggers a param proposal."""
+    from reflection.mutate import PARAM_TUNERS
+    params = {
+        "vol_mult": "3.0",
+        "vol_mult_cap": "8.0",
+        "horizon_s": 900,
+    }
+    m = _metrics(strategy_id="bist_volume_breakout", win_rate=Decimal("0.30"), n_outcomes=50)
+    draft = rule_propose_param_tune("bist_volume_breakout", params, m)
+    assert draft is not None
+    changed = any(
+        str(draft.after_params.get(k)) != str(params[k])
+        for k in PARAM_TUNERS["bist_volume_breakout"]
+        if k in params
+    )
+    assert changed, "No param changed for bist_volume_breakout"

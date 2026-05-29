@@ -40,11 +40,20 @@ DEFAULT_SYMBOLS = tuple(crypto_universe())
 class FundingReversion:
     id: str = STRATEGY_ID
     version: int = STRATEGY_VERSION
-    horizon_seconds: int = HORIZON_S
     market: str = "crypto"
 
-    def __init__(self, symbols: Sequence[str] = DEFAULT_SYMBOLS) -> None:
+    def __init__(
+        self,
+        symbols: Sequence[str] = DEFAULT_SYMBOLS,
+        *,
+        high_funding: Decimal = HIGH_FUNDING,
+        funding_cap: Decimal = FUNDING_CAP,
+        horizon_s: int = HORIZON_S,
+    ) -> None:
         self.symbols = list(symbols)
+        self.high_funding = high_funding
+        self.funding_cap = funding_cap
+        self.horizon_seconds = horizon_s
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -64,7 +73,7 @@ class FundingReversion:
                 if tk_row is None:
                     continue
                 fr = Decimal(tk_row.funding_rate)
-                if abs(fr) < HIGH_FUNDING:
+                if abs(fr) < self.high_funding:
                     continue
 
                 # Latest price for entry reference
@@ -81,7 +90,7 @@ class FundingReversion:
 
                 side = "short" if fr > 0 else "long"
                 # confidence in [0, 1]
-                magnitude = min(abs(fr) / FUNDING_CAP, Decimal("1"))
+                magnitude = min(abs(fr) / self.funding_cap, Decimal("1"))
                 confidence = max(Decimal("0.05"), magnitude)
 
                 drafts.append(
@@ -101,7 +110,7 @@ class FundingReversion:
                         ),
                         context={
                             "funding_rate": str(fr),
-                            "high_funding_threshold": str(HIGH_FUNDING),
+                            "high_funding_threshold": str(self.high_funding),
                             "magnitude_ratio": str(magnitude),
                         },
                     )

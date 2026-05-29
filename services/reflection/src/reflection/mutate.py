@@ -99,6 +99,15 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
         # horizon_s: prediction close window and cooldown gate.
         "horizon_s":   (Decimal("300"), Decimal("300"), Decimal("7200")),
     },
+    "cash_and_carry": {
+        # min_funding: floor funding rate (per 8h) to enter a delta-neutral position.
+        # Tighten to enter more aggressively; widen to require stronger carry.
+        "min_funding": (Decimal("0.00005"), Decimal("0.00005"), Decimal("0.0010")),
+        # horizon_s: outcome window in seconds (default 8h = 28800).
+        # Wider horizons capture more funding intervals; narrower exits faster
+        # if funding flips mid-hold.
+        "horizon_s": (Decimal("3600"), Decimal("3600"), Decimal("86400")),
+    },
 }
 
 LLM_MODEL = MODEL_SONNET

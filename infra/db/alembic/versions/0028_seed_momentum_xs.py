@@ -25,8 +25,9 @@ _CRYPTO_WALLET_ID = "00000000-0000-0000-0000-00000000d0e1"
 
 def upgrade() -> None:
     op.execute("""
-        INSERT INTO strategy_configs (strategy_id, asset_class, version, status, params, rationale)
+        INSERT INTO strategy_configs (id, strategy_id, asset_class, version, status, params, rationale)
         VALUES (
+            '00000000-0000-0000-0000-000000d0e100'::uuid,
             'momentum_xs',
             'crypto',
             1,

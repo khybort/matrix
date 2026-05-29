@@ -54,9 +54,20 @@ DEDUP_WINDOW_S = HORIZON_S
 class BistGapFade:
     id: str = STRATEGY_ID
     version: int = STRATEGY_VERSION
-    horizon_seconds: int = HORIZON_S
     market: str = "bist"
     asset_class: str = "bist"
+
+    def __init__(
+        self,
+        *,
+        gap_threshold: Decimal = GAP_THRESHOLD,
+        gap_cap: Decimal = GAP_CAP,
+        horizon_s: int = HORIZON_S,
+    ) -> None:
+        self.gap_threshold = gap_threshold
+        self.gap_cap = gap_cap
+        self.horizon_seconds = horizon_s
+        self.dedup_window_s = horizon_s
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -78,19 +89,19 @@ class BistGapFade:
                 last_px = Decimal(intraday.close)
 
                 gap = safe_pct(last_px - prior_close, prior_close)
-                if abs(gap) < GAP_THRESHOLD:
+                if abs(gap) < self.gap_threshold:
                     continue
 
-                magnitude = min(abs(gap) / GAP_CAP, Decimal("1"))
+                magnitude = min(abs(gap) / self.gap_cap, Decimal("1"))
                 confidence = max(Decimal("0.05"), magnitude)
 
                 # Long-only: only act on gap-down (expect bounce). Gap-up is logged
                 # but emitted as `flat` so the agent never tries to short BIST.
                 side = "long" if gap < 0 else "flat"
 
-                # Dedup against SHARED predictions within DEDUP_WINDOW_S so the
+                # Dedup against SHARED predictions within dedup_window_s so the
                 # static opening gap isn't re-written every 30s tick.
-                dedup_since = now - timedelta(seconds=DEDUP_WINDOW_S)
+                dedup_since = now - timedelta(seconds=self.dedup_window_s)
                 async with shared_session_scope() as shared:
                     dup = (
                         await shared.execute(
