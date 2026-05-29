@@ -19,7 +19,7 @@ import time
 from loguru import logger
 
 from matrix_shared.markets import IngestorAdapter
-from matrix_shared.markets.crypto import crypto_universe
+from matrix_shared.markets.crypto import crypto_universe_async
 
 from ingestion.connectors.bybit import BybitConnector
 from ingestion.persist import persist_events
@@ -29,11 +29,12 @@ RECONCILE_INTERVAL_S = float(
 )
 
 
-def _default_symbols() -> list[str]:
+async def _default_symbols() -> list[str]:
     # Single source of truth — same set the strategies / agent trade, so we
     # never stream a symbol nothing analyzes or analyze a symbol we don't
-    # stream. Override via CRYPTO_SYMBOLS.
-    return crypto_universe()
+    # stream. Override via CRYPTO_SYMBOLS. Async so the reconcile actually reads
+    # the active universe (the sync path returns _DEFAULT_UNIVERSE under a loop).
+    return await crypto_universe_async()
 
 
 class CryptoIngestor(IngestorAdapter):
@@ -51,7 +52,7 @@ class CryptoIngestor(IngestorAdapter):
         self.testnet = testnet
 
     async def run(self) -> None:
-        current_symbols = self._init_symbols or _default_symbols()
+        current_symbols = self._init_symbols or await _default_symbols()
         last_reconcile = time.monotonic()
 
         while True:
@@ -72,7 +73,7 @@ class CryptoIngestor(IngestorAdapter):
                         continue
                     last_reconcile = now
 
-                    new_symbols = _default_symbols()
+                    new_symbols = await _default_symbols()
                     if sorted(new_symbols) != sorted(current_symbols):
                         logger.info(
                             f"[crypto] universe changed: "

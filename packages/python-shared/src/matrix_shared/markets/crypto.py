@@ -101,6 +101,19 @@ def crypto_universe() -> list[str]:
     return _db_active_universe()
 
 
+async def crypto_universe_async() -> list[str]:
+    """Async single-source-of-truth — same priority as crypto_universe() but
+    safe to call from inside a running event loop. The sync `_db_active_universe`
+    can't `asyncio.run()` under a live loop and silently returns _DEFAULT_UNIVERSE;
+    async consumers (e.g. the ingestion adapter's reconcile loop) MUST use this so
+    they actually track the potential-scored active set instead of the default.
+    """
+    env = os.environ.get("CRYPTO_SYMBOLS", "").strip()
+    if env:
+        return [s.strip().upper() for s in env.split(",") if s.strip()]
+    return await _async_db_active_universe()
+
+
 class CryptoMarket(MarketAdapter):
     name: ClassVar[str] = "crypto"
     asset_class: ClassVar[str] = "crypto"

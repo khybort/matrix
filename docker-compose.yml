@@ -50,10 +50,18 @@ x-python-env: &python-env
   MATRIX_MODEL_SONNET: ${MATRIX_MODEL_SONNET:-}
   MATRIX_MODEL_OPUS: ${MATRIX_MODEL_OPUS:-}
   MATRIX_DEFAULT_MODEL: ${MATRIX_DEFAULT_MODEL:-sonnet}
+  # Screener public-ticker source. MAINNET by default: it reads only public
+  # market stats (no auth/orders) and testnet liquidity is fake, which starved
+  # the universe scorer. Decoupled from execution's BYBIT_TESTNET on purpose.
+  SCREENER_BYBIT_TESTNET: ${SCREENER_BYBIT_TESTNET:-false}
   # Universe manager — dynamic potential-scored symbol selection.
   UNIVERSE_MANAGER_ENABLED: ${UNIVERSE_MANAGER_ENABLED:-false}
   UNIVERSE_MANAGER_ENFORCE: ${UNIVERSE_MANAGER_ENFORCE:-false}
   UNIVERSE_RECONCILE_INTERVAL_S: ${UNIVERSE_RECONCILE_INTERVAL_S:-300}
+  # enter_floor 0.70 only admitted ~10 symbols from the (mainnet) pool; the 25th-
+  # ranked scores ~0.58. Lowered to 0.55 so target_active_n=25 is the binding cap,
+  # widening the carry set toward high-funding alts. exit_floor stays 0.40.
+  UNIVERSE_CRYPTO_ENTER_FLOOR: ${UNIVERSE_CRYPTO_ENTER_FLOOR:-0.55}
   NODE_ID: ${NODE_ID:-default-node}
   NODE_ROLES: ${NODE_ROLES:-dev,ingestion,graph,strategy,backtest,reflection,labs}
   MAX_POSITION_PCT: ${MAX_POSITION_PCT:-2.0}

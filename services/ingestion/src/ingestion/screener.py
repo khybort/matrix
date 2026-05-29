@@ -30,7 +30,15 @@ from matrix_shared import session_scope
 from sqlalchemy import text
 
 # ── Bybit REST (public, no auth) ─────────────────────────────────────────────
-_TESTNET = os.environ.get("BYBIT_TESTNET", "true").strip().lower() != "false"
+# The screener only reads PUBLIC ticker data (no keys, no orders), so it defaults
+# to MAINNET regardless of the execution testnet gate: testnet liquidity is
+# fake/sparse (turnover ~0 for most perps), which starved the universe scorer to
+# ~6 candidates. SCREENER_BYBIT_TESTNET overrides; falls back to BYBIT_TESTNET.
+# This is decoupled from execution's BYBIT_TESTNET on purpose — public data only.
+_TESTNET = (
+    os.environ.get("SCREENER_BYBIT_TESTNET")
+    or os.environ.get("BYBIT_TESTNET", "false")
+).strip().lower() != "false"
 _BASE = (
     "https://api-testnet.bybit.com" if _TESTNET else "https://api.bybit.com"
 )
