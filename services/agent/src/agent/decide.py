@@ -267,6 +267,24 @@ def _llm_prompt(f: SymbolFeatures) -> str:
     return "\n".join(parts)
 
 
+def _exploration_scale(edge: float | None) -> float:
+    """Scale factor [0, 1] on base epsilon from per-symbol realized edge.
+
+    Edge in [0, 1]; 0.5 = neutral (no data or shrunk average).
+    - Unknown/neutral (0.4–0.6): full exploration (scale=1.0) — gather samples.
+    - Established positive (> 0.6): reduced exploration (0.5) — already exploiting.
+    - Established negative (< 0.4): zero exploration — stop burning slots on a
+      symbol the system has evidence is unprofitable.
+    """
+    if edge is None:
+        return 1.0
+    if edge < 0.4:
+        return 0.0
+    if edge > 0.6:
+        return 0.5
+    return 1.0
+
+
 def maybe_explore(
     d: Decision,
     *,
@@ -274,15 +292,21 @@ def maybe_explore(
     roll: float,
     asset_class: str = "crypto",
     explore_conf: Decimal = EXPLORE_CONFIDENCE,
+    symbol_edge: float | None = None,
 ) -> Decision:
     """With probability epsilon, flip a `hold` into a low-confidence trade.
+
+    epsilon is scaled by symbol_edge (see _exploration_scale): symbols with
+    established negative edge are never explored; unknowns are always explored;
+    high-edge symbols are explored at reduced rate.
 
     Direction follows the sub-threshold signal lean (feature_dump['total']).
     BIST is long-only, so a negative lean stays hold. Non-hold decisions are
     returned untouched. The result is tagged is_exploration and still passes
     through the lessons gate downstream (so `avoid` can veto it).
     """
-    if d.side != "hold" or roll >= epsilon:
+    eff_epsilon = epsilon * _exploration_scale(symbol_edge)
+    if d.side != "hold" or roll >= eff_epsilon:
         return d
     try:
         total = Decimal(str(d.feature_dump.get("total", "0")))
@@ -313,6 +337,7 @@ async def decide(
     asset_class: str = "crypto",
     strategy_id: str = "matrix_agent",
     explore_rand: Callable[[], float] = random.random,
+    symbol_edge: float | None = None,
 ) -> Decision:
     """Top-level decision: rule-based by default; LLM if enabled.
 
@@ -349,7 +374,8 @@ async def decide(
 
     epsilon = float(cfg.explore_epsilon) if cfg is not None else EXPLORE_EPSILON_DEFAULT
     base = maybe_explore(
-        base, epsilon=epsilon, roll=explore_rand(), asset_class=asset_class
+        base, epsilon=epsilon, roll=explore_rand(),
+        asset_class=asset_class, symbol_edge=symbol_edge,
     )
 
     return await _apply_lessons(base, f, strategy_id)

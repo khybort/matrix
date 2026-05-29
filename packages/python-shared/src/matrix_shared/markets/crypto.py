@@ -1,18 +1,21 @@
 """Crypto market adapter — Bybit/Binance-style perpetual & spot.
 
-Universe is currently env-driven (`CRYPTO_SYMBOLS=BTCUSDT,ETHUSDT,...`)
-with a small default list. Live execution wiring lives in
-`services/execution/`; this module only declares routing + rules.
+Universe is env-driven (`CRYPTO_SYMBOLS=BTCUSDT,ETHUSDT,...`) or dynamically
+read from the `tradable_symbols` SHARED table (when populated by the universe
+manager). Falls back to the hardcoded 15-symbol default when both are absent.
+Live execution wiring lives in `services/execution/`; this module only declares
+routing + rules.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime
 from decimal import Decimal
 from typing import ClassVar
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix_shared.models import MarketTrade
@@ -23,11 +26,7 @@ from .registry import register
 # Suffixes that unambiguously mark a symbol as crypto-quoted.
 _QUOTE_SUFFIXES: tuple[str, ...] = ("USDT", "USDC", "USD", "BUSD", "FDUSD")
 
-# Fallback universe when CRYPTO_SYMBOLS env is unset. The 15 most liquid
-# Bybit USDT perpetuals — broad enough that mean-reversion / OI strategies
-# have real alpha surface (the old 2-symbol BTC+ETH set was the single
-# biggest reason "new coins aren't analyzed"), liquid enough that paper
-# fills stay realistic. Override per-deployment via CRYPTO_SYMBOLS.
+# Fallback universe when CRYPTO_SYMBOLS env is unset and the DB table is empty.
 _DEFAULT_UNIVERSE: tuple[str, ...] = (
     "BTCUSDT",
     "ETHUSDT",
@@ -47,57 +46,81 @@ _DEFAULT_UNIVERSE: tuple[str, ...] = (
 )
 
 
+async def _async_db_active_universe() -> list[str]:
+    """Async read of active crypto symbols from SHARED tradable_symbols."""
+    from matrix_shared import shared_session_scope
+    async with shared_session_scope() as db:
+        result = await db.execute(
+            text(
+                "SELECT symbol FROM tradable_symbols "
+                "WHERE asset_class='crypto' AND active=true "
+                "ORDER BY score DESC NULLS LAST"
+            )
+        )
+        rows = [r[0] for r in result]
+        return rows if rows else list(_DEFAULT_UNIVERSE)
+
+
+def _db_active_universe() -> list[str]:
+    """Sync bridge to the SHARED tradable_symbols active set.
+
+    Uses asyncio.run() + asyncpg (always installed) so it works from any sync
+    call site (ingestion startup, strategy modules, agent config loader) without
+    needing psycopg2. Falls back to _DEFAULT_UNIVERSE on any error.
+    """
+    try:
+        return asyncio.run(_async_db_active_universe())
+    except Exception:
+        return list(_DEFAULT_UNIVERSE)
+
+
 def crypto_universe() -> list[str]:
     """Single source of truth for the crypto symbol set.
 
-    Reads CRYPTO_SYMBOLS (comma-separated) if set, else the default 15.
-    When SCREENER_AUTO_INCLUDE=true AND no explicit CRYPTO_SYMBOLS override is
-    set, also folds in any 'candidate' symbols from screener_signals with
-    passes >= 5 (sustained anomaly). This is the operator-blessed automatic
-    universe expansion path.
+    Priority:
+      1. CRYPTO_SYMBOLS env (explicit operator override — always respected).
+      2. tradable_symbols SHARED table (dynamic universe from the potential-score
+         manager). Falls back to _DEFAULT_UNIVERSE when the table is empty.
 
     Used by ingestion, every crypto strategy module, the agent, and
-    CryptoMarket.universe() so the tradable set is defined in exactly one
-    place — no more per-module DEFAULT_SYMBOLS drift.
+    CryptoMarket.universe() so the tradable set is defined in exactly one place.
     """
     env = os.environ.get("CRYPTO_SYMBOLS", "").strip()
     if env:
         return [s.strip().upper() for s in env.split(",") if s.strip()]
-
-    base = list(_DEFAULT_UNIVERSE)
-
-    if os.environ.get("SCREENER_AUTO_INCLUDE", "").strip().lower() == "true":
-        # TODO: matrix_shared.db only exposes async session scopes; a sync
-        # psycopg2 reader for screener_signals doesn't exist yet. Until a
-        # local_sync_session helper is added, this flag is correctly parsed
-        # and respected in logic but the screener fold-in is a no-op.
-        # To implement: add a sync helper in matrix_shared.db that uses
-        # psycopg2 (already a transitive dep via SQLAlchemy) and call it here
-        # to SELECT symbol FROM screener_signals WHERE status='candidate'
-        # AND passes >= 5 ORDER BY score DESC LIMIT 10.
-        pass
-
-    return base
+    return _db_active_universe()
 
 
 class CryptoMarket(MarketAdapter):
     name: ClassVar[str] = "crypto"
     asset_class: ClassVar[str] = "crypto"
 
-    async def universe(self, db: AsyncSession) -> list[str]:  # noqa: ARG002
-        return crypto_universe()
+    async def universe(self, db: AsyncSession) -> list[str]:
+        env = os.environ.get("CRYPTO_SYMBOLS", "").strip()
+        if env:
+            return [s.strip().upper() for s in env.split(",") if s.strip()]
+        # Async path — preferred when a session is already available.
+        try:
+            result = await db.execute(
+                text(
+                    "SELECT symbol FROM tradable_symbols "
+                    "WHERE asset_class='crypto' AND active=true "
+                    "ORDER BY score DESC NULLS LAST"
+                )
+            )
+            rows = [r[0] for r in result]
+            return rows if rows else list(_DEFAULT_UNIVERSE)
+        except Exception:
+            return list(_DEFAULT_UNIVERSE)
 
     def claims_symbol(self, symbol: str) -> bool:
         s = symbol.upper()
-        # Must end with a known quote suffix AND be longer than the suffix
-        # itself (the bare "USDT" string isn't a tradable symbol).
         return any(s.endswith(suf) and len(s) > len(suf) for suf in _QUOTE_SUFFIXES)
 
     def is_session_open(self, ts: datetime | None = None) -> bool:  # noqa: ARG002
         return True  # 24/7
 
     def fees(self, symbol: str) -> FeeModel:  # noqa: ARG002
-        # Bybit perpetual defaults (taker 10 bps, maker 1 bp, 2 bps slippage).
         return FeeModel(
             maker_bps=Decimal("1"),
             taker_bps=Decimal("10"),
@@ -135,14 +158,10 @@ class CryptoMarket(MarketAdapter):
 
     def make_executor(self, cfg: object, *, paper: bool) -> "object":
         if paper:
-            # Paper PnL is the Wallet/PaperPosition engine in services/backtest;
-            # there's no separate ExecutionAdapter for it. Strategies → paper
-            # via the backtest loop, not via this factory.
             raise NotImplementedError(
                 "crypto paper executor is the services/backtest engine, not an "
                 "ExecutionAdapter — wire via paper_trade.py instead"
             )
-        # Late import keeps matrix_shared free of a hard dep on services/.
         try:
             from execution.adapters.crypto import CryptoLiveExecutor
         except ImportError as e:

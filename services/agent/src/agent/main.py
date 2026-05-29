@@ -25,9 +25,11 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from loguru import logger
+from sqlalchemy import select
+
 from matrix_shared import session_scope, shared_session_scope
 from matrix_shared.markets import all_markets
-from matrix_shared.models import Prediction
+from matrix_shared.models import Prediction, TradableSymbol
 
 from agent.config import load_agent_config
 from agent.decide import decide
@@ -136,6 +138,22 @@ async def _tick(symbols: list[str]) -> int:
     # every symbol within the same tick.
     cfgs = {ac: await load_agent_config(AGENT_STRATEGY_ID, ac) for ac in {ac for _, ac in targets}}
 
+    # Per-symbol potential score from tradable_symbols — used to scale epsilon
+    # exploration (adaptive epsilon: negative-edge symbols aren't explored).
+    # Best-effort: missing on empty table (early bootstrap) → neutral for all.
+    edge_map: dict[str, float] = {}
+    try:
+        async with shared_session_scope() as _sess:
+            _rows = (await _sess.execute(
+                select(TradableSymbol.symbol, TradableSymbol.score)
+                .where(TradableSymbol.asset_class.in_(
+                    {ac for _, ac in targets}
+                ))
+            )).all()
+            edge_map = {sym: float(sc) for sym, sc in _rows if sc is not None}
+    except Exception:
+        pass
+
     persisted = 0
     for symbol, asset_class in targets:
         cfg = cfgs[asset_class]
@@ -149,7 +167,10 @@ async def _tick(symbols: list[str]) -> int:
             continue
         try:
             features = await extract_symbol_features(symbol)
-            decision = await decide(features, cfg, asset_class=asset_class)
+            decision = await decide(
+                features, cfg, asset_class=asset_class,
+                symbol_edge=edge_map.get(symbol),
+            )
         except Exception as e:
             logger.exception(f"agent error for {symbol} ({asset_class}): {e}")
             continue

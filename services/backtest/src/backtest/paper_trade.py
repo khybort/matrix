@@ -29,6 +29,7 @@ from matrix_shared.models import (
     PaperPosition,
     Prediction,
     TickerSnapshot,
+    TradableSymbol,
     Wallet,
     WalletSnapshot,
 )
@@ -394,6 +395,8 @@ async def _open_for_market(asset_class: str) -> int:
         allowed_sides = (
             ["long", "short", "delta_neutral"] if asset_class == "crypto" else ["long"]
         )
+        # Fetch a broad candidate pool (up to 5× slots) so the EV sort can pick
+        # the best predictions rather than whichever happened to arrive first.
         pred_stmt = (
             select(Prediction)
             .outerjoin(PaperPosition, PaperPosition.prediction_id == Prediction.id)
@@ -402,16 +405,52 @@ async def _open_for_market(asset_class: str) -> int:
             .where(Prediction.asset_class == asset_class)
             .where(Prediction.side.in_(allowed_sides))
             .where(Prediction.close_by > now)
-            .order_by(Prediction.generated_at.asc())
-            .limit(wallet_slots_left)
+            .limit(wallet_slots_left * 5)
         )
-        candidates = list((await session.execute(pred_stmt)).scalars())
+        candidates_raw = list((await session.execute(pred_stmt)).scalars())
 
-    # Track newly opened counts per strategy to avoid re-querying mid-loop
+        # Batch-load per-symbol potential scores for the edge multiplier.
+        # Symbols absent from tradable_symbols get score=None → neutral (1.0×).
+        symbols_needed = {p.symbol for p in candidates_raw}
+        symbol_scores: dict[str, float] = {}
+        if symbols_needed:
+            score_rows = (
+                await session.execute(
+                    select(TradableSymbol.symbol, TradableSymbol.score)
+                    .where(TradableSymbol.asset_class == asset_class)
+                    .where(TradableSymbol.symbol.in_(symbols_needed))
+                )
+            ).all()
+            symbol_scores = {sym: sc for sym, sc in score_rows if sc is not None}
+
+        def _ev(p: Prediction) -> float:
+            conf = float(p.confidence)
+            tp = float(p.tp_pct) if p.tp_pct is not None else float(SCORE_CAP_PCT)
+            sl = float(p.sl_pct) if p.sl_pct is not None else float(SCORE_CAP_PCT)
+            base_ev = conf * tp - (1.0 - conf) * sl
+            sc = symbol_scores.get(p.symbol)
+            multiplier = max(0.5, min(1.5, 0.5 + sc)) if sc is not None else 1.0
+            return base_ev * multiplier
+
+        candidates = sorted(candidates_raw, key=_ev, reverse=True)
+
+    # Track newly opened counts per strategy/symbol to enforce soft caps.
     newly_opened: dict[str, int] = {}
+    symbol_open_count: dict[str, int] = {}
     opened = 0
 
     for p in candidates:
+        if opened >= wallet_slots_left:
+            break
+
+        # Per-symbol soft cap: one symbol uses at most ceil(max_concurrent * share)
+        # of the wallet slots. share grows with score so high-conviction symbols
+        # can legitimately dominate, but a single noisy asset can't eat everything.
+        sc = symbol_scores.get(p.symbol)
+        sym_share = 0.15 + 0.20 * sc if sc is not None else 0.20
+        sym_cap = max(1, int(wallet.max_concurrent_positions * sym_share + 0.5))
+        if symbol_open_count.get(p.symbol, 0) >= sym_cap:
+            continue
         # BIST is long-only (T+2 settlement, retail short restrictions). The
         # strategy/agent layers already filter shorts, but this is a defensive
         # gate in case a buggy proposal slips through.
@@ -438,7 +477,9 @@ async def _open_for_market(asset_class: str) -> int:
             continue
         entry = _apply_slippage(last_px, p.side, opening=True)
 
-        conf = max(Decimal("0.2"), min(Decimal("1.0"), p.confidence))
+        # Floor 0.2 was over-sizing 0.05-confidence exploration probes 4×.
+        # A probe should risk ~confidence × max_notional, not 4× that.
+        conf = max(Decimal("0.05"), min(Decimal("1.0"), p.confidence))
         notional = max_notional * conf
         notional = notional.quantize(Decimal("0.01"))
 
@@ -468,6 +509,7 @@ async def _open_for_market(asset_class: str) -> int:
                 )
             )
         newly_opened[p.strategy_id] = newly_opened.get(p.strategy_id, 0) + 1
+        symbol_open_count[p.symbol] = symbol_open_count.get(p.symbol, 0) + 1
         opened += 1
         logger.info(
             f"opened {p.side} {p.symbol} [{p.asset_class}] notional={notional:.2f} "
