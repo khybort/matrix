@@ -78,9 +78,34 @@ type Dashboard = {
 
 const REFRESH_MS = 10_000;
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function secondsSince(iso: string): number {
+  return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+}
+
+function formatAge(iso: string): string {
+  const s = secondsSince(iso);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+function pct(s: string): string {
+  return (parseFloat(s) * 100).toFixed(1) + "%";
+}
+
+function num(s: string): string {
+  return parseFloat(s).toFixed(2);
+}
+
 export default function StrategiesPage() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [, setTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -96,6 +121,12 @@ export default function StrategiesPage() {
     tick();
     const id = setInterval(tick, REFRESH_MS);
     return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  // 1s tick to keep the refresh badge live between dashboard refreshes
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
   }, []);
 
   if (err && !data) {
@@ -129,6 +160,7 @@ export default function StrategiesPage() {
             <span className="text-[var(--ink-2)]">what lives, what's promotable</span>
           </h1>
         </div>
+        <span className="muted text-xs mono">refreshed {secondsSince(data.now)}s ago</span>
       </div>
 
       <Panel title="Strategy performance · last 24h">
@@ -174,7 +206,7 @@ export default function StrategiesPage() {
       </Panel>
 
       <Panel title="Templates · starter configs">
-        <TemplatesPanel />
+        <TemplatesPanel strategyAgg={data.strategyAgg} />
       </Panel>
 
       <Panel title="Wizard · custom config">
@@ -277,6 +309,10 @@ function LabPanel({ rows, stats }: { rows: LabExperiment[]; stats: Dashboard["la
   const topWeights: Record<string, string> = top?.params?.weights ?? {};
   const weightEntries = Object.entries(topWeights);
 
+  const lastEvolvedAt = rows.length > 0
+    ? rows.reduce((max, r) => r.created_at > max ? r.created_at : max, rows[0].created_at)
+    : null;
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-3 md:grid-cols-7 gap-3">
@@ -290,8 +326,17 @@ function LabPanel({ rows, stats }: { rows: LabExperiment[]; stats: Dashboard["la
       </div>
 
       {rows.length === 0 ? (
-        <EmptyHint>No active experiments yet.</EmptyHint>
+        <>
+          <div className="text-xs muted">no active experiments</div>
+          {(stats?.active ?? 0) === 0 && (
+            <EmptyHint>lab is re-seeding (recent retire) — new genomes will appear within a few minutes</EmptyHint>
+          )}
+        </>
       ) : (
+        <>
+          <div className="text-xs muted">
+            active: {stats?.active ?? 0} · last evolved {lastEvolvedAt ? formatAge(lastEvolvedAt) : "—"} ago
+          </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="overflow-x-auto">
             <table className="matrix">
@@ -329,14 +374,14 @@ function LabPanel({ rows, stats }: { rows: LabExperiment[]; stats: Dashboard["la
             ) : (
               <div className="space-y-1">
                 {weightEntries.map(([k, v]) => {
-                  const pct = Math.round(Number(v) * 100);
+                  const wpct = Math.round(Number(v) * 100);
                   return (
                     <div key={k} className="flex items-center gap-2 text-xs">
                       <span className="mono w-28 muted">{k}</span>
                       <div className="flex-1 bg-zinc-800 h-2 rounded overflow-hidden">
-                        <div className="h-full bg-cyan-400" style={{ width: `${Math.max(2, pct)}%` }} />
+                        <div className="h-full bg-cyan-400" style={{ width: `${Math.max(2, wpct)}%` }} />
                       </div>
-                      <span className="mono w-12 text-right">{pct}%</span>
+                      <span className="mono w-12 text-right">{wpct}%</span>
                     </div>
                   );
                 })}
@@ -344,6 +389,7 @@ function LabPanel({ rows, stats }: { rows: LabExperiment[]; stats: Dashboard["la
             )}
           </div>
         </div>
+        </>
       )}
     </div>
   );
@@ -372,17 +418,19 @@ function ProposalsTable({ rows }: { rows: Proposal[] }) {
       <div className="overflow-x-auto">
         <table className="matrix">
           <thead><tr>
-            <th>Time</th><th>Strategy</th><th>Type</th>
-            <th>From → To</th><th>Source</th><th>Status</th><th>Actions</th>
+            <th>Age</th><th>Source</th><th>Strategy</th><th>Type</th>
+            <th>From → To</th><th>Status</th><th>Actions</th>
           </tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.id}>
-                <td className="mono muted">{new Date(r.created_at).toLocaleTimeString()}</td>
+                <td className="mono muted">{formatAge(r.created_at)}</td>
+                <td className="mono text-xs">
+                  <span className="muted border border-current px-1 rounded">{r.source}</span>
+                </td>
                 <td className="mono">{r.strategy_id}</td>
                 <td className="mono">{r.proposal_type}</td>
                 <td className="mono">v{r.from_version} → v{r.to_version}</td>
-                <td className="mono">{r.source}</td>
                 <td className={r.status === "applied" ? "accent" : "muted"}>{r.status}</td>
                 <td>
                   {r.status === "pending" ? (
@@ -423,7 +471,7 @@ type PreviewResult = {
   max_drawdown_pct: string;
 };
 
-function TemplatesPanel() {
+function TemplatesPanel({ strategyAgg }: { strategyAgg: StrategyAgg[] }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -480,11 +528,21 @@ function TemplatesPanel() {
           <tbody>
             {STRATEGY_TEMPLATES.map((t) => {
               const pv = previews[t.id];
+              const live = strategyAgg.find(
+                (s) => s.strategy_id === t.strategy_id && s.asset_class === t.asset_class
+              );
               return (
                 <tr key={t.id}>
                   <td>
                     <div className="font-medium">{t.label}</div>
                     <div className="muted text-xs">{t.short_description}</div>
+                    {live ? (
+                      <div className="text-xs mt-1">
+                        live: {live.n} trades · win {pct(live.win_rate)} · pnl ${num(live.total_pnl_usd)} (24h)
+                      </div>
+                    ) : (
+                      <div className="muted text-xs mt-1">not active</div>
+                    )}
                   </td>
                   <td className="mono">{t.strategy_id}</td>
                   <td><AssetBadge cls={t.asset_class} /></td>
