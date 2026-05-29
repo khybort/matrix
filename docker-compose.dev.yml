@@ -150,7 +150,7 @@ services:
   labs:
     entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
     command:
-      - "python -m labs.main --eval-interval 20 --evolve-interval 300 --promote-scan-interval 600"
+      - "python -m labs.main --eval-interval 20 --evolve-interval 300 --promote-scan-interval 600 --auto-apply-safe"
       - "/workspace/services/labs/src"
       - "/workspace/services/agent/src"
       - "/workspace/services/graph/src"

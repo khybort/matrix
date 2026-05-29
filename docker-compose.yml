@@ -356,6 +356,7 @@ services:
         condition: service_healthy
     environment:
       <<: *python-env
+      AUTO_APPLY_MIN_FITNESS: "0.10"
     command:
       - "labs.main"
       - "--eval-interval"
@@ -364,6 +365,7 @@ services:
       - "300"
       - "--promote-scan-interval"
       - "600"
+      - "--auto-apply-safe"
     restart: unless-stopped
     logging: *default_logging
 

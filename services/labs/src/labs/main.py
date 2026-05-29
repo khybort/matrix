@@ -33,6 +33,7 @@ from labs.evaluate import emit_signals, score_due_evaluations
 from labs.evolve import seed_initial_population, run_evolution_cycle
 from labs.promote import (
     apply_best_pending,
+    apply_best_pending_safe,
     apply_proposal,
     scan_all_strategies,
     scan_for_promotions,
@@ -99,6 +100,8 @@ async def run(
     min_evals: int = 5,
     promote_scan_interval_s: float = DEFAULT_PROMOTE_SCAN_INTERVAL_S,
     auto_apply: bool = False,
+    auto_apply_safe: bool = False,
+    auto_apply_min_fitness: Decimal = Decimal("0.10"),
 ) -> None:
     await seed_initial_population(asset_class="crypto")
     await seed_initial_population(asset_class="bist")
@@ -152,6 +155,9 @@ async def run(
                         logger.info(
                             f"auto-apply: proposal {pid} {'applied' if ok else 'failed'}"
                         )
+                if auto_apply_safe:
+                    applied = await apply_best_pending_safe(min_fitness=auto_apply_min_fitness)
+                    logger.info(f"apply-safe: applied {len(applied)} proposal(s)")
             except Exception as e:
                 logger.exception(f"promotion scan failed: {e}")
             last_promote_scan = loop_started
@@ -186,6 +192,15 @@ def main() -> None:
     parser.add_argument(
         "--auto-apply", action="store_true",
         help="Auto-apply detected promotions (default: only writes proposal)",
+    )
+    parser.add_argument(
+        "--auto-apply-safe", action="store_true",
+        help="Auto-apply high-fitness lab_promotion and slot_adjustment proposals",
+    )
+    parser.add_argument(
+        "--auto-apply-min-fitness", type=str,
+        default=None,
+        help="Min fitness for safe auto-apply of lab_promotion proposals (default: AUTO_APPLY_MIN_FITNESS env or 0.10)",
     )
     parser.add_argument(
         "--scan-once", action="store_true",
@@ -265,10 +280,15 @@ def main() -> None:
         asyncio.run(_one())
         return
 
+    import os
+    _min_fitness_str = args.auto_apply_min_fitness or os.environ.get("AUTO_APPLY_MIN_FITNESS", "0.10")
+    auto_apply_min_fitness = Decimal(_min_fitness_str)
+
     logger.info(
         f"labs start: symbols={args.symbols} eval={args.eval_interval}s "
         f"evolve={args.evolve_interval}s min_evals={args.min_evals} "
-        f"promote_scan={args.promote_scan_interval}s auto_apply={args.auto_apply}"
+        f"promote_scan={args.promote_scan_interval}s auto_apply={args.auto_apply} "
+        f"auto_apply_safe={args.auto_apply_safe} min_fitness={auto_apply_min_fitness}"
     )
     asyncio.run(
         run(
@@ -278,6 +298,8 @@ def main() -> None:
             args.min_evals,
             args.promote_scan_interval,
             args.auto_apply,
+            args.auto_apply_safe,
+            auto_apply_min_fitness,
         )
     )
 

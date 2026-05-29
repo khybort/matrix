@@ -392,6 +392,88 @@ async def scan_all_strategies() -> list[uuid.UUID]:
     return created
 
 
+async def apply_best_pending_safe(
+    min_fitness: Decimal = Decimal("0.10"),
+) -> list[uuid.UUID]:
+    """Auto-apply eligible pending proposals across all strategies.
+
+    Eligible proposal types and their criteria:
+      - lab_promotion: metrics_window["fitness_score"] >= min_fitness
+      - slot_adjustment (source=slot_scorer): metrics_window["consecutive_losses"] >= 5
+      - Everything else (weight_tune, llm_guide, …): NOT eligible.
+
+    Processes proposals oldest-first. Returns list of applied proposal ids.
+    Defensive: bad metrics_window values cause a skip + warning, never a crash.
+    """
+    async with shared_session_scope() as session:
+        stmt = (
+            select(MutationProposal)
+            .where(MutationProposal.status == "pending")
+            .order_by(MutationProposal.created_at)
+        )
+        pending = list((await session.execute(stmt)).scalars())
+
+    eligible_ids: list[uuid.UUID] = []
+    for proposal in pending:
+        ptype = proposal.proposal_type
+        mw = proposal.metrics_window or {}
+        pid = proposal.id
+
+        if ptype == LAB_PROMOTION_TYPE:
+            try:
+                fitness = Decimal(str(mw["fitness_score"]))
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning(
+                    f"apply-safe: proposal {pid} lab_promotion missing/bad "
+                    f"fitness_score ({exc}); skipping"
+                )
+                continue
+            if fitness >= min_fitness:
+                eligible_ids.append(pid)
+            else:
+                logger.debug(
+                    f"apply-safe: proposal {pid} lab_promotion fitness "
+                    f"{fitness} < {min_fitness}; skipping"
+                )
+
+        elif ptype == "slot_adjustment" and proposal.source == "slot_scorer":
+            try:
+                losses = int(mw["consecutive_losses"])
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning(
+                    f"apply-safe: proposal {pid} slot_adjustment missing/bad "
+                    f"consecutive_losses ({exc}); skipping"
+                )
+                continue
+            if losses >= 5:
+                eligible_ids.append(pid)
+            else:
+                logger.debug(
+                    f"apply-safe: proposal {pid} slot_adjustment losses "
+                    f"{losses} < 5; skipping"
+                )
+
+        else:
+            logger.debug(
+                f"apply-safe: proposal {pid} type={ptype} not eligible; skipping"
+            )
+
+    applied_ids: list[uuid.UUID] = []
+    for pid in eligible_ids:
+        try:
+            ok = await apply_proposal(pid)
+            if ok:
+                applied_ids.append(pid)
+                logger.info(f"apply-safe: applied proposal {pid}")
+            else:
+                logger.warning(f"apply-safe: apply_proposal returned False for {pid}")
+        except Exception as exc:
+            logger.exception(f"apply-safe: apply_proposal raised for {pid}: {exc}")
+
+    logger.info(f"apply-safe: applied {len(applied_ids)} proposal(s)")
+    return applied_ids
+
+
 async def apply_best_pending(strategy_id: str = "matrix_agent") -> uuid.UUID | None:
     """Convenience: apply the pending lab_promotion proposal with highest
     expected gain (here: most recent, since we suppress duplicates)."""
