@@ -25,6 +25,7 @@ from loguru import logger
 
 from matrix_shared import shared_session_scope
 from matrix_shared.markets import MarketAdapter, all_markets
+from matrix_shared.markets.crypto import crypto_universe_async
 from matrix_shared.models import StrategyConfig
 from sqlalchemy import select
 
@@ -72,8 +73,15 @@ async def _active_strategy_ids() -> set[str]:
     return _active_ids_cache
 
 
-def _instantiate_for_market(market: MarketAdapter) -> list:
+def _instantiate_for_market(
+    market: MarketAdapter, symbols: list[str] | None = None
+) -> list:
     """Build a fresh list of strategy instances for `market` from the registry.
+
+    `symbols`, when given, is passed to every strategy ctor so the whole market
+    shares one dynamically-resolved symbol set (the active universe) instead of
+    each module re-resolving it via the sync crypto_universe() — which returns
+    _DEFAULT_UNIVERSE inside the event loop and ignored the potential-scorer.
 
     A KeyError here means a market was registered as a MarketAdapter but has
     no `modules/<market>/__init__.py` exporting STRATEGIES — surface loudly.
@@ -84,17 +92,26 @@ def _instantiate_for_market(market: MarketAdapter) -> list:
             f"(STRATEGIES_BY_MARKET keys: {sorted(STRATEGIES_BY_MARKET)})"
         )
         return []
-    return [cls() for cls in STRATEGIES_BY_MARKET[market.name]]
+    classes = STRATEGIES_BY_MARKET[market.name]
+    if symbols is not None:
+        return [cls(symbols=symbols) for cls in classes]
+    return [cls() for cls in classes]
 
 
 async def _tick() -> int:
     active_ids = await _active_strategy_ids()
+    # Resolve the crypto active universe once per tick (async — the sync path
+    # returns _DEFAULT_UNIVERSE under a running loop), then feed it to every
+    # crypto strategy so they analyze the same set ingestion streams + the agent
+    # trades. Other markets resolve their own universe internally.
+    crypto_symbols = await crypto_universe_async()
     drafts: list[PredictionDraft] = []
     for market in all_markets():
         if not market.is_session_open():
             logger.debug(f"market {market.name} session closed; skip")
             continue
-        for strat in _instantiate_for_market(market):
+        market_symbols = crypto_symbols if market.name == "crypto" else None
+        for strat in _instantiate_for_market(market, market_symbols):
             # Gate: skip strategies that have been explicitly retired in
             # strategy_configs. An empty active_ids set means "bootstrap mode —
             # no rows yet, let everything through."
