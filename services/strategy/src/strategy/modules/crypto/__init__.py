@@ -7,16 +7,22 @@ re-registered once its signal recovers (see ROADMAP.md §lab-comeback).
 
 from __future__ import annotations
 
+from strategy.modules.crypto.cash_and_carry import CashAndCarry
 from strategy.modules.crypto.dca import Dca  # noqa: F401 (retained, not active)
 from strategy.modules.crypto.funding_reversion import FundingReversion
 from strategy.modules.crypto.grid import Grid
+from strategy.modules.crypto.momentum_xs import MomentumXs
 from strategy.modules.crypto.oi_breakout import OiBreakout  # noqa: F401 (retained, not active)
 from strategy.modules.crypto.oi_delta import OiDelta
+from strategy.modules.crypto.screener_follow import ScreenerFollow
 
 STRATEGIES: list[type] = [
     FundingReversion,
     OiDelta,
     Grid,
+    MomentumXs,
+    ScreenerFollow,
+    CashAndCarry,
     # Dca: -$8.67/24h, avg_score -0.148 (2026-05-28). Long-only accumulator hurts
     #      in sideways/down markets; re-enable when funding_rate trend confirms
     #      sustained upward pressure or lab genome proves its signal.
@@ -26,9 +32,12 @@ STRATEGIES: list[type] = [
 
 __all__ = [
     "STRATEGIES",
+    "CashAndCarry",
     "Dca",
     "FundingReversion",
     "Grid",
+    "MomentumXs",
     "OiBreakout",
     "OiDelta",
+    "ScreenerFollow",
 ]
