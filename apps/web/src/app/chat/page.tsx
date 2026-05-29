@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type ToolCall = { name?: string; params?: unknown };
 type Message = { role: "user" | "assistant"; content: string; tools?: ToolCall[] };
@@ -15,17 +15,60 @@ const COLORS = {
   accent: "#5cc8ff",
 };
 
+const SESSION_KEY = "matrix_chat_session";
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(true);
   const sessionId = useRef<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
 
-  function scrollDown() {
+  function scrollDown(smooth = false) {
     requestAnimationFrame(() => {
-      scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
+      scroller.current?.scrollTo({
+        top: scroller.current.scrollHeight,
+        behavior: smooth ? "smooth" : "auto",
+      });
     });
+  }
+
+  // Load history from brain on mount if a session_id exists in localStorage.
+  useEffect(() => {
+    const saved = localStorage.getItem(SESSION_KEY);
+    if (!saved) {
+      setLoadingHistory(false);
+      return;
+    }
+    sessionId.current = saved;
+    fetch(`/api/chat/session/${saved}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!data?.messages?.length) {
+          setLoadingHistory(false);
+          return;
+        }
+        const loaded: Message[] = data.messages.map(
+          (m: { role: string; content: string; tool_calls?: ToolCall[] }) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content ?? "",
+            tools: m.tool_calls ?? undefined,
+          }),
+        );
+        setMessages(loaded);
+      })
+      .catch(() => {})
+      .finally(() => {
+        setLoadingHistory(false);
+        scrollDown();
+      });
+  }, []);
+
+  function newChat() {
+    localStorage.removeItem(SESSION_KEY);
+    sessionId.current = null;
+    setMessages([]);
   }
 
   function patchLastAssistant(fn: (m: Message) => Message) {
@@ -44,7 +87,9 @@ export default function ChatPage() {
   function handleEvent(event: string, data: string) {
     if (event === "session") {
       try {
-        sessionId.current = JSON.parse(data).session_id ?? sessionId.current;
+        const sid = JSON.parse(data).session_id ?? sessionId.current;
+        sessionId.current = sid;
+        if (sid) localStorage.setItem(SESSION_KEY, sid);
       } catch {}
     } else if (event === "token") {
       patchLastAssistant((m) => ({ ...m, content: m.content + data }));
@@ -56,9 +101,7 @@ export default function ChatPage() {
       } catch {}
     } else if (event === "error") {
       let msg = data;
-      try {
-        msg = JSON.parse(data).message ?? data;
-      } catch {}
+      try { msg = JSON.parse(data).message ?? data; } catch {}
       patchLastAssistant((m) => ({ ...m, content: m.content + `\n\n⚠️ ${msg}` }));
     }
   }
@@ -73,13 +116,17 @@ export default function ChatPage() {
       { role: "assistant", content: "" },
     ]);
     setStreaming(true);
-    scrollDown();
+    scrollDown(true);
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, session_id: sessionId.current, surface: "web" }),
+        body: JSON.stringify({
+          message: text,
+          session_id: sessionId.current,
+          surface: "web",
+        }),
       });
       if (!res.body) throw new Error("no response body");
 
@@ -90,7 +137,6 @@ export default function ChatPage() {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        // SSE frames are separated by a blank line.
         let sep: number;
         while ((sep = buffer.indexOf("\n\n")) !== -1) {
           const frame = buffer.slice(0, sep);
@@ -99,7 +145,8 @@ export default function ChatPage() {
           const dataLines: string[] = [];
           for (const line of frame.split("\n")) {
             if (line.startsWith("event:")) event = line.slice(6).trim();
-            else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+            else if (line.startsWith("data:"))
+              dataLines.push(line.slice(5).replace(/^ /, ""));
           }
           handleEvent(event, dataLines.join("\n"));
         }
@@ -108,57 +155,144 @@ export default function ChatPage() {
       patchLastAssistant((m) => ({ ...m, content: m.content + `\n\n⚠️ ${e}` }));
     } finally {
       setStreaming(false);
-      scrollDown();
+      scrollDown(true);
     }
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: COLORS.bg, color: COLORS.text,
-      display: "flex", flexDirection: "column", fontFamily: "system-ui, sans-serif" }}>
-      <header style={{ padding: "14px 20px", borderBottom: `1px solid ${COLORS.border}`,
-        display: "flex", alignItems: "baseline", gap: 12 }}>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: COLORS.bg,
+        color: COLORS.text,
+        display: "flex",
+        flexDirection: "column",
+        fontFamily: "system-ui, sans-serif",
+      }}
+    >
+      <header
+        style={{
+          padding: "14px 20px",
+          borderBottom: `1px solid ${COLORS.border}`,
+          display: "flex",
+          alignItems: "baseline",
+          gap: 12,
+        }}
+      >
         <strong style={{ fontSize: 16 }}>Matrix Brain</strong>
         <span style={{ color: COLORS.muted, fontSize: 13 }}>
           read-only · ask anything about the system
         </span>
-        <a href="/" style={{ marginLeft: "auto", color: COLORS.accent, fontSize: 13 }}>
-          ← dashboard
-        </a>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 12, alignItems: "center" }}>
+          {messages.length > 0 && !streaming && (
+            <button
+              onClick={newChat}
+              style={{
+                background: "none",
+                border: `1px solid ${COLORS.border}`,
+                color: COLORS.muted,
+                borderRadius: 8,
+                padding: "4px 12px",
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              New chat
+            </button>
+          )}
+          <a href="/" style={{ color: COLORS.accent, fontSize: 13 }}>
+            ← dashboard
+          </a>
+        </div>
       </header>
 
-      <div ref={scroller} style={{ flex: 1, overflowY: "auto", padding: 20,
-        display: "flex", flexDirection: "column", gap: 14, maxWidth: 900,
-        width: "100%", margin: "0 auto" }}>
-        {messages.length === 0 && (
+      <div
+        ref={scroller}
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: 20,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+          maxWidth: 900,
+          width: "100%",
+          margin: "0 auto",
+        }}
+      >
+        {loadingHistory ? (
           <div style={{ color: COLORS.muted, fontSize: 14, marginTop: 40 }}>
-            Ask e.g. <em>“What’s our open BTC exposure and why?”</em>,{" "}
-            <em>“Which agent lessons are currently set to avoid?”</em>,{" "}
-            <em>“Summarize the news graph around ETH this week.”</em>
+            Loading history…
           </div>
-        )}
+        ) : messages.length === 0 ? (
+          <div style={{ color: COLORS.muted, fontSize: 14, marginTop: 40 }}>
+            Ask e.g.{" "}
+            <em>&quot;What&apos;s our open BTC exposure and why?&quot;</em>,{" "}
+            <em>&quot;Which agent lessons are currently set to avoid?&quot;</em>,{" "}
+            <em>&quot;Summarize the news graph around ETH this week.&quot;</em>
+          </div>
+        ) : null}
+
         {messages.map((m, i) => (
-          <div key={i} style={{ alignSelf: m.role === "user" ? "flex-end" : "flex-start",
-            maxWidth: "85%", background: m.role === "user" ? COLORS.user : COLORS.panel,
-            border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 14px" }}>
+          <div
+            key={i}
+            style={{
+              alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+              maxWidth: "85%",
+              background: m.role === "user" ? COLORS.user : COLORS.panel,
+              border: `1px solid ${COLORS.border}`,
+              borderRadius: 10,
+              padding: "10px 14px",
+            }}
+          >
             {m.tools && m.tools.length > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 6,
+                  marginBottom: 8,
+                }}
+              >
                 {m.tools.map((t, j) => (
-                  <span key={j} style={{ fontSize: 11, color: COLORS.accent,
-                    border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "2px 6px" }}>
+                  <span
+                    key={j}
+                    style={{
+                      fontSize: 11,
+                      color: COLORS.accent,
+                      border: `1px solid ${COLORS.border}`,
+                      borderRadius: 6,
+                      padding: "2px 6px",
+                    }}
+                  >
                     🔧 {(t.name ?? "").replace("mcp__matrix__", "")}
                   </span>
                 ))}
               </div>
             )}
-            <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.5, fontSize: 14 }}>
-              {m.content || (m.role === "assistant" && streaming ? "…" : "")}
+            <div
+              style={{
+                whiteSpace: "pre-wrap",
+                lineHeight: 1.5,
+                fontSize: 14,
+              }}
+            >
+              {m.content ||
+                (m.role === "assistant" && streaming ? "…" : "")}
             </div>
           </div>
         ))}
       </div>
 
       <div style={{ borderTop: `1px solid ${COLORS.border}`, padding: 16 }}>
-        <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", gap: 10 }}>
+        <div
+          style={{
+            maxWidth: 900,
+            margin: "0 auto",
+            display: "flex",
+            gap: 10,
+          }}
+        >
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -170,16 +304,34 @@ export default function ChatPage() {
             }}
             placeholder="Ask the system anything…"
             rows={1}
-            style={{ flex: 1, resize: "none", background: COLORS.panel, color: COLORS.text,
-              border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "12px 14px",
-              fontSize: 14, fontFamily: "inherit", outline: "none" }}
+            style={{
+              flex: 1,
+              resize: "none",
+              background: COLORS.panel,
+              color: COLORS.text,
+              border: `1px solid ${COLORS.border}`,
+              borderRadius: 10,
+              padding: "12px 14px",
+              fontSize: 14,
+              fontFamily: "inherit",
+              outline: "none",
+            }}
           />
           <button
             onClick={send}
             disabled={streaming || !input.trim()}
-            style={{ background: streaming ? COLORS.border : COLORS.accent, color: "#06121f",
-              border: "none", borderRadius: 10, padding: "0 20px", fontWeight: 600,
-              cursor: streaming || !input.trim() ? "default" : "pointer", fontSize: 14 }}
+            style={{
+              background:
+                streaming ? COLORS.border : COLORS.accent,
+              color: "#06121f",
+              border: "none",
+              borderRadius: 10,
+              padding: "0 20px",
+              fontWeight: 600,
+              cursor:
+                streaming || !input.trim() ? "default" : "pointer",
+              fontSize: 14,
+            }}
           >
             {streaming ? "…" : "Send"}
           </button>
