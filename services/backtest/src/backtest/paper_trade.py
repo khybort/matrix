@@ -28,6 +28,7 @@ from matrix_shared.models import (
     Outcome,
     PaperPosition,
     Prediction,
+    TickerSnapshot,
     Wallet,
     WalletSnapshot,
 )
@@ -56,6 +57,25 @@ FRESHNESS_S = 60                       # crypto: ticks every few seconds
 FRESHNESS_S_BARS = 60 * 30             # BIST 1m bars + 15min Yahoo delay window
 SLIPPAGE_BPS = Decimal("2")
 SCORE_CAP_PCT = Decimal("0.01")  # ±1% horizon caps the score at ±1
+
+
+async def _latest_funding_rate(symbol: str) -> Decimal | None:
+    """Latest funding rate for a crypto perp from the LOCAL ticker snapshot table.
+
+    Returns None if no snapshot exists — callers treat that as 0 accrual.
+    We use the *live* rate rather than the rate-at-open so ongoing delta_neutral
+    positions correctly reflect funding flips mid-hold.
+    """
+    async with local_session_scope() as session:
+        stmt = (
+            select(TickerSnapshot.funding_rate)
+            .where(TickerSnapshot.symbol == symbol)
+            .where(TickerSnapshot.funding_rate.isnot(None))
+            .order_by(TickerSnapshot.snapshot_ts.desc())
+            .limit(1)
+        )
+        row = (await session.execute(stmt)).first()
+        return Decimal(row.funding_rate) if row else None
 
 
 async def _latest_price(symbol: str, asset_class: str = "crypto") -> Decimal | None:
@@ -93,13 +113,43 @@ async def _latest_price(symbol: str, asset_class: str = "crypto") -> Decimal | N
 
 
 def _apply_slippage(price: Decimal, side: str, *, opening: bool) -> Decimal:
+    # delta_neutral is a synthetic (spot + perp pair) — no single-leg slippage
+    # model applies at close time; PnL is purely funding-accrual based.
+    if side == "delta_neutral":
+        return price
     bps = SLIPPAGE_BPS / Decimal("10000")
     if opening:
         return price * (Decimal("1") + bps) if side == "long" else price * (Decimal("1") - bps)
     return price * (Decimal("1") - bps) if side == "long" else price * (Decimal("1") + bps)
 
 
-def _unrealized_pnl(pos: PaperPosition, mark: Decimal) -> Decimal:
+def _unrealized_pnl(
+    pos: PaperPosition,
+    mark: Decimal,
+    *,
+    funding_rate_8h: Decimal | None = None,
+) -> Decimal:
+    """Compute unrealized PnL for an open position.
+
+    For delta_neutral positions the PnL is purely funding accrual:
+        pnl = notional × (elapsed_hours / 8) × funding_rate_8h
+
+    `funding_rate_8h` must be supplied by the caller for delta_neutral (read
+    from the latest TickerSnapshot asynchronously before calling this function).
+    If it is None the function returns 0 — callers ensure they fetch it first.
+
+    For long/short positions the standard mark-vs-entry formula applies.
+    """
+    if pos.side == "delta_neutral":
+        if funding_rate_8h is None:
+            return Decimal("0")
+        now = datetime.now(UTC)
+        opened = pos.opened_at
+        if opened.tzinfo is None:
+            opened = opened.replace(tzinfo=UTC)
+        elapsed_hours = Decimal(str((now - opened).total_seconds() / 3600.0))
+        return pos.notional_usd * (elapsed_hours / Decimal("8")) * funding_rate_8h
+
     if pos.side == "long":
         pnl_pct = (mark - pos.opened_price) / pos.opened_price
     else:
@@ -167,10 +217,16 @@ async def _current_equity(session, wallet: Wallet) -> tuple[Decimal, Decimal, in
 
     unrealized = Decimal("0")
     for pos in open_positions:
-        mark = await _latest_price(pos.symbol, pos.asset_class)
-        if mark is None:
-            continue
-        unrealized += _unrealized_pnl(pos, mark)
+        if pos.side == "delta_neutral":
+            fr = await _latest_funding_rate(pos.symbol)
+            # mark is irrelevant for delta_neutral; pass opened_price as a
+            # placeholder so the function signature is satisfied.
+            unrealized += _unrealized_pnl(pos, pos.opened_price, funding_rate_8h=fr)
+        else:
+            mark = await _latest_price(pos.symbol, pos.asset_class)
+            if mark is None:
+                continue
+            unrealized += _unrealized_pnl(pos, mark)
 
     equity = wallet.cash_usd + wallet.locked_usd + unrealized
     return equity, unrealized, len(open_positions)
@@ -330,13 +386,17 @@ async def _open_for_market(asset_class: str) -> int:
         # no real signal evaluation. Such predictions are flagged 'expired'
         # below instead, so they're scored once and removed from the queue.
         now = datetime.now(UTC)
+        # BIST is long-only; crypto also allows delta_neutral (funding capture).
+        allowed_sides = (
+            ["long", "short", "delta_neutral"] if asset_class == "crypto" else ["long"]
+        )
         pred_stmt = (
             select(Prediction)
             .outerjoin(PaperPosition, PaperPosition.prediction_id == Prediction.id)
             .where(PaperPosition.id.is_(None))
             .where(Prediction.status == "open")
             .where(Prediction.asset_class == asset_class)
-            .where(Prediction.side.in_(["long", "short"]))
+            .where(Prediction.side.in_(allowed_sides))
             .where(Prediction.close_by > now)
             .order_by(Prediction.generated_at.asc())
             .limit(wallet_slots_left)
@@ -440,17 +500,19 @@ def _tp_sl_reason(pos: PaperPosition, pred: Prediction, mark: Decimal) -> str | 
 async def close_due_positions() -> int:
     now = datetime.now(UTC)
     async with shared_session_scope() as session:
-        # Two close paths share the same write-side code below:
+        # Three close paths share the same write-side code below:
         #   1) tp/sl: any open position whose prediction has tp_pct or sl_pct
         #      set AND the current mark crosses the threshold (sign-aware).
+        #      Not applicable to delta_neutral (no price-based TP/SL).
         #   2) horizon: prediction's close_by has elapsed.
-        # We compute path 1 first because it can fire BEFORE close_by, and a
-        # position that hits TP should not also be counted on the horizon
-        # query in the same call.
+        #   3) funding-flip: delta_neutral positions where the live funding
+        #      rate has turned negative (longs no longer paying shorts).
+        # Path 1 is evaluated first; handled_ids prevents double-close.
         tpsl_stmt = (
             select(PaperPosition, Prediction)
             .join(Prediction, Prediction.id == PaperPosition.prediction_id)
             .where(PaperPosition.status == "open")
+            .where(PaperPosition.side != "delta_neutral")
             .where(
                 (Prediction.tp_pct.isnot(None)) | (Prediction.sl_pct.isnot(None))
             )
@@ -465,8 +527,18 @@ async def close_due_positions() -> int:
         )
         horizon_rows = (await session.execute(horizon_stmt)).all()
 
-    # Evaluate tp/sl first; remember the position ids we already handled so the
-    # horizon pass doesn't double-close them.
+        # Funding-flip candidates: delta_neutral positions whose horizon has
+        # NOT yet elapsed (those are caught by the horizon query above).
+        funding_flip_stmt = (
+            select(PaperPosition, Prediction)
+            .join(Prediction, Prediction.id == PaperPosition.prediction_id)
+            .where(PaperPosition.status == "open")
+            .where(PaperPosition.side == "delta_neutral")
+            .where(Prediction.close_by > now)
+        )
+        funding_flip_rows = (await session.execute(funding_flip_stmt)).all()
+
+    # --- path 1: TP / SL ---
     work: list[tuple[PaperPosition, Prediction, str]] = []
     handled_ids: set[uuid.UUID] = set()
     for pos, pred in tpsl_rows:
@@ -478,24 +550,49 @@ async def close_due_positions() -> int:
             continue
         work.append((pos, pred, reason))
         handled_ids.add(pos.id)
+
+    # --- path 2: horizon ---
     for pos, pred in horizon_rows:
         if pos.id in handled_ids:
             continue
         work.append((pos, pred, "hit_horizon"))
+        handled_ids.add(pos.id)
+
+    # --- path 3: funding-flip early exit ---
+    for pos, pred in funding_flip_rows:
+        if pos.id in handled_ids:
+            continue
+        fr = await _latest_funding_rate(pos.symbol)
+        if fr is not None and fr < Decimal("0"):
+            work.append((pos, pred, "funding_flip"))
+            handled_ids.add(pos.id)
 
     closed = 0
     for pos, pred, reason in work:
-        last_px = await _latest_price(pos.symbol, pos.asset_class)
-        if last_px is None:
-            continue
-        exit_px = _apply_slippage(last_px, pos.side, opening=False)
-        if pos.side == "long":
-            pnl_pct = (exit_px - pos.opened_price) / pos.opened_price
+        if pos.side == "delta_neutral":
+            # PnL is funding accrual over actual hold duration; no price-based
+            # slippage. opened_at is the anchor; fr read live for correctness.
+            fr = await _latest_funding_rate(pos.symbol)
+            pnl_usd = _unrealized_pnl(pos, pos.opened_price, funding_rate_8h=fr)
+            # For scoring: express PnL as % of notional (analogous to pnl_pct
+            # for directional positions).
+            pnl_pct = pnl_usd / pos.notional_usd if pos.notional_usd else Decimal("0")
+            # Score is capped at ±1 relative to SCORE_CAP_PCT.
+            capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
+            score = capped / SCORE_CAP_PCT
+            exit_px = pos.opened_price  # synthetic — no actual sell
         else:
-            pnl_pct = (pos.opened_price - exit_px) / pos.opened_price
-        pnl_usd = pos.notional_usd * pnl_pct
-        capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
-        score = capped / SCORE_CAP_PCT
+            last_px = await _latest_price(pos.symbol, pos.asset_class)
+            if last_px is None:
+                continue
+            exit_px = _apply_slippage(last_px, pos.side, opening=False)
+            if pos.side == "long":
+                pnl_pct = (exit_px - pos.opened_price) / pos.opened_price
+            else:
+                pnl_pct = (pos.opened_price - exit_px) / pos.opened_price
+            pnl_usd = pos.notional_usd * pnl_pct
+            capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
+            score = capped / SCORE_CAP_PCT
 
         async with shared_session_scope() as session:
             pos_db = await session.get(PaperPosition, pos.id)

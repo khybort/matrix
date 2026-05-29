@@ -35,7 +35,7 @@ class Prediction(Base, TimestampMixin):
     asset_class: Mapped[str] = mapped_column(
         String(16), nullable=False, default="crypto"
     )
-    side: Mapped[str] = mapped_column(String(8), nullable=False)  # long | short | flat
+    side: Mapped[str] = mapped_column(String(16), nullable=False)  # long | short | flat | delta_neutral
     confidence: Mapped[Decimal] = mapped_column(DECIMAL(6, 5), nullable=False, default=Decimal("0.5"))
     horizon_seconds: Mapped[int] = mapped_column(nullable=False)
     close_by: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -78,7 +78,7 @@ class PaperPosition(Base, TimestampMixin):
     asset_class: Mapped[str] = mapped_column(
         String(16), nullable=False, default="crypto"
     )
-    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    side: Mapped[str] = mapped_column(String(16), nullable=False)
     notional_usd: Mapped[Decimal] = mapped_column(DECIMAL(18, 4), nullable=False)
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     opened_price: Mapped[Decimal] = mapped_column(DECIMAL(24, 12), nullable=False)
