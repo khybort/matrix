@@ -39,6 +39,8 @@ STRATEGY_VERSION = 1
 RECENT_WINDOW_S = 3600  # only headlines from the last hour
 TR_SOURCES = ("kap", "bloomberg_ht", "dunya", "hurriyet_ekonomi")
 HORIZON_S = 3600
+DEFAULT_TP_PCT = Decimal("0.030")  # 3% take-profit
+DEFAULT_SL_PCT = Decimal("0.015")  # 1.5% stop-loss
 
 
 class BistNewsEvent:
@@ -47,6 +49,15 @@ class BistNewsEvent:
     horizon_seconds: int = HORIZON_S
     market: str = "bist"
     asset_class: str = "bist"
+
+    def __init__(
+        self,
+        *,
+        tp_pct: Decimal | None = DEFAULT_TP_PCT,
+        sl_pct: Decimal | None = DEFAULT_SL_PCT,
+    ) -> None:
+        self.tp_pct = Decimal(str(tp_pct)) if tp_pct is not None else None
+        self.sl_pct = Decimal(str(sl_pct)) if sl_pct is not None else None
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -116,6 +127,8 @@ class BistNewsEvent:
                                 ),
                                 "long_only": True,
                             },
+                            tp_pct=self.tp_pct,
+                            sl_pct=self.sl_pct,
                         )
                     )
                     logger.info(

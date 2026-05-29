@@ -43,6 +43,8 @@ STRATEGY_VERSION = 1
 GAP_THRESHOLD = Decimal("0.015")  # 1.5%
 GAP_CAP = Decimal("0.05")  # 5% gap → confidence 1.0
 HORIZON_S = 1800  # 30min
+DEFAULT_TP_PCT = Decimal("0.020")  # 2% take-profit
+DEFAULT_SL_PCT = Decimal("0.010")  # 1% stop-loss
 # The opening gap is a once-per-day, slow-moving signal — its value barely
 # moves intraday. Without dedup the 30s generator loop re-emits the same
 # ~28 signals every tick (~960 rows/symbol/session). Suppress re-emission
@@ -63,11 +65,15 @@ class BistGapFade:
         gap_threshold: Decimal = GAP_THRESHOLD,
         gap_cap: Decimal = GAP_CAP,
         horizon_s: int = HORIZON_S,
+        tp_pct: Decimal | None = DEFAULT_TP_PCT,
+        sl_pct: Decimal | None = DEFAULT_SL_PCT,
     ) -> None:
         self.gap_threshold = gap_threshold
         self.gap_cap = gap_cap
         self.horizon_seconds = horizon_s
         self.dedup_window_s = horizon_s
+        self.tp_pct = Decimal(str(tp_pct)) if tp_pct is not None else None
+        self.sl_pct = Decimal(str(sl_pct)) if sl_pct is not None else None
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -138,6 +144,8 @@ class BistGapFade:
                             "gap_pct": str(gap),
                             "long_only": True,
                         },
+                        tp_pct=self.tp_pct if side == "long" else None,
+                        sl_pct=self.sl_pct if side == "long" else None,
                     )
                 )
                 logger.info(

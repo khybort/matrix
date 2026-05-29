@@ -38,6 +38,8 @@ async def persist_drafts(drafts: Sequence[PredictionDraft]) -> int:
                     thesis=d.thesis,
                     context=d.context,
                     status="open",
+                    tp_pct=d.tp_pct,
+                    sl_pct=d.sl_pct,
                 )
             )
     logger.info(f"persisted {len(drafts)} predictions")

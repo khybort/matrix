@@ -35,6 +35,8 @@ HIGH_FUNDING = Decimal("0.0002")  # ±0.02% (per 8h) threshold to act
 FUNDING_CAP = Decimal("0.0005")  # ±0.05% maps to confidence 1.0
 HORIZON_S = 600  # 10min outcome window — funding effects slower than trade flow
 DEFAULT_SYMBOLS = tuple(crypto_universe())
+DEFAULT_TP_PCT = Decimal("0.010")  # 1% take-profit
+DEFAULT_SL_PCT = Decimal("0.005")  # 0.5% stop-loss
 
 
 class FundingReversion:
@@ -49,11 +51,15 @@ class FundingReversion:
         high_funding: Decimal = HIGH_FUNDING,
         funding_cap: Decimal = FUNDING_CAP,
         horizon_s: int = HORIZON_S,
+        tp_pct: Decimal | None = DEFAULT_TP_PCT,
+        sl_pct: Decimal | None = DEFAULT_SL_PCT,
     ) -> None:
         self.symbols = list(symbols)
         self.high_funding = high_funding
         self.funding_cap = funding_cap
         self.horizon_seconds = horizon_s
+        self.tp_pct = Decimal(str(tp_pct)) if tp_pct is not None else None
+        self.sl_pct = Decimal(str(sl_pct)) if sl_pct is not None else None
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -113,6 +119,8 @@ class FundingReversion:
                             "high_funding_threshold": str(self.high_funding),
                             "magnitude_ratio": str(magnitude),
                         },
+                        tp_pct=self.tp_pct,
+                        sl_pct=self.sl_pct,
                     )
                 )
                 logger.info(

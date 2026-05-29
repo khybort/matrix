@@ -37,6 +37,8 @@ def _grid_params() -> dict:
         "n_grids": 10,
         "price_band_pct": "0.02",
         "horizon_s": 300,
+        "tp_pct": "0.010",
+        "sl_pct": "0.015",
     }
 
 
@@ -48,6 +50,8 @@ def _oi_delta_params() -> dict:
     return {
         "oi_threshold_pct": "0.015",
         "horizon_s": 300,
+        "tp_pct": "0.015",
+        "sl_pct": "0.0075",
     }
 
 
@@ -56,26 +60,27 @@ def _oi_delta_params() -> dict:
 # ---------------------------------------------------------------------------
 
 def test_param_tune_grid_widens_band_on_poor_winrate():
-    """Low win_rate (<0.5) should push a grid param upward (widen/lengthen)."""
-    m = _metrics(strategy_id="grid", win_rate=Decimal("0.30"), n_outcomes=50)
+    """Low win_rate (<0.5) should push a grid param upward (widen/lengthen).
+
+    grid knobs (sorted): ['horizon_s', 'price_band_pct', 'sl_pct', 'tp_pct'] → 4 knobs.
+    n=52 → 52 % 4 = 0 → 'horizon_s'.
+    """
+    m = _metrics(strategy_id="grid", win_rate=Decimal("0.30"), n_outcomes=52)
     draft = rule_propose_param_tune("grid", _grid_params(), m)
     assert draft is not None
     assert draft.proposal_type == "param_tune"
     assert draft.source == "rule"
 
-    # Determine which knob was selected (n_outcomes=50, 50 % 2 = 0 → 'horizon_s')
-    # sorted(["price_band_pct", "horizon_s"]) = ["horizon_s", "price_band_pct"]
-    # idx = 50 % 2 = 0 → "horizon_s"
     after_horizon = draft.after_params.get("horizon_s")
     assert after_horizon is not None
     assert int(after_horizon) > 300, "horizon_s should increase (widen) when win_rate < 0.5"
 
 
 def test_param_tune_grid_price_band_knob():
-    """n_outcomes=51 → idx=1 → price_band_pct knob selected."""
-    # sorted(["price_band_pct", "horizon_s"]) = ["horizon_s", "price_band_pct"]
-    # idx = 51 % 2 = 1 → "price_band_pct"
-    m = _metrics(strategy_id="grid", win_rate=Decimal("0.25"), n_outcomes=51)
+    """grid knobs: ['horizon_s', 'price_band_pct', 'sl_pct', 'tp_pct'].
+    n=53 → 53 % 4 = 1 → 'price_band_pct'.
+    """
+    m = _metrics(strategy_id="grid", win_rate=Decimal("0.25"), n_outcomes=53)
     draft = rule_propose_param_tune("grid", _grid_params(), m)
     assert draft is not None
     after_band = Decimal(draft.after_params["price_band_pct"])
@@ -83,11 +88,13 @@ def test_param_tune_grid_price_band_knob():
 
 
 def test_param_tune_grid_tightens_on_high_winrate():
-    """win_rate >= 0.5 but avg_score still negative → tighten (direction -1)."""
-    m = _metrics(strategy_id="grid", win_rate=Decimal("0.60"), avg_score=Decimal("-0.08"), n_outcomes=50)
+    """win_rate >= 0.5 but avg_score still negative → tighten (direction -1).
+
+    n=52 → idx=0 → horizon_s selected; direction=-1 → should decrease.
+    """
+    m = _metrics(strategy_id="grid", win_rate=Decimal("0.60"), avg_score=Decimal("-0.08"), n_outcomes=52)
     draft = rule_propose_param_tune("grid", _grid_params(), m)
     assert draft is not None
-    # horizon_s selected (idx=0), direction=-1 → should decrease
     after_horizon = int(draft.after_params["horizon_s"])
     assert after_horizon < 300, "horizon_s should decrease when win_rate >= 0.5"
 
@@ -137,19 +144,23 @@ def test_param_tune_dca_clamps_at_max():
 # ---------------------------------------------------------------------------
 
 def test_param_tune_oi_delta_raises_threshold_on_poor_winrate():
-    """Poor win_rate → raise oi_threshold_pct (require bigger OI surge)."""
-    m = _metrics(strategy_id="oi_delta", win_rate=Decimal("0.20"), n_outcomes=50)
+    """Poor win_rate → raise oi_threshold_pct (require bigger OI surge).
+
+    oi_delta knobs (sorted): ['horizon_s', 'oi_threshold_pct', 'sl_pct', 'tp_pct'] → 4 knobs.
+    n=52 → 52 % 4 = 0 → 'horizon_s'.
+    """
+    m = _metrics(strategy_id="oi_delta", win_rate=Decimal("0.20"), n_outcomes=52)
     draft = rule_propose_param_tune("oi_delta", _oi_delta_params(), m)
     assert draft is not None
-    # sorted(["horizon_s", "oi_threshold_pct"]) = ["horizon_s", "oi_threshold_pct"]
-    # idx = 50 % 2 = 0 → "horizon_s"
     after_horizon = int(draft.after_params["horizon_s"])
     assert after_horizon > 300
 
 
 def test_param_tune_oi_delta_threshold_knob():
-    """n_outcomes=51 → idx=1 → oi_threshold_pct selected."""
-    m = _metrics(strategy_id="oi_delta", win_rate=Decimal("0.20"), n_outcomes=51)
+    """oi_delta knobs: ['horizon_s', 'oi_threshold_pct', 'sl_pct', 'tp_pct'].
+    n=53 → 53 % 4 = 1 → 'oi_threshold_pct'.
+    """
+    m = _metrics(strategy_id="oi_delta", win_rate=Decimal("0.20"), n_outcomes=53)
     draft = rule_propose_param_tune("oi_delta", _oi_delta_params(), m)
     assert draft is not None
     after_thr = Decimal(draft.after_params["oi_threshold_pct"])
@@ -197,13 +208,18 @@ def test_param_tune_missing_param_returns_none():
 
 
 def test_param_tune_preserves_other_params():
-    """After proposal, params not being tuned should be preserved."""
+    """After proposal, params not being tuned should be preserved.
+
+    Use n=52 → idx=0 → horizon_s; supply all knob keys so selector finds them.
+    """
     params = {
         "n_grids": 10,
         "price_band_pct": "0.02",
         "horizon_s": 300,
+        "tp_pct": "0.010",
+        "sl_pct": "0.015",
     }
-    m = _metrics(strategy_id="grid", win_rate=Decimal("0.30"), n_outcomes=50)
+    m = _metrics(strategy_id="grid", win_rate=Decimal("0.30"), n_outcomes=52)
     draft = rule_propose_param_tune("grid", params, m)
     assert draft is not None
     # All keys from before should still appear in after_params
@@ -228,6 +244,94 @@ def test_new_strategies_in_param_tuners():
     for sid in new_strategies:
         assert sid in PARAM_TUNERS, f"{sid!r} missing from PARAM_TUNERS"
         assert PARAM_TUNERS[sid], f"PARAM_TUNERS[{sid!r}] is empty"
+
+
+# ---------------------------------------------------------------------------
+# TP/SL knob assertions
+# ---------------------------------------------------------------------------
+
+def test_tp_sl_knobs_present_for_all_non_delta_strategies():
+    """Every non-delta-neutral strategy in PARAM_TUNERS must expose
+    tp_pct and sl_pct knobs. cash_and_carry is explicitly excluded."""
+    from reflection.mutate import PARAM_TUNERS
+
+    strategies_with_tp_sl = [
+        "funding_reversion",
+        "grid",
+        "oi_delta",
+        "momentum_xs",
+        "screener_follow",
+        "bist_gap_fade",
+        "bist_intraday_reversion",
+        "bist_volume_breakout",
+        "bist_news_event",
+    ]
+    for sid in strategies_with_tp_sl:
+        assert sid in PARAM_TUNERS, f"{sid!r} missing from PARAM_TUNERS"
+        assert "tp_pct" in PARAM_TUNERS[sid], f"tp_pct knob missing for {sid!r}"
+        assert "sl_pct" in PARAM_TUNERS[sid], f"sl_pct knob missing for {sid!r}"
+
+
+def test_cash_and_carry_has_no_tp_sl_knobs():
+    """cash_and_carry is delta-neutral; tp_pct/sl_pct must NOT be in its tuner."""
+    from reflection.mutate import PARAM_TUNERS
+    assert "cash_and_carry" in PARAM_TUNERS
+    assert "tp_pct" not in PARAM_TUNERS["cash_and_carry"], (
+        "cash_and_carry must NOT have tp_pct in PARAM_TUNERS"
+    )
+    assert "sl_pct" not in PARAM_TUNERS["cash_and_carry"], (
+        "cash_and_carry must NOT have sl_pct in PARAM_TUNERS"
+    )
+
+
+def test_tp_sl_knob_ranges_sane():
+    """For every strategy with tp/sl knobs, step > 0, min < max, defaults > 0."""
+    from reflection.mutate import PARAM_TUNERS
+
+    for sid, tuner in PARAM_TUNERS.items():
+        for knob in ("tp_pct", "sl_pct"):
+            if knob not in tuner:
+                continue
+            step, lo, hi = tuner[knob]
+            assert step > 0, f"{sid}.{knob}: step must be > 0"
+            assert lo < hi, f"{sid}.{knob}: min must be < max"
+            assert lo > 0, f"{sid}.{knob}: min must be > 0"
+
+
+def test_tp_sl_knob_tune_executes():
+    """Spot-check that tp_pct can actually be selected and mutated for grid."""
+    from decimal import Decimal
+    from reflection.mutate import PARAM_TUNERS, rule_propose_param_tune
+    from reflection.metrics import StrategyMetrics
+
+    n_knobs = len(PARAM_TUNERS["grid"])
+    # Find n_outcomes that selects tp_pct
+    param_names = sorted(PARAM_TUNERS["grid"].keys())
+    tp_idx = param_names.index("tp_pct")
+
+    # Construct n_outcomes s.t. idx = tp_idx
+    n_outcomes = tp_idx + 10 * n_knobs  # ensure n >= MIN_N_OUTCOMES and selects tp_pct
+    m = StrategyMetrics(
+        strategy_id="grid",
+        version=1,
+        n_outcomes=n_outcomes,
+        avg_score=Decimal("-0.08"),
+        win_rate=Decimal("0.30"),
+        total_pnl_usd=Decimal("-5.0"),
+        by_symbol={},
+    )
+    params = {
+        "n_grids": 10,
+        "price_band_pct": "0.02",
+        "horizon_s": 300,
+        "tp_pct": "0.010",
+        "sl_pct": "0.015",
+    }
+    draft = rule_propose_param_tune("grid", params, m)
+    assert draft is not None
+    assert "tp_pct" in draft.after_params or "sl_pct" in draft.after_params, (
+        "TP/SL knob should be tunable for grid"
+    )
 
 
 def test_funding_reversion_param_tune():

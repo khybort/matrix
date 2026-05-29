@@ -45,6 +45,8 @@ LOOKBACK_S = 60  # look at last 60s of bars to detect a fresh cross
 BAND_LOOKBACK_S = 24 * 3600  # 24h to size the band
 DEFAULT_PRICE_BAND_PCT = Decimal("0.02")  # ±2% around the 24h median
 DEFAULT_SYMBOLS = tuple(crypto_universe())
+DEFAULT_TP_PCT = Decimal("0.010")  # 1% take-profit
+DEFAULT_SL_PCT = Decimal("0.015")  # 1.5% stop-loss
 
 
 def _linspace(low: Decimal, high: Decimal, n: int) -> list[Decimal]:
@@ -66,10 +68,15 @@ class Grid:
         symbols: Sequence[str] = DEFAULT_SYMBOLS,
         band_pct: Decimal = DEFAULT_PRICE_BAND_PCT,
         n_grids: int = N_GRIDS,
+        *,
+        tp_pct: Decimal | None = DEFAULT_TP_PCT,
+        sl_pct: Decimal | None = DEFAULT_SL_PCT,
     ) -> None:
         self.symbols = list(symbols)
         self.band_pct = band_pct
         self.n_grids = n_grids
+        self.tp_pct = Decimal(str(tp_pct)) if tp_pct is not None else None
+        self.sl_pct = Decimal(str(sl_pct)) if sl_pct is not None else None
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -214,6 +221,8 @@ class Grid:
                             "lookback_s": LOOKBACK_S,
                             "dedup_window_s": DEDUP_WINDOW_S,
                         },
+                        tp_pct=self.tp_pct,
+                        sl_pct=self.sl_pct,
                     )
                 )
                 logger.info(

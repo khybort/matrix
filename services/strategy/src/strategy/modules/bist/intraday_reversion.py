@@ -49,6 +49,8 @@ STRATEGY_VERSION = 1
 DROP_THRESHOLD = Decimal("0.03")  # require >3% intraday drop to act
 DROP_CAP = Decimal("0.07")  # 7% drop → confidence 1.0
 HORIZON_S = 3600  # 60-min hold for the reversion play
+DEFAULT_TP_PCT = Decimal("0.025")  # 2.5% take-profit
+DEFAULT_SL_PCT = Decimal("0.015")  # 1.5% stop-loss
 # Don't fire after this clock time — not enough session left for the
 # reversion to complete.
 LAST_ENTRY_HOUR_TR = time(17, 0)
@@ -75,10 +77,14 @@ class BistIntradayReversion:
         drop_threshold: Decimal = DROP_THRESHOLD,
         drop_cap: Decimal = DROP_CAP,
         horizon_s: int = HORIZON_S,
+        tp_pct: Decimal | None = DEFAULT_TP_PCT,
+        sl_pct: Decimal | None = DEFAULT_SL_PCT,
     ) -> None:
         self.drop_threshold = drop_threshold
         self.drop_cap = drop_cap
         self.horizon_seconds = horizon_s
+        self.tp_pct = Decimal(str(tp_pct)) if tp_pct is not None else None
+        self.sl_pct = Decimal(str(sl_pct)) if sl_pct is not None else None
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -154,6 +160,8 @@ class BistIntradayReversion:
                             "drop_pct": str(drop),
                             "long_only": True,
                         },
+                        tp_pct=self.tp_pct,
+                        sl_pct=self.sl_pct,
                     )
                 )
                 logger.info(

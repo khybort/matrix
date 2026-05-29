@@ -43,6 +43,8 @@ DEFAULT_MIN_PASSES = 3
 DEFAULT_MIN_SCORE = Decimal("0.05")
 DEFAULT_HORIZON_S = 1800        # 30 min — medium-term OI/funding signal
 DEFAULT_CONFIDENCE = Decimal("0.55")
+DEFAULT_TP_PCT = Decimal("0.020")  # 2% take-profit
+DEFAULT_SL_PCT = Decimal("0.010")  # 1% stop-loss
 
 _TRADABLE_SIGNAL_TYPES = frozenset({"funding_extreme", "oi_spike"})
 
@@ -60,12 +62,16 @@ class ScreenerFollow:
         min_score: Decimal = DEFAULT_MIN_SCORE,
         horizon_s: int = DEFAULT_HORIZON_S,
         confidence: Decimal = DEFAULT_CONFIDENCE,
+        tp_pct: Decimal | None = DEFAULT_TP_PCT,
+        sl_pct: Decimal | None = DEFAULT_SL_PCT,
     ) -> None:
         self.symbols: list[str] = list(symbols) if symbols is not None else list(crypto_universe())
         self.min_passes = min_passes
         self.min_score = min_score
         self.horizon_seconds = horizon_s
         self.confidence = confidence
+        self.tp_pct = Decimal(str(tp_pct)) if tp_pct is not None else None
+        self.sl_pct = Decimal(str(sl_pct)) if sl_pct is not None else None
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -182,6 +188,8 @@ class ScreenerFollow:
                         "passes": passes,
                         "funding_rate": str(funding_rate),
                     },
+                    tp_pct=self.tp_pct,
+                    sl_pct=self.sl_pct,
                 )
             )
             logger.info(

@@ -35,6 +35,8 @@ OI_JUMP_THRESHOLD = Decimal("0.015")  # 1.5% OI surge
 PRICE_CONFIRM_THRESHOLD = Decimal("0.0015")  # 0.15% same-direction price move
 HORIZON_S = 300
 DEFAULT_SYMBOLS = tuple(crypto_universe())
+DEFAULT_TP_PCT = Decimal("0.015")  # 1.5% take-profit
+DEFAULT_SL_PCT = Decimal("0.0075")  # 0.75% stop-loss
 
 
 class OiDelta:
@@ -43,8 +45,16 @@ class OiDelta:
     horizon_seconds: int = HORIZON_S
     market: str = "crypto"
 
-    def __init__(self, symbols: Sequence[str] = DEFAULT_SYMBOLS) -> None:
+    def __init__(
+        self,
+        symbols: Sequence[str] = DEFAULT_SYMBOLS,
+        *,
+        tp_pct: Decimal | None = DEFAULT_TP_PCT,
+        sl_pct: Decimal | None = DEFAULT_SL_PCT,
+    ) -> None:
         self.symbols = list(symbols)
+        self.tp_pct = Decimal(str(tp_pct)) if tp_pct is not None else None
+        self.sl_pct = Decimal(str(sl_pct)) if sl_pct is not None else None
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -139,6 +149,8 @@ class OiDelta:
                             "price_delta_pct": str(price_delta),
                             "lookback_s": LOOKBACK_S,
                         },
+                        tp_pct=self.tp_pct,
+                        sl_pct=self.sl_pct,
                     )
                 )
                 logger.info(

@@ -57,6 +57,10 @@ FRESHNESS_S = 60                       # crypto: ticks every few seconds
 FRESHNESS_S_BARS = 60 * 30             # BIST 1m bars + 15min Yahoo delay window
 SLIPPAGE_BPS = Decimal("2")
 SCORE_CAP_PCT = Decimal("0.01")  # ±1% horizon caps the score at ±1
+# Positions whose close_by is more than this far in the past AND for which
+# we have no live price are flat-closed to prevent indefinite orphan
+# accumulation (the KONYA BIST bug: positions stuck 72h with no price data).
+ORPHAN_STALE_THRESHOLD_S = 86400  # 24h past close_by
 
 
 async def _latest_funding_rate(symbol: str) -> Decimal | None:
@@ -584,15 +588,30 @@ async def close_due_positions() -> int:
         else:
             last_px = await _latest_price(pos.symbol, pos.asset_class)
             if last_px is None:
-                continue
-            exit_px = _apply_slippage(last_px, pos.side, opening=False)
-            if pos.side == "long":
-                pnl_pct = (exit_px - pos.opened_price) / pos.opened_price
+                # Orphan-close: position's close_by is ORPHAN_STALE_THRESHOLD_S
+                # past due AND we still have no price. Flat-close at entry to
+                # prevent indefinite accumulation (the KONYA BIST 72h bug).
+                close_by = pred.close_by
+                if close_by.tzinfo is None:
+                    close_by = close_by.replace(tzinfo=UTC)
+                age_past_close = (now - close_by).total_seconds()
+                if reason == "hit_horizon" and age_past_close > ORPHAN_STALE_THRESHOLD_S:
+                    exit_px = pos.opened_price  # flat — no real exit price available
+                    pnl_pct = Decimal("0")
+                    pnl_usd = Decimal("0")
+                    score = Decimal("0")
+                    reason = "orphan_flat_close"
+                else:
+                    continue
             else:
-                pnl_pct = (pos.opened_price - exit_px) / pos.opened_price
-            pnl_usd = pos.notional_usd * pnl_pct
-            capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
-            score = capped / SCORE_CAP_PCT
+                exit_px = _apply_slippage(last_px, pos.side, opening=False)
+                if pos.side == "long":
+                    pnl_pct = (exit_px - pos.opened_price) / pos.opened_price
+                else:
+                    pnl_pct = (pos.opened_price - exit_px) / pos.opened_price
+                pnl_usd = pos.notional_usd * pnl_pct
+                capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
+                score = capped / SCORE_CAP_PCT
 
         async with shared_session_scope() as session:
             pos_db = await session.get(PaperPosition, pos.id)

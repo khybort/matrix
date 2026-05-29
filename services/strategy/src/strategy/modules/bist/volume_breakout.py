@@ -38,6 +38,8 @@ WINDOW = 20  # bars
 VOL_MULT = Decimal("3.0")  # current bar must exceed 3× the rolling average
 VOL_MULT_CAP = Decimal("8.0")  # 8× → confidence 1.0
 HORIZON_S = 900  # 15min
+DEFAULT_TP_PCT = Decimal("0.030")  # 3% take-profit
+DEFAULT_SL_PCT = Decimal("0.015")  # 1.5% stop-loss
 
 
 class BistVolumeBreakout:
@@ -52,10 +54,14 @@ class BistVolumeBreakout:
         vol_mult: Decimal = VOL_MULT,
         vol_mult_cap: Decimal = VOL_MULT_CAP,
         horizon_s: int = HORIZON_S,
+        tp_pct: Decimal | None = DEFAULT_TP_PCT,
+        sl_pct: Decimal | None = DEFAULT_SL_PCT,
     ) -> None:
         self.vol_mult = vol_mult
         self.vol_mult_cap = vol_mult_cap
         self.horizon_seconds = horizon_s
+        self.tp_pct = Decimal(str(tp_pct)) if tp_pct is not None else None
+        self.sl_pct = Decimal(str(sl_pct)) if sl_pct is not None else None
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -113,6 +119,8 @@ class BistVolumeBreakout:
                             "prior_high": str(highest_prior),
                             "window": WINDOW,
                         },
+                        tp_pct=self.tp_pct,
+                        sl_pct=self.sl_pct,
                     )
                 )
                 logger.info(

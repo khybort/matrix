@@ -27,6 +27,8 @@ class PredictionDraft:
     thesis: str | None = None
     context: dict[str, Any] = field(default_factory=dict)
     id: uuid.UUID = field(default_factory=uuid.uuid4)
+    tp_pct: Decimal | None = None
+    sl_pct: Decimal | None = None
 
 
 class Strategy(Protocol):

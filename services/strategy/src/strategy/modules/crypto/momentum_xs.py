@@ -46,6 +46,8 @@ DEFAULT_HORIZON_S = 3600
 DEFAULT_CONFIDENCE = "0.60"
 
 EXCHANGE_FALLBACK = "bybit"
+DEFAULT_TP_PCT = Decimal("0.030")  # 3% take-profit
+DEFAULT_SL_PCT = Decimal("0.015")  # 1.5% stop-loss
 
 
 class MomentumXs:
@@ -62,12 +64,16 @@ class MomentumXs:
         top_k: int = DEFAULT_TOP_K,
         vol_filter_pct: Decimal = Decimal(DEFAULT_VOL_FILTER_PCT),
         horizon_s: int = DEFAULT_HORIZON_S,
+        tp_pct: Decimal | None = DEFAULT_TP_PCT,
+        sl_pct: Decimal | None = DEFAULT_SL_PCT,
     ) -> None:
         self.symbols = list(symbols) if symbols else list(crypto_universe())
         self.lookback_days = lookback_days
         self.top_k = top_k
         self.vol_filter_pct = Decimal(str(vol_filter_pct))
         self.horizon_seconds = horizon_s
+        self.tp_pct = Decimal(str(tp_pct)) if tp_pct is not None else None
+        self.sl_pct = Decimal(str(sl_pct)) if sl_pct is not None else None
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -186,6 +192,8 @@ class MomentumXs:
                     "rank": rank,
                     "n_survivors": n_surv,
                 },
+                tp_pct=self.tp_pct,
+                sl_pct=self.sl_pct,
             )
 
         # Top-K → long

@@ -34,6 +34,9 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
         # horizon_s: prediction close window; stored as int in params.
         "horizon_s": (Decimal("60"), Decimal("60"), Decimal("1800")),
         # n_grids: tweak handled via int arithmetic (±2) separately.
+        # tp/sl: take-profit and stop-loss percentages.
+        "tp_pct": (Decimal("0.002"), Decimal("0.003"), Decimal("0.030")),
+        "sl_pct": (Decimal("0.002"), Decimal("0.002"), Decimal("0.015")),
     },
     "dca": {
         # interval_minutes: accumulation cadence; stored as int in params.
@@ -44,6 +47,9 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
         "oi_threshold_pct": (Decimal("0.005"), Decimal("0.005"), Decimal("0.10")),
         # horizon_s: prediction close window; stored as int in params.
         "horizon_s": (Decimal("60"), Decimal("60"), Decimal("1800")),
+        # tp/sl: take-profit and stop-loss percentages.
+        "tp_pct": (Decimal("0.002"), Decimal("0.003"), Decimal("0.030")),
+        "sl_pct": (Decimal("0.002"), Decimal("0.002"), Decimal("0.015")),
     },
     "funding_reversion": {
         # high_funding: minimum |funding_rate| to trigger a signal (per 8h).
@@ -54,6 +60,9 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
         "funding_cap": (Decimal("0.00010"), Decimal("0.00010"), Decimal("0.0020")),
         # horizon_s: prediction outcome window in seconds.
         "horizon_s": (Decimal("60"), Decimal("60"), Decimal("1800")),
+        # tp/sl: take-profit and stop-loss percentages.
+        "tp_pct": (Decimal("0.002"), Decimal("0.003"), Decimal("0.030")),
+        "sl_pct": (Decimal("0.002"), Decimal("0.002"), Decimal("0.015")),
     },
     "bist_gap_fade": {
         # gap_threshold: minimum gap % to trigger a signal (1.5% default).
@@ -63,6 +72,9 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
         "gap_cap": (Decimal("0.005"), Decimal("0.02"), Decimal("0.15")),
         # horizon_s: outcome window; also drives dedup window.
         "horizon_s": (Decimal("60"), Decimal("300"), Decimal("3600")),
+        # tp/sl: take-profit and stop-loss percentages.
+        "tp_pct": (Decimal("0.002"), Decimal("0.005"), Decimal("0.050")),
+        "sl_pct": (Decimal("0.002"), Decimal("0.003"), Decimal("0.025")),
     },
     "bist_intraday_reversion": {
         # drop_threshold: minimum intraday drop from session-open to trigger (3% default).
@@ -71,6 +83,9 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
         "drop_cap": (Decimal("0.005"), Decimal("0.03"), Decimal("0.15")),
         # horizon_s: hold window for the reversion play (3600s default).
         "horizon_s": (Decimal("60"), Decimal("600"), Decimal("7200")),
+        # tp/sl: take-profit and stop-loss percentages.
+        "tp_pct": (Decimal("0.002"), Decimal("0.005"), Decimal("0.050")),
+        "sl_pct": (Decimal("0.002"), Decimal("0.005"), Decimal("0.030")),
     },
     "bist_volume_breakout": {
         # vol_mult: current bar must exceed this multiple of rolling avg volume (3× default).
@@ -80,6 +95,9 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
         "vol_mult_cap": (Decimal("0.5"), Decimal("3.0"), Decimal("20.0")),
         # horizon_s: momentum hold window (900s default).
         "horizon_s": (Decimal("60"), Decimal("300"), Decimal("1800")),
+        # tp/sl: take-profit and stop-loss percentages.
+        "tp_pct": (Decimal("0.003"), Decimal("0.010"), Decimal("0.060")),
+        "sl_pct": (Decimal("0.002"), Decimal("0.005"), Decimal("0.030")),
     },
     "momentum_xs": {
         # lookback_days: window for computing cross-sectional return ranking.
@@ -90,6 +108,9 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
         "vol_filter_pct": (Decimal("0.10"), Decimal("0.20"), Decimal("1.00")),
         # horizon_s: prediction close window.
         "horizon_s": (Decimal("300"), Decimal("300"), Decimal("7200")),
+        # tp/sl: take-profit and stop-loss percentages.
+        "tp_pct": (Decimal("0.005"), Decimal("0.010"), Decimal("0.060")),
+        "sl_pct": (Decimal("0.003"), Decimal("0.005"), Decimal("0.030")),
     },
     "screener_follow": {
         # min_passes: consecutive qualifying polls required before acting.
@@ -98,6 +119,9 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
         "min_score":   (Decimal("0.01"), Decimal("0.01"), Decimal("0.50")),
         # horizon_s: prediction close window and cooldown gate.
         "horizon_s":   (Decimal("300"), Decimal("300"), Decimal("7200")),
+        # tp/sl: take-profit and stop-loss percentages.
+        "tp_pct": (Decimal("0.002"), Decimal("0.005"), Decimal("0.040")),
+        "sl_pct": (Decimal("0.002"), Decimal("0.003"), Decimal("0.020")),
     },
     "cash_and_carry": {
         # min_funding: floor funding rate (per 8h) to enter a delta-neutral position.
@@ -107,6 +131,14 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
         # Wider horizons capture more funding intervals; narrower exits faster
         # if funding flips mid-hold.
         "horizon_s": (Decimal("3600"), Decimal("3600"), Decimal("86400")),
+        # NOTE: cash_and_carry is delta-neutral — no tp/sl (funding-flip exit only).
+    },
+    "bist_news_event": {
+        # horizon_s: reaction window; wider gives the news signal more time to play.
+        "horizon_s": (Decimal("60"), Decimal("600"), Decimal("7200")),
+        # tp/sl: take-profit and stop-loss percentages.
+        "tp_pct": (Decimal("0.003"), Decimal("0.010"), Decimal("0.060")),
+        "sl_pct": (Decimal("0.002"), Decimal("0.005"), Decimal("0.030")),
     },
 }
 
