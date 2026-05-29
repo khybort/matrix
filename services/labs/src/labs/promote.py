@@ -75,6 +75,7 @@ STRATEGY_THRESHOLDS: dict[str, tuple[int, Decimal]] = {
     "bist_volume_breakout": (15, Decimal("0.05")),
     "momentum_xs":          (20, Decimal("0.04")),
     "screener_follow":      (20, Decimal("0.05")),
+    "cash_and_carry":       (20, Decimal("0.05")),
 }
 
 
@@ -103,6 +104,7 @@ SAFE_PARAM_TUNE_STRATEGIES: frozenset[str] = frozenset({
     "bist_gap_fade", "bist_intraday_reversion", "bist_volume_breakout",
     "momentum_xs",
     "screener_follow",
+    "cash_and_carry",
 })
 
 
