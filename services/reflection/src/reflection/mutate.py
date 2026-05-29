@@ -45,6 +45,60 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
         # horizon_s: prediction close window; stored as int in params.
         "horizon_s": (Decimal("60"), Decimal("60"), Decimal("1800")),
     },
+    "funding_reversion": {
+        # high_funding: minimum |funding_rate| to trigger a signal (per 8h).
+        # Default 0.0002 (0.02%); widen to reduce false fires.
+        "high_funding": (Decimal("0.00005"), Decimal("0.00005"), Decimal("0.0010")),
+        # funding_cap: |funding_rate| that maps to confidence 1.0.
+        # Must stay >= high_funding; step small to preserve proportional scaling.
+        "funding_cap": (Decimal("0.00010"), Decimal("0.00010"), Decimal("0.0020")),
+        # horizon_s: prediction outcome window in seconds.
+        "horizon_s": (Decimal("60"), Decimal("60"), Decimal("1800")),
+    },
+    "bist_gap_fade": {
+        # gap_threshold: minimum gap % to trigger a signal (1.5% default).
+        # Tighten to fire on smaller gaps; widen to reduce noise.
+        "gap_threshold": (Decimal("0.005"), Decimal("0.005"), Decimal("0.05")),
+        # gap_cap: gap % that maps to confidence 1.0 (5% default).
+        "gap_cap": (Decimal("0.005"), Decimal("0.02"), Decimal("0.15")),
+        # horizon_s: outcome window; also drives dedup window.
+        "horizon_s": (Decimal("60"), Decimal("300"), Decimal("3600")),
+    },
+    "bist_intraday_reversion": {
+        # drop_threshold: minimum intraday drop from session-open to trigger (3% default).
+        "drop_threshold": (Decimal("0.005"), Decimal("0.010"), Decimal("0.08")),
+        # drop_cap: drop % that maps to confidence 1.0 (7% default).
+        "drop_cap": (Decimal("0.005"), Decimal("0.03"), Decimal("0.15")),
+        # horizon_s: hold window for the reversion play (3600s default).
+        "horizon_s": (Decimal("60"), Decimal("600"), Decimal("7200")),
+    },
+    "bist_volume_breakout": {
+        # vol_mult: current bar must exceed this multiple of rolling avg volume (3× default).
+        # Raise to require stronger signal; lower to fire more often.
+        "vol_mult": (Decimal("0.5"), Decimal("1.5"), Decimal("10.0")),
+        # vol_mult_cap: volume ratio that maps to confidence 1.0 (8× default).
+        "vol_mult_cap": (Decimal("0.5"), Decimal("3.0"), Decimal("20.0")),
+        # horizon_s: momentum hold window (900s default).
+        "horizon_s": (Decimal("60"), Decimal("300"), Decimal("1800")),
+    },
+    "momentum_xs": {
+        # lookback_days: window for computing cross-sectional return ranking.
+        "lookback_days": (Decimal("1"), Decimal("3"), Decimal("30")),
+        # top_k: number of symbols to long/short at each tick.
+        "top_k": (Decimal("1"), Decimal("1"), Decimal("5")),
+        # vol_filter_pct: max hourly-return std before excluding a symbol.
+        "vol_filter_pct": (Decimal("0.10"), Decimal("0.20"), Decimal("1.00")),
+        # horizon_s: prediction close window.
+        "horizon_s": (Decimal("300"), Decimal("300"), Decimal("7200")),
+    },
+    "screener_follow": {
+        # min_passes: consecutive qualifying polls required before acting.
+        "min_passes":  (Decimal("1"), Decimal("1"), Decimal("10")),
+        # min_score: minimum screener score (|funding_rate| or oi_delta_pct).
+        "min_score":   (Decimal("0.01"), Decimal("0.01"), Decimal("0.50")),
+        # horizon_s: prediction close window and cooldown gate.
+        "horizon_s":   (Decimal("300"), Decimal("300"), Decimal("7200")),
+    },
 }
 
 LLM_MODEL = MODEL_SONNET

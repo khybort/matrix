@@ -73,6 +73,8 @@ STRATEGY_THRESHOLDS: dict[str, tuple[int, Decimal]] = {
     "bist_intraday_reversion": (15, Decimal("0.05")),
     "bist_news_event":   (15, Decimal("0.05")),
     "bist_volume_breakout": (15, Decimal("0.05")),
+    "momentum_xs":          (20, Decimal("0.04")),
+    "screener_follow":      (20, Decimal("0.05")),
 }
 
 
@@ -95,7 +97,13 @@ LAB_PROMOTION_TYPE = "lab_promotion"
 # Deterministic strategies whose rule-generated param_tune proposals are
 # eligible for auto-apply. matrix_agent is intentionally excluded — its
 # weight_tune proposals still require manual or lab-driven review.
-SAFE_PARAM_TUNE_STRATEGIES: frozenset[str] = frozenset({"grid", "dca", "oi_delta"})
+SAFE_PARAM_TUNE_STRATEGIES: frozenset[str] = frozenset({
+    "grid", "dca", "oi_delta",
+    "funding_reversion",
+    "bist_gap_fade", "bist_intraday_reversion", "bist_volume_breakout",
+    "momentum_xs",
+    "screener_follow",
+})
 
 
 def _scrub_forbidden(params: dict[str, Any]) -> dict[str, Any]:
