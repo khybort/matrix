@@ -31,7 +31,7 @@ from strategy.base import PredictionDraft
 
 STRATEGY_ID = "funding_reversion"
 STRATEGY_VERSION = 1
-HIGH_FUNDING = Decimal("0.0002")  # ±0.02% (per 8h) threshold to act
+HIGH_FUNDING = Decimal("0.00015")  # ±0.015% (per 8h) — was 0.0002; loosened so more symbols clear the gate
 FUNDING_CAP = Decimal("0.0005")  # ±0.05% maps to confidence 1.0
 HORIZON_S = 600  # 10min outcome window — funding effects slower than trade flow
 DEFAULT_SYMBOLS = tuple(crypto_universe())

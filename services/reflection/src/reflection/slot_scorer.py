@@ -17,14 +17,19 @@ from matrix_shared import shared_session_scope
 from matrix_shared.models import MutationProposal, PaperPosition, Prediction, Wallet
 from matrix_shared.models.slot_config import StrategySlotConfig
 
-CONSECUTIVE_LOSS_AUTO_CUT = 5
-LAST_N_POSITIONS = 30
+# Was 5/30; raised CONSEC threshold to 8 (more patient — a short losing streak
+# isn't enough to cut a strategy that's recovering). Lookback dropped to 10 so
+# fresh evidence (post-TP/SL fix) reweights faster — the slot scorer can spot
+# improvement within hours instead of waiting for 30 trades to roll over.
+CONSECUTIVE_LOSS_AUTO_CUT = 8
+LAST_N_POSITIONS = 10
 
 
 def _perf_score(win_rate: float, avg_pnl_pct: float, total_pnl_usd: float) -> float:
     pct_clamped = max(-1.0, min(1.0, avg_pnl_pct / 0.02))
-    # $10 over 30 trades is a healthy positive bias; $-10 floors the term.
-    pnl_clamped = max(-1.0, min(1.0, total_pnl_usd / 10.0))
+    # $3-4 over 10 trades is a healthy positive bias (rescaled from 30-trade
+    # window: $10/30 ≈ $3.3/10); $-3.3 floors the term.
+    pnl_clamped = max(-1.0, min(1.0, total_pnl_usd / 3.3))
     return 0.4 * win_rate + 0.3 * pct_clamped + 0.3 * pnl_clamped
 
 

@@ -147,8 +147,8 @@ async def _seed_closed_position(
 
 @pytest.mark.asyncio
 async def test_auto_cut_on_consecutive_losses(scorer_wallet):
-    """5 consecutive losses → allocated_slots auto-cut to 1."""
-    for _ in range(5):
+    """8 consecutive losses → allocated_slots auto-cut to 1 (threshold raised 5→8 for patience)."""
+    for _ in range(8):
         await _seed_closed_position(scorer_wallet, pnl_usd=-10.0)
 
     from reflection.slot_scorer import score_strategy_slots
@@ -158,7 +158,7 @@ async def test_auto_cut_on_consecutive_losses(scorer_wallet):
     async with shared_session_scope() as session:
         cfg = await session.get(StrategySlotConfig, (STRAT, ASSET, scorer_wallet))
     assert cfg.allocated_slots == 1
-    assert cfg.consecutive_losses == 5
+    assert cfg.consecutive_losses == 8
 
 
 @pytest.mark.asyncio

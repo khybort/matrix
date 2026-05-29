@@ -39,7 +39,10 @@ from strategy.base import PredictionDraft
 STRATEGY_ID = "screener_follow"
 STRATEGY_VERSION = 1
 
-DEFAULT_MIN_PASSES = 3
+# Was 3 (matching CONFIRM_PASSES in screener.py); dropped to 2 so candidates
+# with two consecutive threshold crossings already start trading — 573 signal
+# rows accumulated but 0 reached 3 passes within the 1h freshness window.
+DEFAULT_MIN_PASSES = 2
 DEFAULT_MIN_SCORE = Decimal("0.05")
 DEFAULT_HORIZON_S = 1800        # 30 min — medium-term OI/funding signal
 DEFAULT_CONFIDENCE = Decimal("0.55")
