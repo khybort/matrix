@@ -150,6 +150,26 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
     except Exception:
         logger.exception("slot scoring pass failed (non-fatal)")
 
+    # Sweep stale pending proposals (7+ days old). They're either superseded
+    # by newer drafts or no longer relevant — let the dashboard show only
+    # the live queue.
+    try:
+        from sqlalchemy import text
+        async with shared_session_scope() as session:
+            result = await session.execute(
+                text(
+                    "UPDATE mutation_proposals SET status='superseded' "
+                    "WHERE status='pending' "
+                    "  AND created_at < now() - interval '7 days' "
+                    "RETURNING id"
+                )
+            )
+            n_swept = len(list(result.scalars()))
+            if n_swept:
+                logger.info(f"swept {n_swept} stale pending proposals (>7d)")
+    except Exception:
+        logger.exception("stale-proposal sweep failed (non-fatal)")
+
     return proposals_written
 
 
