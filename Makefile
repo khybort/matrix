@@ -228,6 +228,28 @@ market-stats: ## Per-market counts (predictions, positions, lessons; MARKET=cryp
 		$(if $(MARKET),WHERE asset_class='$(MARKET)',) \
 		GROUP BY asset_class ORDER BY asset_class;"
 
+.PHONY: tp-sl-ratio
+tp-sl-ratio: ## Per-strategy outcome reason breakdown (hit_tp / hit_sl / hit_horizon / other)
+	@$(PSQL_SHARED) -c "WITH win_loss AS ( \
+	  SELECT p.strategy_id, o.reason, \
+	         COUNT(*) AS n, \
+	         ROUND(SUM(o.pnl_usd)::numeric, 2) AS pnl \
+	  FROM outcomes o JOIN predictions p ON p.id = o.prediction_id \
+	  WHERE o.observed_at > now() - interval '24 hours' \
+	  GROUP BY p.strategy_id, o.reason \
+	) \
+	SELECT strategy_id, \
+	       COALESCE(SUM(n) FILTER (WHERE reason='hit_tp'), 0)       AS hit_tp, \
+	       COALESCE(SUM(n) FILTER (WHERE reason='hit_sl'), 0)       AS hit_sl, \
+	       COALESCE(SUM(n) FILTER (WHERE reason='hit_horizon'), 0)  AS hit_horizon, \
+	       COALESCE(SUM(n) FILTER (WHERE reason='funding_flip'), 0) AS funding_flip, \
+	       COALESCE(SUM(n) FILTER (WHERE reason='orphan_flat_close'), 0) AS orphan, \
+	       SUM(n) AS total, \
+	       ROUND(100.0 * COALESCE(SUM(n) FILTER (WHERE reason IN ('hit_tp','hit_sl')), 0) / NULLIF(SUM(n),0), 1) AS pct_tpsl_protected, \
+	       SUM(pnl) AS net_pnl_usd \
+	FROM win_loss \
+	GROUP BY strategy_id ORDER BY net_pnl_usd DESC;"
+
 .PHONY: stats
 stats: ## Quick state summary (counts per major table)
 	@$(PSQL) -c "SELECT 'trades' AS k, COUNT(*) FROM market_trades \
