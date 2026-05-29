@@ -179,6 +179,8 @@ async def _tick(symbols: list[str]) -> int:
             horizon_seconds=cfg.horizon_seconds,
             close_by=now + timedelta(seconds=cfg.horizon_seconds),
             entry_price_ref=decision.last_price,
+            tp_pct=cfg.tp_pct,
+            sl_pct=cfg.sl_pct,
             thesis=decision.thesis,
             context={**decision.feature_dump, "agent_version": cfg.version},
             status="open",

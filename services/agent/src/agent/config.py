@@ -28,6 +28,12 @@ class AgentConfig:
     weights: dict[str, Decimal]
     signal_threshold: Decimal
     horizon_seconds: int
+    # Default TP/SL emitted on every Prediction unless params override. These
+    # caps mean a position closes on price-move thresholds instead of waiting
+    # for hit_horizon — which is the main reason matrix_agent bled paper money
+    # (every drawdown realized in full because no TP/SL was ever set).
+    tp_pct: Decimal = Decimal("0.02")
+    sl_pct: Decimal = Decimal("0.01")
     # Epsilon-greedy exploration rate (paper-trade only): fraction of holds
     # converted to low-confidence exploratory trades to feed the learning loop.
     explore_epsilon: float = 0.15
@@ -103,6 +109,8 @@ async def load_agent_config(
         weights=weights,
         signal_threshold=Decimal(str(params.get("signal_threshold", "0.18"))),
         horizon_seconds=int(params.get("horizon_seconds", 120)),
+        tp_pct=Decimal(str(params.get("tp_pct", "0.02"))),
+        sl_pct=Decimal(str(params.get("sl_pct", "0.01"))),
         explore_epsilon=float(params.get("explore_epsilon", 0.15)),
     )
     _cache[key] = (now, cfg)
