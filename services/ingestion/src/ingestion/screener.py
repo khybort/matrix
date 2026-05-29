@@ -139,6 +139,66 @@ def _dec(t: dict, key: str) -> Decimal | None:
         return None
 
 
+def _f(t: dict, key: str) -> float | None:
+    v = t.get(key)
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _upsert_universe_snapshot(tickers: list[dict]) -> None:
+    """Persist exchange-wide ticker stats for the universe manager.
+
+    One row per USDT-perp symbol, latest poll wins. The /v5/market/tickers
+    payload already carries turnover/volume/24h-change/high/low/last for every
+    symbol — the screener only needed funding/OI for signals, but the universe
+    scorer needs these to rank liquidity/volatility/momentum WITHOUT ingesting
+    bars (solves the bootstrap chicken-and-egg). LOCAL tier, no risk impact.
+    """
+    now = datetime.now(UTC)
+    params: list[dict] = []
+    for t in tickers:
+        symbol = t.get("symbol", "")
+        if not symbol.endswith("USDT"):
+            continue
+        params.append({
+            "symbol": symbol,
+            "turnover24h": _f(t, "turnover24h"),
+            "volume24h": _f(t, "volume24h"),
+            "price24h_pct": _f(t, "price24hPcnt"),
+            "high24h": _f(t, "highPrice24h"),
+            "low24h": _f(t, "lowPrice24h"),
+            "last_price": _f(t, "lastPrice"),
+            "oi_value": _f(t, "openInterestValue"),
+            "funding_rate": _f(t, "fundingRate"),
+            "observed_at": now,
+        })
+    if not params:
+        return
+    async with session_scope() as db:
+        await db.execute(text("""
+            INSERT INTO screener_universe_snapshot
+              (symbol, turnover24h, volume24h, price24h_pct, high24h, low24h,
+               last_price, oi_value, funding_rate, observed_at)
+            VALUES
+              (:symbol, :turnover24h, :volume24h, :price24h_pct, :high24h, :low24h,
+               :last_price, :oi_value, :funding_rate, :observed_at)
+            ON CONFLICT (symbol) DO UPDATE SET
+              turnover24h  = EXCLUDED.turnover24h,
+              volume24h    = EXCLUDED.volume24h,
+              price24h_pct = EXCLUDED.price24h_pct,
+              high24h      = EXCLUDED.high24h,
+              low24h       = EXCLUDED.low24h,
+              last_price   = EXCLUDED.last_price,
+              oi_value     = EXCLUDED.oi_value,
+              funding_rate = EXCLUDED.funding_rate,
+              observed_at  = EXCLUDED.observed_at
+        """), params)
+
+
 async def _upsert_signals(rows: list[ScreenerRow], pass_counts: dict[str, int]) -> None:
     """Write screener signals to LOCAL postgres (analytics only — no risk impact)."""
     now = datetime.now(UTC)
@@ -180,6 +240,13 @@ async def run_once(prev_oi: dict[str, Decimal]) -> dict[str, Decimal]:
         return prev_oi
 
     rows = rank_tickers(tickers, prev_oi)
+
+    # Persist exchange-wide stats for the universe manager (best-effort; never
+    # crash ingestion if the table isn't migrated yet).
+    try:
+        await _upsert_universe_snapshot(tickers)
+    except Exception as e:
+        logger.debug(f"screener: universe snapshot upsert failed (table missing?): {e}")
 
     # Update prev_oi from this poll
     new_oi: dict[str, Decimal] = {}

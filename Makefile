@@ -304,6 +304,14 @@ lab-scan: ## Scan for a promotion proposal
 lab-apply-best: ## Apply the most recent pending lab_promotion proposal
 	$(DC) $(DC_BASE) exec labs uv run python -m labs.main --apply-best
 
+.PHONY: universe-scan-once
+universe-scan-once: ## Score+reconcile the tradable universe once (MARKET=crypto|bist; shadow unless UNIVERSE_MANAGER_ENFORCE=true)
+	$(DC) $(DC_BASE) exec labs uv run python -m labs.main --universe-once --universe-asset-class $${MARKET:-crypto}
+
+.PHONY: universe-status
+universe-status: ## Show scored/active tradable universe (top 80 by score)
+	@$(PSQL_SHARED) -c "SELECT asset_class, symbol, active, round(score::numeric,4) AS score, liquidity_usd, rank, became_active_at, last_scored_at FROM tradable_symbols WHERE active OR score > 0 ORDER BY asset_class, score DESC NULLS LAST LIMIT 80"
+
 .PHONY: bist-seed-universe
 bist-seed-universe: ## One-shot: upsert the embedded BIST symbol universe into bist_symbols
 	$(DC) $(DC_BASE) exec ingestion uv run matrix-bist-symbols
@@ -400,6 +408,28 @@ backtest-historical: ## Historical replay. Vars: STRATEGY SYMBOL DAYS N_GRIDS BA
 		--n-grids=$${N_GRIDS:-10} \
 		--price-band-pct=$${BAND:-0.02} \
 		--horizon-s=$${HORIZON:-300}
+
+##@ LLM backend
+
+.PHONY: llm-bedrock
+llm-bedrock: ## Route LLM through AWS Bedrock (efsora-admin profile -> .env)
+	@./scripts/llm_backend.sh bedrock
+
+.PHONY: llm-subscription
+llm-subscription: ## Route LLM back through Claude Code subscription (OAuth)
+	@./scripts/llm_backend.sh subscription
+
+.PHONY: llm-haiku
+llm-haiku: ## Set default tier to Haiku (decision/feeder/bulletin; quality loops stay Sonnet)
+	@./scripts/llm_backend.sh haiku
+
+.PHONY: llm-sonnet
+llm-sonnet: ## Set default tier back to Sonnet
+	@./scripts/llm_backend.sh sonnet
+
+.PHONY: llm-status
+llm-status: ## Show current LLM backend + default tier (from .env)
+	@./scripts/llm_backend.sh status
 
 ##@ Cleanup
 

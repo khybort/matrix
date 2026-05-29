@@ -14,6 +14,7 @@ from matrix_shared.models.prediction import Outcome, PaperPosition, Prediction
 from matrix_shared.models.raw_document import RawDocument
 from matrix_shared.models.slot_config import StrategySlotConfig
 from matrix_shared.models.strategy_config import MutationProposal, StrategyConfig
+from matrix_shared.models.tradable_symbol import TradableSymbol
 from matrix_shared.models.wallet import Wallet, WalletSnapshot
 
 __all__ = [
@@ -38,6 +39,7 @@ __all__ = [
     "StrategyConfig",
     "StrategySlotConfig",
     "TickerSnapshot",
+    "TradableSymbol",
     "Wallet",
     "WalletSnapshot",
 ]

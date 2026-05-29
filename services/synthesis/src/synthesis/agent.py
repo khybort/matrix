@@ -15,7 +15,11 @@ from __future__ import annotations
 from loguru import logger
 from matrix_shared.agent_runtime.ratelimit import get_rate_limiter
 from matrix_shared.agent_runtime.tool import build_sdk_mcp_server, mcp_tool_names
-from matrix_shared.subscription_llm import call_subscription_agent, subscription_enabled
+from matrix_shared.subscription_llm import (
+    MODEL_SONNET,
+    call_subscription_agent,
+    subscription_enabled,
+)
 
 from synthesis.themes import Theme, extract_themes_json, themes_from_parsed
 from synthesis.tools import build_registry
@@ -65,6 +69,7 @@ async def run_synthesis_agent(window_hours: float) -> list[Theme] | None:
         async for ev in call_subscription_agent(
             prompt=prompt,
             system=SYNTHESIS_SYSTEM,
+            model=MODEL_SONNET,  # quality-pinned: unaffected by the Haiku default flip
             mcp_servers={_SERVER: server},
             allowed_tools=allowed,
             disallowed_tools=["Bash", "Write", "Edit", "NotebookEdit"],

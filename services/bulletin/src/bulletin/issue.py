@@ -14,11 +14,9 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal
 
 from loguru import logger
-from matrix_shared.subscription_llm import MODEL_SONNET
+from matrix_shared.subscription_llm import DEFAULT_MODEL as LLM_MODEL
 
 from bulletin.state import BulletinSnapshot
-
-LLM_MODEL = MODEL_SONNET
 
 
 @dataclass(slots=True)

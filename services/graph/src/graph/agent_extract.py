@@ -18,7 +18,11 @@ from matrix_shared.agent_runtime.tool import (
     mcp_tool_names,
     tool,
 )
-from matrix_shared.subscription_llm import call_subscription_agent, subscription_enabled
+from matrix_shared.subscription_llm import (
+    MODEL_SONNET,
+    call_subscription_agent,
+    subscription_enabled,
+)
 
 from graph.age import _exec_cypher
 from graph.parsing import (
@@ -130,6 +134,7 @@ async def run_extract_agent(
         async for ev in call_subscription_agent(
             prompt=user,
             system=SYSTEM_PROMPT,
+            model=MODEL_SONNET,  # quality-pinned: unaffected by the Haiku default flip
             mcp_servers={_SERVER: server},
             allowed_tools=allowed,
             disallowed_tools=["Bash", "Write", "Edit", "NotebookEdit"],

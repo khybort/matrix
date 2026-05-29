@@ -36,6 +36,8 @@ DEDUP_DAYS = 7
 # Defaults for the dev_task that gets created. max_turns set high
 # (subscription is flat-rate so this only caps wall-clock not $) because
 # these tasks dispatch sub-agents and need room to explore + run tests.
+# dev_tasks write code + run tests; keep them on Sonnet (Haiku too weak here,
+# and these run <=1/hour so they barely touch the decision loop's rate budget).
 DEFAULT_MODEL = MODEL_SONNET
 DEFAULT_MAX_TURNS = 60
 DEFAULT_COST_CAP_USD = 5.0

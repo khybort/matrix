@@ -23,7 +23,11 @@ from matrix_shared.agent_runtime.tool import (
     mcp_tool_names,
     tool,
 )
-from matrix_shared.subscription_llm import call_subscription_agent, subscription_enabled
+from matrix_shared.subscription_llm import (
+    MODEL_SONNET,
+    call_subscription_agent,
+    subscription_enabled,
+)
 from sqlalchemy import desc, select, text
 
 from reflection.metrics import StrategyMetrics
@@ -209,6 +213,7 @@ async def run_reflection_agent(
         async for ev in call_subscription_agent(
             prompt=user,
             system=SYSTEM_PROMPT,
+            model=MODEL_SONNET,  # quality-pinned: unaffected by the Haiku default flip
             mcp_servers={_SERVER: server},
             allowed_tools=allowed,
             disallowed_tools=["Bash", "Write", "Edit", "NotebookEdit"],

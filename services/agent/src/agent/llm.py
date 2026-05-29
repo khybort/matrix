@@ -10,9 +10,10 @@ from dataclasses import dataclass
 
 from matrix_shared import call_claude_json
 from matrix_shared import llm_enabled as _llm_enabled
-from matrix_shared.subscription_llm import MODEL_SONNET
-
-DEFAULT_MODEL = MODEL_SONNET
+# Decision override follows the project default tier (Haiku by default — see
+# `make llm-haiku`/`llm-sonnet`). This call shares the 15s loop's rate budget,
+# so the cheap tier is the profit-aligned choice here.
+from matrix_shared.subscription_llm import DEFAULT_MODEL
 
 
 @dataclass(slots=True)

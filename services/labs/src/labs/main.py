@@ -38,6 +38,7 @@ from labs.promote import (
     scan_all_strategies,
     scan_for_promotions,
 )
+from labs import universe
 
 # Lab evaluates candidate genomes against the full crypto universe (env-driven,
 # falls back to the canonical list in matrix_shared.markets.crypto). The
@@ -45,6 +46,7 @@ from labs.promote import (
 DEFAULT_EVAL_INTERVAL_S = 20.0
 DEFAULT_EVOLVE_INTERVAL_S = 300.0
 DEFAULT_PROMOTE_SCAN_INTERVAL_S = 180.0
+DEFAULT_UNIVERSE_SCAN_INTERVAL_S = 300.0
 
 
 async def _eval_tick(symbols: list[str]) -> tuple[int, int, int]:
@@ -118,6 +120,7 @@ async def run(
 
     last_evolve = 0.0
     last_promote_scan = 0.0
+    last_universe_scan = 0.0
     while not stop.is_set():
         loop_started = asyncio.get_event_loop().time()
         try:
@@ -161,6 +164,15 @@ async def run(
             except Exception as e:
                 logger.exception(f"promotion scan failed: {e}")
             last_promote_scan = loop_started
+
+        if universe.enabled() and (
+            loop_started - last_universe_scan >= DEFAULT_UNIVERSE_SCAN_INTERVAL_S
+        ):
+            try:
+                await universe.score_and_reconcile(asset_class="crypto")
+            except Exception as e:
+                logger.exception(f"universe scan failed: {e}")
+            last_universe_scan = loop_started
 
         try:
             await asyncio.wait_for(stop.wait(), timeout=eval_interval_s)
@@ -214,6 +226,15 @@ def main() -> None:
         "--apply-best", action="store_true",
         help="Apply the most recent pending lab_promotion proposal and exit",
     )
+    parser.add_argument(
+        "--universe-once", action="store_true",
+        help="One-shot: score+reconcile the tradable universe and exit "
+             "(enforce flips only if UNIVERSE_MANAGER_ENFORCE=true)",
+    )
+    parser.add_argument(
+        "--universe-asset-class", default="crypto",
+        help="Asset class for --universe-once (default crypto)",
+    )
     args = parser.parse_args()
 
     logger.remove()
@@ -261,6 +282,19 @@ def main() -> None:
             pid = await apply_best_pending()
             logger.info(f"apply-best: {pid if pid else 'no pending proposal'}")
         asyncio.run(_apply_best())
+        return
+
+    if args.universe_once:
+        async def _universe():
+            report = await universe.score_and_reconcile(
+                asset_class=args.universe_asset_class
+            )
+            logger.info(
+                f"universe-once [{report.asset_class}]: scored={report.scored} "
+                f"+{report.activated} -{report.deactivated} "
+                f"active={report.n_active_after} enforced={report.enforced}"
+            )
+        asyncio.run(_universe())
         return
 
     if args.once:
