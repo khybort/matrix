@@ -33,14 +33,23 @@ from matrix_shared.models.slot_config import StrategySlotConfig
 
 def test_perf_score_pure_wins():
     from reflection.slot_scorer import _perf_score
-    score = _perf_score(win_rate=1.0, avg_pnl_pct=0.04)
+    score = _perf_score(win_rate=1.0, avg_pnl_pct=0.04, total_pnl_usd=20.0)
     assert score > 0.9
 
 
 def test_perf_score_pure_losses():
     from reflection.slot_scorer import _perf_score
-    score = _perf_score(win_rate=0.0, avg_pnl_pct=-0.04)
+    score = _perf_score(win_rate=0.0, avg_pnl_pct=-0.04, total_pnl_usd=-20.0)
     assert score < 0.1
+
+
+def test_perf_score_rewards_high_total_pnl_with_small_edge():
+    """Small per-trade edge but consistently positive total — should NOT score below 0.5.
+    This is the funding_reversion bug: high win rate, small avg_pnl_pct, positive total."""
+    from reflection.slot_scorer import _perf_score
+    # 53% win, 0.025% avg pnl, +$10 total over 30 trades
+    score = _perf_score(win_rate=0.53, avg_pnl_pct=0.00025, total_pnl_usd=10.0)
+    assert score >= 0.5, f"expected >=0.5, got {score}"
 
 
 def test_slots_for_score_tiers():

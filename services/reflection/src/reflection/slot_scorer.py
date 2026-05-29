@@ -1,6 +1,6 @@
 """Hourly slot scorer: adjusts per-strategy allocated_slots based on performance.
 
-Score formula: 0.6 * win_rate + 0.4 * clamp(avg_pnl_pct / 0.02, -1, 1)
+Score formula: 0.4 * win_rate + 0.3 * clamp(avg_pnl_pct / 0.02, -1, 1) + 0.3 * clamp(total_pnl_usd / 10, -1, 1)
 Consecutive losses >= 5: auto-cut to 1 slot (no approval needed).
 Changes > 50% reduction or recovery from 1: written as slot_adjustment
 MutationProposal for operator approval via the lessons dashboard.
@@ -21,9 +21,11 @@ CONSECUTIVE_LOSS_AUTO_CUT = 5
 LAST_N_POSITIONS = 30
 
 
-def _perf_score(win_rate: float, avg_pnl_pct: float) -> float:
-    clamped = max(-1.0, min(1.0, avg_pnl_pct / 0.02))
-    return 0.6 * win_rate + 0.4 * clamped
+def _perf_score(win_rate: float, avg_pnl_pct: float, total_pnl_usd: float) -> float:
+    pct_clamped = max(-1.0, min(1.0, avg_pnl_pct / 0.02))
+    # $10 over 30 trades is a healthy positive bias; $-10 floors the term.
+    pnl_clamped = max(-1.0, min(1.0, total_pnl_usd / 10.0))
+    return 0.4 * win_rate + 0.3 * pct_clamped + 0.3 * pnl_clamped
 
 
 def _slots_for_score(score: float, base_share: int) -> int:
@@ -97,6 +99,7 @@ async def score_strategy_slots() -> int:
                 )
                 / len(rows)
             )
+            total_pnl_usd = sum(float(r.pnl_usd or 0) for r in rows)
 
             # Consecutive losses: walk from newest closed backward
             sorted_rows = sorted(
@@ -111,7 +114,7 @@ async def score_strategy_slots() -> int:
                 else:
                     break
 
-            score = _perf_score(win_rate, avg_pnl_pct)
+            score = _perf_score(win_rate, avg_pnl_pct, total_pnl_usd)
             old_slots = config.allocated_slots
 
             if consec >= CONSECUTIVE_LOSS_AUTO_CUT:
@@ -152,6 +155,7 @@ async def score_strategy_slots() -> int:
                         metrics_window={
                             "win_rate": str(round(win_rate, 4)),
                             "avg_pnl_pct": str(round(avg_pnl_pct, 6)),
+                            "total_pnl_usd": str(round(total_pnl_usd, 4)),
                             "perf_score": str(round(score, 4)),
                             "consecutive_losses": consec,
                             "n_evaluated": len(rows),
@@ -160,7 +164,8 @@ async def score_strategy_slots() -> int:
                             f"Slot adjustment: {config.strategy_id}/{config.asset_class} "
                             f"{old_slots}→{new_slots}. "
                             f"perf_score={score:.4f} win_rate={win_rate:.3f} "
-                            f"avg_pnl_pct={avg_pnl_pct:.4f} consec_losses={consec}"
+                            f"avg_pnl_pct={avg_pnl_pct:.4f} total_pnl_usd={total_pnl_usd:.2f} "
+                            f"consec_losses={consec}"
                         ),
                         status="pending",
                         source="slot_scorer",
