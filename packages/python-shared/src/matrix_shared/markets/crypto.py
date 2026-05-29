@@ -64,10 +64,20 @@ async def _async_db_active_universe() -> list[str]:
 def _db_active_universe() -> list[str]:
     """Sync bridge to the SHARED tradable_symbols active set.
 
-    Uses asyncio.run() + asyncpg (always installed) so it works from any sync
-    call site (ingestion startup, strategy modules, agent config loader) without
-    needing psycopg2. Falls back to _DEFAULT_UNIVERSE on any error.
+    Uses asyncio.run() when there is no running event loop (ingestion startup,
+    strategy module import, agent config loader). When called from within a
+    running event loop (e.g. from labs main during argparse default resolution)
+    it falls back to _DEFAULT_UNIVERSE — async callers should use the async
+    CryptoMarket.universe(db) path instead, which correctly awaits the query.
     """
+    try:
+        asyncio.get_running_loop()
+        # Inside a running event loop — asyncio.run() would raise or corrupt
+        # the lru_cache'd engine pool. Return default; async callers use
+        # CryptoMarket.universe(db) which awaits the DB read correctly.
+        return list(_DEFAULT_UNIVERSE)
+    except RuntimeError:
+        pass  # no running loop — safe to use asyncio.run()
     try:
         return asyncio.run(_async_db_active_universe())
     except Exception:

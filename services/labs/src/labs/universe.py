@@ -88,7 +88,7 @@ def _config(asset_class: str) -> UniverseConfig:
         exit_floor=_envf("UNIVERSE_BIST_EXIT_FLOOR", 0.40),
         min_hold_seconds=_envf("UNIVERSE_BIST_MIN_HOLD_S", 172800),  # ~2 sessions
         max_churn_per_scan=_envi("UNIVERSE_BIST_MAX_CHURN", 10),
-        min_liquidity_usd=_envf("UNIVERSE_BIST_MIN_LIQUIDITY_USD", 2_000_000),
+        min_liquidity_usd=_envf("UNIVERSE_BIST_MIN_LIQUIDITY_USD", 0),
         edge_lookback_days=_envf("UNIVERSE_BIST_EDGE_LOOKBACK_D", 30),
         weights={"L": 0.35, "V": 0.20, "M": 0.15, "E": 0.30},
     )
@@ -214,6 +214,64 @@ async def _fetch_crypto_pool() -> list[dict]:
         return [dict(r._mapping) for r in res]
 
 
+async def _fetch_bist_pool() -> list[dict]:
+    """Score inputs for every active BIST symbol from market_bars (LOCAL).
+
+    Yahoo Finance BIST data lacks reliable volume, so:
+    - last_price (close) is used as a liquidity proxy (cap-tier signal).
+    - high/low from latest 1d bar → intraday range as volatility proxy.
+    - Trailing 5d return (close[0]-close[4])/close[4] as momentum.
+    - turnover24h left None (BIST hard-liquidity floor is 0 in config).
+    """
+    async with session_scope() as db:
+        # Latest 1d close + range per symbol (most recent bar).
+        latest_res = await db.execute(text("""
+            SELECT DISTINCT ON (symbol)
+                symbol, close AS last_price, high AS high24h, low AS low24h
+            FROM market_bars
+            WHERE asset_class = 'bist' AND interval = '1d'
+            ORDER BY symbol, ts DESC
+        """))
+        latest = {r.symbol: dict(r._mapping) for r in latest_res}
+
+        if not latest:
+            return []
+
+        # Trailing return: oldest close in last 5 sessions.
+        trailing_res = await db.execute(text("""
+            SELECT symbol, close, ts
+            FROM market_bars
+            WHERE asset_class = 'bist' AND interval = '1d'
+              AND symbol = ANY(:syms)
+            ORDER BY symbol, ts DESC
+        """), {"syms": list(latest.keys())})
+
+        hist: dict[str, list[float]] = {}
+        for r in trailing_res:
+            hist.setdefault(r.symbol, []).append(float(r.close))
+
+        rows: list[dict] = []
+        for sym, row in latest.items():
+            closes = hist.get(sym, [])
+            last = float(row["last_price"]) if row["last_price"] else None
+            if last is None or last <= 0:
+                continue
+            # Momentum: % change from oldest available close (up to 5 bars).
+            tail = closes[min(4, len(closes) - 1)] if len(closes) >= 2 else None
+            mom = (last - tail) / tail if tail and tail > 0 else 0.0
+            rows.append({
+                "symbol": sym,
+                "last_price": last,
+                "high24h": float(row["high24h"]) if row["high24h"] else last,
+                "low24h": float(row["low24h"]) if row["low24h"] else last,
+                "turnover24h": last,  # proxy: close price as cap-tier rank input
+                "price24h_pct": mom,
+                "funding_rate": 0.0,
+                "oi_value": None,
+            })
+        return rows
+
+
 def _shrink_edge(n: int, raw_avg_score: float) -> float:
     """Empirical-Bayes per-symbol edge → [0,1], shrunk toward neutral (0.5).
 
@@ -317,6 +375,22 @@ async def _apply_flips(
                 )
             )
 
+    # For BIST, also sync the authoritative bist_symbols.active flag (LOCAL).
+    # tradable_symbols carries the score overlay; bist_symbols.active controls
+    # which symbols BistMarket.universe() returns and what gets ingested.
+    if asset_class == "bist" and (activate or deactivate):
+        async with session_scope() as db:
+            if activate:
+                await db.execute(
+                    text("UPDATE bist_symbols SET active=true WHERE symbol = ANY(:syms)"),
+                    {"syms": activate},
+                )
+            if deactivate:
+                await db.execute(
+                    text("UPDATE bist_symbols SET active=false WHERE symbol = ANY(:syms)"),
+                    {"syms": deactivate},
+                )
+
 
 # ── Reconcile ────────────────────────────────────────────────────────────────
 
@@ -369,8 +443,10 @@ async def score_and_reconcile(
 
     if asset_class == "crypto":
         pool = await _fetch_crypto_pool()
+    elif asset_class == "bist":
+        pool = await _fetch_bist_pool()
     else:
-        pool = []  # BIST lands in PR9
+        pool = []
 
     if not pool:
         logger.info(f"universe[{asset_class}]: empty candidate pool, skipping")

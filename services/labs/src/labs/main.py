@@ -171,7 +171,20 @@ async def run(
             try:
                 await universe.score_and_reconcile(asset_class="crypto")
             except Exception as e:
-                logger.exception(f"universe scan failed: {e}")
+                logger.exception(f"universe scan [crypto] failed: {e}")
+            # BIST: scan in-session every 15min (10:00–18:00 TR, UTC+3), off-session hourly.
+            try:
+                import datetime as _dt
+                _now_tr = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=3)))
+                _bist_session = (
+                    _now_tr.weekday() < 5
+                    and 10 <= _now_tr.hour < 18
+                )
+                bist_interval = 900.0 if _bist_session else 3600.0
+                if loop_started - last_universe_scan >= bist_interval:
+                    await universe.score_and_reconcile(asset_class="bist")
+            except Exception as e:
+                logger.exception(f"universe scan [bist] failed: {e}")
             last_universe_scan = loop_started
 
         try:
@@ -182,7 +195,7 @@ async def run(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Matrix labs (evolutionary algorithm search)")
-    parser.add_argument("--symbols", nargs="*", default=crypto_universe())
+    parser.add_argument("--symbols", nargs="*", default=None)
     parser.add_argument("--eval-interval", type=float, default=DEFAULT_EVAL_INTERVAL_S)
     parser.add_argument("--evolve-interval", type=float, default=DEFAULT_EVOLVE_INTERVAL_S)
     parser.add_argument("--once", action="store_true", help="Run one eval tick + score + try evolve")
@@ -286,14 +299,17 @@ def main() -> None:
 
     if args.universe_once:
         async def _universe():
-            report = await universe.score_and_reconcile(
-                asset_class=args.universe_asset_class
+            classes = (
+                ["crypto", "bist"] if args.universe_asset_class == "all"
+                else [args.universe_asset_class]
             )
-            logger.info(
-                f"universe-once [{report.asset_class}]: scored={report.scored} "
-                f"+{report.activated} -{report.deactivated} "
-                f"active={report.n_active_after} enforced={report.enforced}"
-            )
+            for ac in classes:
+                report = await universe.score_and_reconcile(asset_class=ac)
+                logger.info(
+                    f"universe-once [{report.asset_class}]: scored={report.scored} "
+                    f"+{report.activated} -{report.deactivated} "
+                    f"active={report.n_active_after} enforced={report.enforced}"
+                )
         asyncio.run(_universe())
         return
 
@@ -301,7 +317,7 @@ def main() -> None:
         async def _one():
             await seed_initial_population(asset_class="crypto")
             await seed_initial_population(asset_class="bist")
-            opened, scored, stale = await _eval_tick(args.symbols)
+            opened, scored, stale = await _eval_tick(args.symbols or crypto_universe())
             logger.info(f"once: opened={opened} scored={scored} stale={stale}")
             for ac in ("crypto", "bist"):
                 report = await run_evolution_cycle(
@@ -318,15 +334,20 @@ def main() -> None:
     _min_fitness_str = args.auto_apply_min_fitness or os.environ.get("AUTO_APPLY_MIN_FITNESS", "0.10")
     auto_apply_min_fitness = Decimal(_min_fitness_str)
 
+    # Resolve symbols lazily (inside asyncio.run) so that crypto_universe() is
+    # not called before the event loop starts — avoids a lru_cache'd asyncpg
+    # engine being bound to a pre-main event loop.
+    symbols = args.symbols if args.symbols is not None else crypto_universe()
+
     logger.info(
-        f"labs start: symbols={args.symbols} eval={args.eval_interval}s "
+        f"labs start: symbols={symbols} eval={args.eval_interval}s "
         f"evolve={args.evolve_interval}s min_evals={args.min_evals} "
         f"promote_scan={args.promote_scan_interval}s auto_apply={args.auto_apply} "
         f"auto_apply_safe={args.auto_apply_safe} min_fitness={auto_apply_min_fitness}"
     )
     asyncio.run(
         run(
-            args.symbols,
+            symbols,
             args.eval_interval,
             args.evolve_interval,
             args.min_evals,

@@ -305,8 +305,8 @@ lab-apply-best: ## Apply the most recent pending lab_promotion proposal
 	$(DC) $(DC_BASE) exec labs uv run python -m labs.main --apply-best
 
 .PHONY: universe-scan-once
-universe-scan-once: ## Score+reconcile the tradable universe once (MARKET=crypto|bist; shadow unless UNIVERSE_MANAGER_ENFORCE=true)
-	$(DC) $(DC_BASE) exec labs uv run python -m labs.main --universe-once --universe-asset-class $${MARKET:-crypto}
+universe-scan-once: ## Score+reconcile the tradable universe once (MARKET=crypto|bist|all; shadow unless UNIVERSE_MANAGER_ENFORCE=true)
+	$(DC) $(DC_BASE) exec labs uv run python -m labs.main --universe-once --universe-asset-class $${MARKET:-all}
 
 .PHONY: universe-status
 universe-status: ## Show scored/active tradable universe (top 80 by score)
