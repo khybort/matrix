@@ -77,36 +77,6 @@ services:
       - ./services/strategy/src:/workspace/services/strategy/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
-  execution:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
-    command:
-      - "python -m execution.main --heartbeat 60"
-      - "/workspace/services/execution/src"
-      - "/workspace/packages/python-shared/src"
-    volumes:
-      - ./services/execution/src:/workspace/services/execution/src
-      - ./packages/python-shared/src:/workspace/packages/python-shared/src
-
-  notify:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
-    command:
-      - "python -m notify.main --poll-interval 60"
-      - "/workspace/services/notify/src"
-      - "/workspace/packages/python-shared/src"
-    volumes:
-      - ./services/notify/src:/workspace/services/notify/src
-      - ./packages/python-shared/src:/workspace/packages/python-shared/src
-
-  bulletin:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
-    command:
-      - "python -m bulletin.main"
-      - "/workspace/services/bulletin/src"
-      - "/workspace/packages/python-shared/src"
-    volumes:
-      - ./services/bulletin/src:/workspace/services/bulletin/src
-      - ./packages/python-shared/src:/workspace/packages/python-shared/src
-
   agent-lessons:
     entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
     command:

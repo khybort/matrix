@@ -245,6 +245,8 @@ services:
       TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
     command: ["notify.main", "--poll-interval", "60"]
     restart: unless-stopped
+    # Bring up when TELEGRAM_BOT_TOKEN is set: docker compose --profile notify up -d notify
+    profiles: ["notify"]
     logging: *default_logging
 
   # Live-execution gateway (Phase 0 skeleton). Loops idle, logs "GATE CLOSED"
@@ -269,6 +271,9 @@ services:
       LIVE_EXECUTION_ENABLED: ${LIVE_EXECUTION_ENABLED:-false}
     command: ["execution.main", "--heartbeat", "60"]
     restart: unless-stopped
+    # Idle skeleton until Phase 5 broker code lands. Start explicitly:
+    # docker compose --profile phase5 up -d execution
+    profiles: ["phase5"]
     logging: *default_logging
 
   # Rule-based strategy generator pool. Each module emits PredictionDraft rows
