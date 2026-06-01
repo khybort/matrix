@@ -122,7 +122,8 @@ def upgrade() -> None:
         sa.text(
             "INSERT INTO strategy_configs "
             "(id, strategy_id, asset_class, version, status, params, rationale) "
-            "VALUES (:id, :sid, 'bist', 1, 'active', :params, :rationale)"
+            "VALUES (:id, :sid, 'bist', 1, 'active', :params, :rationale) "
+            "ON CONFLICT DO NOTHING"
         ).bindparams(
             id=DEFAULT_BIST_AGENT_CONFIG_ID,
             sid="matrix_agent",
