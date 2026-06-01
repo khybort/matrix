@@ -194,6 +194,15 @@ services:
         condition: service_healthy
     environment:
       <<: *python-env
+      GRAPH_BACKFILL_ENABLED: ${GRAPH_BACKFILL_ENABLED:-true}
+      GRAPH_BACKFILL_BATCH: ${GRAPH_BACKFILL_BATCH:-2}
+      GRAPH_BACKFILL_INTERVAL_S: ${GRAPH_BACKFILL_INTERVAL_S:-300}
+      GRAPH_BACKFILL_COOLDOWN_S: ${GRAPH_BACKFILL_COOLDOWN_S:-3600}
+      GRAPH_SEMANTIC_CHUNKING: ${GRAPH_SEMANTIC_CHUNKING:-true}
+      GRAPH_CHUNK_TARGET_CHARS: ${GRAPH_CHUNK_TARGET_CHARS:-1200}
+      GRAPH_CHUNK_MAX_CHARS: ${GRAPH_CHUNK_MAX_CHARS:-1800}
+      GRAPH_CHUNK_SIM_THRESHOLD: ${GRAPH_CHUNK_SIM_THRESHOLD:-0.25}
+      GRAPH_MAX_CHUNKS_PER_DOC: ${GRAPH_MAX_CHUNKS_PER_DOC:-6}
     command: ["graph.main", "--interval", "60"]
     restart: unless-stopped
     logging: *default_logging
@@ -383,7 +392,7 @@ services:
     # --score-trigger -0.20 (was default -0.05): only re-mutate clearly-failing
     # strategies, not marginally-negative ones. Stops the matrix_agent version
     # thrash (v6→v20 in 2 days, never converging) that re-tuned on -0.057 noise.
-    command: ["reflection.main", "--interval", "600", "--no-llm", "--score-trigger", "-0.20"]
+    command: ["reflection.main", "--interval", "600", "--score-trigger", "-0.20"]
     restart: unless-stopped
     logging: *default_logging
 
@@ -400,7 +409,7 @@ services:
         condition: service_healthy
     environment:
       <<: *python-env
-      AUTO_APPLY_MIN_FITNESS: "0.10"
+      AUTO_APPLY_MIN_FITNESS: ${AUTO_APPLY_MIN_FITNESS:-0.05}
     command:
       - "labs.main"
       - "--eval-interval"

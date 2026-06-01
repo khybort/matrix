@@ -66,9 +66,9 @@ def test_acceptance_slash_flow():
     assert final["worktree_path"] is not None
 
 
+@pytest.mark.skip(reason="FORBIDDEN_PATHS open since 2026-05-26 — strategy edits allowed")
 def test_acceptance_trading_gate_blocks():
-    """Scenario 2: agent told to touch services/strategy → failure with
-    trading_path_violation."""
+    """Historical scenario: default-deny gate. Re-enable when FORBIDDEN_PATHS is repopulated."""
     _ensure_alive()
     r = httpx.post(
         "http://localhost:8009/tasks",

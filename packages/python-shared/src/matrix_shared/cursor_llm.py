@@ -291,6 +291,131 @@ def _sdk_agent_options(*, cwd: str, mcp_servers: dict[str, Any] | None) -> Any:
     return AgentOptions(**kwargs)
 
 
+def _agent_stream_timeout_s() -> float:
+    return float(os.environ.get("MATRIX_CURSOR_AGENT_TIMEOUT_S", "180"))
+
+
+async def _prefetch_read_tool_context(registry: ToolRegistry | None) -> str:
+    """Run read-only registry tools locally; inject results when SDK MCP is unavailable."""
+    if registry is None:
+        return ""
+    blocks: list[str] = []
+    for t in registry.all():
+        if t.side_effect != "read":
+            continue
+        try:
+            result = await t.handler({})
+            payload = json.dumps(result, default=str)[:8000]
+        except Exception as e:
+            payload = f"ERROR: {e}"
+        blocks.append(f"### {t.name}\n{payload}")
+    return "\n\n".join(blocks)
+
+
+async def _cursor_cli_agent_stream(
+    *,
+    prompt: str,
+    system: str | None,
+    cwd: str,
+    tool_registry: ToolRegistry | None,
+    session_id: str,
+    max_turns: int,
+) -> AsyncIterator[AgentEvent]:
+    """Agent loop via CLI login — prefetches read tools, then one Cursor agent run."""
+    tool_ctx = await _prefetch_read_tool_context(tool_registry)
+    enriched = system or ""
+    if tool_ctx:
+        enriched = f"{enriched.rstrip()}\n\n## PRE-FETCHED TOOL RESULTS\n{tool_ctx}"
+
+    combined = _combine_prompt(system=enriched, user=prompt)
+    cmd = [
+        _cursor_bin(),
+        "agent",
+        "-p",
+        combined,
+        "--model",
+        CURSOR_MODEL_AUTO,
+        "--output-format",
+        "stream-json",
+        "--trust",
+        "--workspace",
+        cwd,
+    ]
+    api_key = _cursor_api_key()
+    if api_key:
+        cmd.extend(["--api-key", api_key])
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=cwd,
+        env=os.environ.copy(),
+    )
+    turns = 0
+    is_error = False
+    assert proc.stdout is not None
+    try:
+        while True:
+            line = await asyncio.wait_for(
+                proc.stdout.readline(),
+                timeout=_agent_stream_timeout_s(),
+            )
+            if not line:
+                break
+            raw = line.decode(errors="replace").strip()
+            if not raw:
+                continue
+            try:
+                ev = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            ev_type = ev.get("type", "")
+            if ev_type == "assistant":
+                chunks: list[str] = []
+                for block in (ev.get("message") or {}).get("content") or []:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        chunks.append(block.get("text", ""))
+                if chunks:
+                    yield AgentEvent("assistant_text", {"text": "".join(chunks)})
+            elif ev_type == "tool_call" and ev.get("subtype") == "started":
+                turns += 1
+                if turns >= max_turns:
+                    is_error = True
+                    proc.kill()
+                    break
+            elif ev_type == "result":
+                is_error = bool(ev.get("is_error"))
+    except TimeoutError:
+        is_error = True
+        proc.kill()
+        logger.warning(
+            "cursor_llm: CLI agent stream timed out after {:.0f}s",
+            _agent_stream_timeout_s(),
+        )
+
+    await proc.wait()
+    if proc.returncode not in (0, None) and not is_error:
+        is_error = True
+
+    yield AgentEvent(
+        "result",
+        {
+            "total_cost_usd": None,
+            "num_turns": turns,
+            "is_error": is_error,
+            "model": CURSOR_MODEL_AUTO,
+        },
+    )
+    logger.info(
+        "agent.usage session={s} backend=cursor-cli model={m} turns={t} status={st}",
+        s=session_id,
+        m=CURSOR_MODEL_AUTO,
+        t=turns,
+        st="error" if is_error else "finished",
+    )
+
+
 async def cursor_agent_stream(
     *,
     prompt: str,
@@ -301,13 +426,31 @@ async def cursor_agent_stream(
     max_turns: int = 12,
     session_id: str = "agent",
     limiter: AgentRateLimiter | None = None,
+    workspace: str | None = None,
 ) -> AsyncIterator[AgentEvent]:
-    """Multi-step Cursor agent run via cursor-sdk; yields normalized AgentEvents."""
+    """Multi-step Cursor agent run; yields normalized AgentEvents."""
     if not cursor_enabled():
         return
 
-    cwd = _cursor_cwd()
+    cwd = workspace or _cursor_cwd()
     turns = 0
+
+    # CLI login tokens do not satisfy cursor-sdk bridge; prefetch read tools instead.
+    if not _cursor_api_key():
+        from contextlib import nullcontext
+
+        slot = limiter.slot() if limiter is not None else nullcontext()
+        async with slot:
+            async for ev in _cursor_cli_agent_stream(
+                prompt=prompt,
+                system=system,
+                cwd=cwd,
+                tool_registry=tool_registry,
+                session_id=session_id,
+                max_turns=max_turns,
+            ):
+                yield ev
+        return
 
     from contextlib import nullcontext
 
@@ -318,7 +461,7 @@ async def cursor_agent_stream(
 
             async with await AsyncClient.launch_bridge(workspace=cwd) as client:
                 create_kwargs = _sdk_agent_options(cwd=cwd, mcp_servers=mcp_servers)
-                async with await client.agents.create(**create_kwargs) as agent:
+                async with await client.agents.create(create_kwargs) as agent:
                     send_prompt = _combine_prompt(system=system, user=prompt)
                     run = await agent.send(send_prompt)
                     async for ev in _map_cursor_messages(run):

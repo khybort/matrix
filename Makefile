@@ -305,6 +305,10 @@ bist-discover: ## Refresh BIST symbol metadata (new listings only; active flags 
 bist-poll: ## Run one BIST bar poll cycle and exit
 	$(DC) $(DC_DEV) exec ingestion-market uv run matrix-bist-bars --once
 
+.PHONY: graph-backfill-once
+graph-backfill-once: ## One backfill batch: re-extract heuristic docs via agent path
+	$(DC) $(DC_DEV) exec graph uv run python -m graph.main --backfill-once
+
 .PHONY: bist-bars-backfill
 bist-bars-backfill: ## Backfill BIST 1m bars (last 5d via yfinance; works off-session)
 	$(DC) $(DC_DEV) exec ingestion-market uv run matrix-bist-bars --once --interval 1m --period 5d
@@ -412,6 +416,10 @@ dev-agent-resume: ## Global kill switch OFF
 dev-agent-clean: ## Apply worktree cleanup policy (manual; cron is intentionally absent)
 	$(DC) $(DC_DEV) exec dev_agent uv run python -m dev_agent.tools.clean
 
+.PHONY: dev-agent-index
+dev-agent-index: ## Rebuild dev_codebase_nodes index (POST /codebase/reindex)
+	@curl -sf -X POST http://agent.matrix.local/codebase/reindex | python3 -m json.tool
+
 .PHONY: dev-agent-test
 dev-agent-test: ## Run dev_agent test suite (excludes live/E2E)
 	cd services/dev_agent && uv run pytest -v -m "not live"
@@ -458,7 +466,7 @@ llm-cursor: ## Route all LLM calls through Cursor Auto (`cursor agent login` or 
 	@./scripts/llm_backend.sh cursor
 
 .PHONY: cursor-login-docker
-cursor-login-docker: ## One-time Cursor CLI login inside matrix-agent (persists on matrix_cursor_agent volume)
+cursor-login-docker: ## One-time Cursor CLI login (matrix-agent volume → graph/dev_agent too)
 	@./scripts/cursor_login_docker.sh
 
 .PHONY: lock-llm-services

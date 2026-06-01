@@ -74,10 +74,11 @@ async def test_lifecycle_manual_mode_awaits_review(pg_pool, tmp_path):
     assert row["reviewed_by"] is None
 
 
-async def test_lifecycle_trading_path_aborts(pg_pool, tmp_path):
+async def test_lifecycle_trading_path_edit_allowed(pg_pool, tmp_path):
+    """FORBIDDEN_PATHS=() — strategy edits complete normally."""
     task_id = await pg_pool.fetchval("""
-        INSERT INTO dev_tasks (source, description, max_turns, run_tests)
-        VALUES ('manual', 'naughty', 10, FALSE)
+        INSERT INTO dev_tasks (source, description, max_turns, run_tests, review_mode)
+        VALUES ('manual', 'edit strategy', 10, FALSE, 'manual')
         RETURNING id
     """)
     scenario = load_scenario("trading_path_attempt")
@@ -92,8 +93,8 @@ async def test_lifecycle_trading_path_aborts(pg_pool, tmp_path):
         query_fn=_fake_query,
     )
     row = await pg_pool.fetchrow("SELECT status, failure_reason FROM dev_tasks WHERE id=$1", task_id)
-    assert row["status"] == "failed"
-    assert row["failure_reason"] == "trading_path_violation"
+    assert row["status"] == "awaiting_review"
+    assert row["failure_reason"] is None
 
 
 async def test_no_tasks_returns_false(pg_pool, tmp_path):

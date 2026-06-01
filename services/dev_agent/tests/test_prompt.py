@@ -14,9 +14,11 @@ def test_base_layer_mentions_forbidden_paths():
         handoff_snapshot=None,
         touches_files=[],
     )
+    assert "FORBIDDEN_PATHS is empty" in sp
     assert "services/strategy" in sp
     assert "services/agent" in sp
     assert "services/execution" in sp
+    assert "services/execution (certificate gates" in sp
 
 
 def test_lesson_layer_includes_all_passed_lessons():

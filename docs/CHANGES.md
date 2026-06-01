@@ -5,6 +5,51 @@
 
 ---
 
+## 2026-06-02 — Mutation proposal auto-apply fixes
+
+- `apply_proposal`: `slot_adjustment` updates `strategy_slot_configs` (was wrongly
+  writing `allocated_slots` into strategy_configs.params).
+- `apply_best_pending_safe`: lab_promotion uses per-strategy scan threshold (0.05 for
+  matrix_agent); slot_scorer adjustments auto-close; default `AUTO_APPLY_MIN_FITNESS=0.05`.
+- `slot_scorer`: large slot cuts recorded as `applied` audit rows (change is live in-tick).
+
+## 2026-06-02 — Graph semantic chunking for long-document extraction
+
+- `graph/chunking.py`: sentence/paragraph splits merged by bag-of-words cosine
+  similarity; agent runs per chunk, results merged via `parse_extraction.merge_extractions`.
+- Backfill + live ingestion both use chunked agent path when body > `GRAPH_CHUNK_MAX_CHARS`.
+
+## 2026-06-02 — Graph heuristic backfill scheduler + dev_agent task #1 docs
+
+- `graph/backfill.py`: background scheduler re-runs agent extraction on docs
+  where `graph_source != 'agent'` (batch/interval/cooldown via env).
+- `make graph-backfill-once` for manual one-shot batch.
+- dev_agent task #1 merged: README/config/prompt align on empty `FORBIDDEN_PATHS`.
+
+## 2026-06-02 — Cursor CLI agent stream (login without CURSOR_API_KEY)
+
+- `cursor_llm.cursor_agent_stream`: when CLI login is active but no API key,
+  prefetches read-only tool results and runs `cursor agent -p --stream-json`
+  instead of cursor-sdk bridge (fixes graph/synthesis/reflection agent loops).
+- Reflection: remove `--no-llm` from compose (LLM mutate path enabled).
+- dev_agent: event seq continues from MAX(seq) on task retry.
+
+## 2026-06-02 — Cursor Docker auth: shared config volume
+
+- `matrix_cursor_config:/root/.config/cursor` mounted on all LLM containers
+  alongside `matrix_cursor_agent:/root/.cursor` — login tokens live in
+  `auth.json` under config, not only in `.cursor`.
+
+## 2026-06-02 — dev_agent: Cursor backend + codebase context graph
+
+- `dev_agent/cursor_runner.py`: tool-loop tasks run via Cursor Auto when
+  `MATRIX_LLM_BACKEND=cursor` (shared `matrix_cursor_agent` volume + CLI in image).
+- `dev_agent/codebase.py`: indexes repo into `dev_codebase_nodes`; text retrieval
+  injected into system prompt; `POST /codebase/reindex`, `make dev-agent-index`.
+- `dev_agent/llm_backend.py`: routes Cursor vs Claude SDK; fails fast with
+  `llm_not_configured` when neither auth path is ready.
+- Docker: `dev_agent` gets Cursor CLI install + auth volume (dev compose).
+
 ## 2026-06-02 — Public dashboard overlay (DuckDNS / host :3030)
 
 - `docker-compose.public.yml` + `make up-dev-public`, `make public-ip`, `scripts/duckdns-update.sh`

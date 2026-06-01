@@ -137,3 +137,45 @@ def parse_extraction(parsed: dict | None) -> tuple[list[Entity], list[Relation]]
             )
 
     return entities, relations
+
+
+def merge_extractions(
+    parts: list[tuple[list[Entity], list[Relation]]],
+) -> tuple[list[Entity], list[Relation]]:
+    """Dedupe entities/relations from multiple semantic chunks."""
+    entities: list[Entity] = []
+    relations: list[Relation] = []
+    seen_e: set[tuple[str, str]] = set()
+    seen_r: set[tuple[str, str, str, str, str]] = set()
+
+    for ents, rels in parts:
+        for e in ents:
+            key = (e.type, e.canonical)
+            if key in seen_e:
+                continue
+            seen_e.add(key)
+            entities.append(e)
+            if len(entities) >= MAX_ENTITIES:
+                break
+        for r in rels:
+            key = (
+                r.source_type,
+                r.source_canonical,
+                r.edge_type,
+                r.target_type,
+                r.target_canonical,
+            )
+            if key in seen_r:
+                continue
+            if (r.source_type, r.source_canonical) not in seen_e:
+                continue
+            if (r.target_type, r.target_canonical) not in seen_e:
+                continue
+            seen_r.add(key)
+            relations.append(r)
+            if len(relations) >= MAX_RELATIONS:
+                break
+        if len(entities) >= MAX_ENTITIES and len(relations) >= MAX_RELATIONS:
+            break
+
+    return entities, relations

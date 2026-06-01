@@ -5,13 +5,12 @@ env vars or a YAML file. Changing it requires a code edit and a commit.
 
 2026-05-26: opened by operator directive. The autonomous learning loop
 needs dev_agent to be able to mutate strategy / agent / execution code
-based on its own outcome feedback. The runtime trading-safety wall
-(LIVE_EXECUTION_REQUIRES_CERT, has_valid_certificate, should_submit_live
-in matrix_shared.trading_safety) is independent of this gate and still
-blocks live order submission until a paper-trade certificate is granted.
+based on its own outcome feedback. Live capital safety lives in
+services/execution (order submission + matrix_shared.trading_safety:
+certificate gates, kill switch) — independent of this path gate.
 
 Rollback path: re-populate the tuple with the three service prefixes
-below, commit, redeploy dev_agent.
+(services/strategy/, services/agent/, services/execution/), commit, redeploy.
 """
 
 from __future__ import annotations
@@ -19,8 +18,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-# Empty since 2026-05-26 — dev_agent autonomous edits permitted everywhere.
-# Live execution safety enforced separately at runtime (trading_safety.py).
+# Empty since 2026-05-26 — dev_agent may Edit/Write anywhere in the worktree.
+# Live capital safety is NOT gated here; enforced in services/execution at order
+# submission (paper_trade_certificate, kill switch via matrix_shared.trading_safety).
 FORBIDDEN_PATHS: tuple[str, ...] = ()
 
 

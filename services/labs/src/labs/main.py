@@ -103,7 +103,7 @@ async def run(
     promote_scan_interval_s: float = DEFAULT_PROMOTE_SCAN_INTERVAL_S,
     auto_apply: bool = False,
     auto_apply_safe: bool = False,
-    auto_apply_min_fitness: Decimal = Decimal("0.10"),
+    auto_apply_min_fitness: Decimal = Decimal("0.05"),
 ) -> None:
     # Resolve symbols inside the event loop so crypto_universe() (which uses
     # asyncio.run() internally) doesn't bind the lru_cache'd asyncpg engine
@@ -337,7 +337,7 @@ def main() -> None:
         return
 
     import os
-    _min_fitness_str = args.auto_apply_min_fitness or os.environ.get("AUTO_APPLY_MIN_FITNESS", "0.10")
+    _min_fitness_str = args.auto_apply_min_fitness or os.environ.get("AUTO_APPLY_MIN_FITNESS", "0.05")
     auto_apply_min_fitness = Decimal(_min_fitness_str)
 
     logger.info(

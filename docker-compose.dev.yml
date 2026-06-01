@@ -17,11 +17,13 @@ x-matrix-dev-watch: &matrix-dev-watch
   entrypoint: ["uv", "run", "--with", "watchfiles", "python", "-m", "matrix_shared.dev_watchfiles"]
 
 # For `make llm-cursor`: persist container `agent login` state across restarts.
+# Auth tokens live in /root/.config/cursor/auth.json (NOT only /root/.cursor).
 # Do NOT mount ~/.local/share/cursor-agent from the host — on macOS that replaces
 # the in-image Linux CLI with Mach-O binaries (Exec format error in Docker).
 # Host `cursor agent login` does not propagate to Linux containers; use
-# `docker exec -it matrix-agent agent login` once, or set CURSOR_API_KEY in .env.
+# `make cursor-login-docker` once, or set CURSOR_API_KEY in .env.
 x-cursor-agent-auth-volume: &cursor-agent-auth-volume matrix_cursor_agent:/root/.cursor
+x-cursor-config-auth-volume: &cursor-config-auth-volume matrix_cursor_config:/root/.config/cursor
 
 services:
   # Python services — common pattern: mount src dirs + wrap CMD with watchfiles
@@ -69,6 +71,7 @@ services:
       - ./services/graph/src:/workspace/services/graph/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
       - *cursor-agent-auth-volume
+      - *cursor-config-auth-volume
 
   agent:
     <<: *matrix-dev-watch
@@ -82,6 +85,7 @@ services:
       - ./services/graph/src:/workspace/services/graph/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
       - *cursor-agent-auth-volume
+      - *cursor-config-auth-volume
 
   strategy:
     <<: *matrix-dev-watch
@@ -127,13 +131,14 @@ services:
   reflection:
     <<: *matrix-dev-watch
     command:
-      - "python -m reflection.main --interval 600 --no-llm"
+      - "python -m reflection.main --interval 600"
       - "/workspace/services/reflection/src"
       - "/workspace/packages/python-shared/src"
     volumes:
       - ./services/reflection/src:/workspace/services/reflection/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
       - *cursor-agent-auth-volume
+      - *cursor-config-auth-volume
 
   labs:
     <<: *matrix-dev-watch
@@ -161,6 +166,7 @@ services:
       - ./services/graph/src:/workspace/services/graph/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
       - *cursor-agent-auth-volume
+      - *cursor-config-auth-volume
 
   dev_agent:
     # Dev safety: force the spawned `claude` CLI onto subscription auth so a
@@ -169,6 +175,7 @@ services:
     # picks via .env.
     environment:
       ANTHROPIC_API_KEY: ""
+      MATRIX_CURSOR_CWD: /workspace
     <<: *matrix-dev-watch
     command:
       - "python -m dev_agent.main"
@@ -177,6 +184,8 @@ services:
     volumes:
       - ./services/dev_agent/src:/workspace/services/dev_agent/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
+      - *cursor-agent-auth-volume
+      - *cursor-config-auth-volume
 
   brain:
     # Dev safety: force the spawned `claude` CLI onto subscription auth.
@@ -194,6 +203,7 @@ services:
       - ./services/brain/src:/workspace/services/brain/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
       - *cursor-agent-auth-volume
+      - *cursor-config-auth-volume
 
   web:
     build:
@@ -211,3 +221,5 @@ services:
 volumes:
   matrix_cursor_agent:
     name: matrix_cursor_agent
+  matrix_cursor_config:
+    name: matrix_cursor_config

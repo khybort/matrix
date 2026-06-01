@@ -36,6 +36,8 @@ from graph.age import (
     upsert_document,
     upsert_entity,
 )
+from graph.backfill import BackfillConfig, backfill_tick, count_pending
+from graph.chunking import ChunkConfig, plan_semantic_chunks
 from graph.extract import extract_entities
 from graph.publish import DEFAULT_ASSETS, publish_all
 
@@ -54,7 +56,9 @@ async def _fetch_batch(limit: int, reprocess: bool) -> list[RawDocument]:
     return [r for r in rows if PROCESSED_KEY not in (r.meta or {})]
 
 
-async def _mark_processed(doc_id, source: str) -> None:
+async def _mark_processed(
+    doc_id, source: str, *, chunk_count: int = 1
+) -> None:
     async with session_scope() as session:
         doc = await session.get(RawDocument, doc_id)
         if doc is None:
@@ -62,18 +66,28 @@ async def _mark_processed(doc_id, source: str) -> None:
         new_meta = dict(doc.meta or {})
         new_meta[PROCESSED_KEY] = datetime.now(UTC).isoformat()
         new_meta["graph_source"] = source
+        new_meta["graph_chunks"] = chunk_count
         doc.meta = new_meta
+
+
+def _chunk_count(body: str | None) -> int:
+    cfg = ChunkConfig.from_env()
+    text = (body or "").strip()
+    if not cfg.enabled or len(text) <= cfg.max_chars:
+        return 1
+    return max(1, len(plan_semantic_chunks(text, cfg)))
 
 
 async def _process_doc(doc, sem: asyncio.Semaphore) -> bool:
     async with sem:
+        chunks = _chunk_count(doc.body)
         try:
             entities, relations, source = await extract_entities(doc.title, doc.body)
         except Exception as e:
             logger.exception(f"extract failed for {doc.id}: {e}")
             return False
         if not entities:
-            await _mark_processed(doc.id, source)
+            await _mark_processed(doc.id, source, chunk_count=chunks)
             return False
         try:
             await upsert_document(
@@ -101,10 +115,10 @@ async def _process_doc(doc, sem: asyncio.Semaphore) -> bool:
         except Exception as e:
             logger.exception(f"graph upsert failed for {doc.id}: {e}")
             return False
-        await _mark_processed(doc.id, source)
+        await _mark_processed(doc.id, source, chunk_count=chunks)
         logger.info(
             f"processed {doc.id} ({doc.source}): {len(entities)} entities, "
-            f"{len(relations)} relations (src={source})"
+            f"{len(relations)} relations (src={source}, chunks={chunks})"
         )
         return True
 
@@ -130,6 +144,8 @@ async def run(
     assets: tuple[str, ...] = DEFAULT_ASSETS,
 ) -> None:
     stop = asyncio.Event()
+    backfill_cfg = BackfillConfig.from_env()
+    last_backfill = 0.0
 
     def _handle_signal(*_: object) -> None:
         logger.info("shutdown signal received")
@@ -138,6 +154,14 @@ async def run(
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _handle_signal)
+
+    if backfill_cfg.enabled:
+        pending = await count_pending()
+        logger.info(
+            f"graph backfill enabled: batch={backfill_cfg.batch} "
+            f"interval={backfill_cfg.interval_s}s cooldown={backfill_cfg.cooldown_s}s "
+            f"pending={pending}"
+        )
 
     last_publish = 0.0
     while not stop.is_set():
@@ -148,6 +172,17 @@ async def run(
                 logger.info(f"tick: processed {n} documents")
         except Exception as e:
             logger.exception(f"tick failed: {e}")
+
+        if (
+            backfill_cfg.enabled
+            and loop_started - last_backfill >= backfill_cfg.interval_s
+        ):
+            try:
+                await backfill_tick(_process_doc)
+                last_backfill = loop_started
+            except Exception as e:
+                logger.exception(f"backfill tick failed: {e}")
+                last_backfill = loop_started
 
         if loop_started - last_publish >= publish_interval_s:
             try:
@@ -178,6 +213,17 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=DEFAULT_BATCH)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--reprocess", action="store_true")
+    parser.add_argument(
+        "--backfill-once",
+        action="store_true",
+        help="Run one backfill batch (heuristic→agent upgrade) and exit",
+    )
+    parser.add_argument(
+        "--backfill-limit",
+        type=int,
+        default=None,
+        help="Override GRAPH_BACKFILL_BATCH for --backfill-once",
+    )
     parser.add_argument("--summary", action="store_true", help="Print graph counts and exit")
     parser.add_argument(
         "--publish-once", action="store_true",
@@ -201,6 +247,13 @@ def main() -> None:
             n = await publish_all(args.assets)
             logger.info(f"publish-once: {n} non-empty signals flushed")
         asyncio.run(_p())
+        return
+
+    if args.backfill_once:
+        async def _bf():
+            n = await backfill_tick(_process_doc, limit=args.backfill_limit)
+            logger.info(f"backfill-once: upgraded {n} document(s)")
+        asyncio.run(_bf())
         return
 
     logger.info(

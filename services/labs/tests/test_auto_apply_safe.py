@@ -126,6 +126,53 @@ async def test_wallet():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
+async def test_safe_apply_takes_lab_promotion_at_strategy_threshold():
+    """lab_promotion meeting per-strategy scan threshold auto-applies."""
+    from labs.promote import apply_best_pending_safe
+
+    sid = "matrix_agent"
+    async with shared_session_scope() as session:
+        existing = (
+            await session.execute(
+                select(StrategyConfig)
+                .where(StrategyConfig.strategy_id == sid)
+                .where(StrategyConfig.status == "active")
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            session.add(
+                StrategyConfig(
+                    strategy_id=sid,
+                    asset_class="crypto",
+                    version=1,
+                    status="active",
+                    params={"signal_threshold": "0.18"},
+                    rationale="test-lab-auto",
+                )
+            )
+
+    pid = await _insert_proposal(
+        sid,
+        proposal_type="lab_promotion",
+        metrics_window={
+            "fitness_score": "0.053813",
+            "promotion_min_fitness": "0.05",
+        },
+        source="labs",
+    )
+
+    try:
+        applied = await apply_best_pending_safe(min_fitness=Decimal("0.05"))
+        assert pid in applied
+        assert await _get_proposal_status(pid) == "applied"
+    finally:
+        async with shared_session_scope() as session:
+            await session.execute(
+                delete(MutationProposal).where(MutationProposal.id == pid)
+            )
+
+
+@pytest.mark.asyncio
 async def test_safe_apply_skips_low_fitness():
     """lab_promotion with fitness below threshold must stay pending."""
     from labs.promote import apply_best_pending_safe
@@ -202,23 +249,45 @@ async def test_safe_apply_skips_weight_tune():
 
 
 @pytest.mark.asyncio
-async def test_safe_apply_takes_slot_adjustment_high_losses(test_wallet):
-    """slot_adjustment from slot_scorer with consecutive_losses >= 5 must be applied."""
+async def test_safe_apply_takes_slot_adjustment_from_slot_scorer(test_wallet):
+    """slot_adjustment from slot_scorer is applied to strategy_slot_configs."""
     from labs.promote import apply_best_pending_safe
 
     sid = _make_sid()
     await _insert_strategy(sid)
+    async with shared_session_scope() as session:
+        session.add(
+            StrategySlotConfig(
+                strategy_id=sid,
+                asset_class="crypto",
+                wallet_id=test_wallet,
+                allocated_slots=6,
+                perf_score=0.2,
+                consecutive_losses=2,
+            )
+        )
     pid = await _insert_proposal(
         sid,
         proposal_type="slot_adjustment",
-        metrics_window={"consecutive_losses": 5},
+        metrics_window={"consecutive_losses": 2},
         source="slot_scorer",
+        asset_class="crypto",
     )
+    async with shared_session_scope() as session:
+        p = await session.get(MutationProposal, pid)
+        assert p is not None
+        p.after_params = {"allocated_slots": 2}
 
     try:
-        applied = await apply_best_pending_safe(min_fitness=Decimal("0.10"))
-        assert pid in applied, "slot_adjustment with 5+ losses should be applied"
+        applied = await apply_best_pending_safe(min_fitness=Decimal("0.05"))
+        assert pid in applied, "slot_adjustment from slot_scorer should be applied"
         assert await _get_proposal_status(pid) == "applied"
+        async with shared_session_scope() as session:
+            cfg = await session.get(
+                StrategySlotConfig, (sid, "crypto", test_wallet)
+            )
+            assert cfg is not None
+            assert cfg.allocated_slots == 2
     finally:
         await _cleanup(sid)
 

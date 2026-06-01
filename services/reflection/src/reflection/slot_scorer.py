@@ -2,8 +2,8 @@
 
 Score formula: 0.4 * win_rate + 0.3 * clamp(avg_pnl_pct / 0.02, -1, 1) + 0.3 * clamp(total_pnl_usd / 10, -1, 1)
 Consecutive losses >= 5: auto-cut to 1 slot (no approval needed).
-Changes > 50% reduction or recovery from 1: written as slot_adjustment
-MutationProposal for operator approval via the lessons dashboard.
+Changes > 50% reduction or recovery from 1: recorded as an applied slot_adjustment
+MutationProposal (audit trail — live slots already updated in the same tick).
 """
 
 from __future__ import annotations
@@ -172,13 +172,14 @@ async def score_strategy_slots() -> int:
                             f"avg_pnl_pct={avg_pnl_pct:.4f} total_pnl_usd={total_pnl_usd:.2f} "
                             f"consec_losses={consec}"
                         ),
-                        status="pending",
+                        status="applied",
                         source="slot_scorer",
+                        applied_at=datetime.now(UTC),
                     )
                 )
                 logger.info(
-                    f"slot proposal: {config.strategy_id}/{config.asset_class} "
-                    f"{old_slots}→{new_slots} (awaiting approval)"
+                    f"slot audit: {config.strategy_id}/{config.asset_class} "
+                    f"{old_slots}→{new_slots} (recorded as applied)"
                 )
             else:
                 logger.info(

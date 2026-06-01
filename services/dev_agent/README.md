@@ -1,8 +1,10 @@
 # matrix-dev_agent
 
 Self-improving development agent. Drives Claude Code via the Claude Agent SDK
-in isolated git worktrees. Default-deny: trading paths (`services/strategy/`,
-`services/agent/`, `services/execution/`) are hardcoded blocked.
+in isolated git worktrees. `FORBIDDEN_PATHS` in `config.py` is empty (since
+2026-05-26): autonomous Edit/Write is allowed everywhere, including
+`services/strategy/`, `services/agent/`, and `services/execution/`. Live capital
+safety is enforced separately in `services/execution` at order-submission time.
 
 ## Quick start
 
@@ -89,10 +91,13 @@ cd services/dev_agent && uv run pytest -v -m live
 
 Hard rules — none of them can be turned off via config:
 
-- **Trading paths** blocked at the `can_use_tool` boundary (`services/dev_agent/safety.py`).
-  Edit/Write into `services/strategy/`, `services/agent/`, or `services/execution/`
-  immediately fails the task with `failure_reason='trading_path_violation'`.
-  Read/Grep/Glob into those paths is allowed.
+- **Path edits**: `FORBIDDEN_PATHS` in `config.py` is `()` — Edit/Write to
+  strategy/agent/execution is permitted (`safety.py` only blocks prefixes listed
+  in that tuple). Repopulate the tuple to restore default-deny and
+  `failure_reason='trading_path_violation'`.
+- **Live capital**: enforced in `services/execution` (paper-trade certificate,
+  kill switch via `matrix_shared.trading_safety`) — independent of dev_agent
+  path policy.
 - **`dev-agent/*` branches** cannot be pushed (`infra/hooks/pre-push`).
   Install with `make install-hooks`.
 - **Per-task cost cap** defaults to $5; daily cap to $50. Env vars:

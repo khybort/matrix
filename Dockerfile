@@ -83,7 +83,7 @@ RUN if [ "${SERVICE}" = "dev_agent" ] || [ "${SERVICE}" = "brain" ]; then \
     fi
 # LLM services using the Cursor backend spawn `cursor agent` (subscription login
 # or optional CURSOR_API_KEY). Install the CLI in-image; mount host auth dirs in compose.
-RUN case "${SERVICE}" in graph|agent|brain|synthesis|reflection) \
+RUN case "${SERVICE}" in graph|agent|brain|synthesis|reflection|dev_agent) \
         curl -fsSL https://cursor.com/install | bash \
         && printf '%s\n' '#!/bin/sh' 'if [ "$1" = "agent" ]; then shift; fi' 'exec /root/.local/bin/agent "$@"' \
             > /root/.local/bin/cursor \

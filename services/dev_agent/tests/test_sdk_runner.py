@@ -46,10 +46,11 @@ async def test_simple_edit_scenario_records_all_events(pg_pool, tmp_path):
     assert len(events) == 6
 
 
-async def test_trading_path_scenario_aborts_with_reason(pg_pool, tmp_path):
+async def test_trading_path_scenario_completes_when_gate_open(pg_pool, tmp_path):
+    """FORBIDDEN_PATHS=() — Edit to services/strategy is not blocked."""
     task_id = await pg_pool.fetchval("""
         INSERT INTO dev_tasks (status, source, description, max_turns)
-        VALUES ('running', 'manual', 'bad', 10)
+        VALUES ('running', 'manual', 'edit strategy', 10)
         RETURNING id
     """)
     run_id = await pg_pool.fetchval("""
@@ -69,8 +70,8 @@ async def test_trading_path_scenario_aborts_with_reason(pg_pool, tmp_path):
         scenario=scenario,
         query_fn=fake_query,
     )
-    assert result.completed is False
-    assert result.failure_reason == "trading_path_violation"
+    assert result.completed is True
+    assert result.failure_reason is None
 
 
 async def test_max_turns_exceeded_aborts(pg_pool, tmp_path):

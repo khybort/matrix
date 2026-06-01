@@ -4,7 +4,8 @@
 # Host `cursor agent login` (macOS) does NOT propagate into Docker. Copying
 # ~/.cursor/cli-config.json is insufficient — session tokens are bound to the
 # container login flow. Use this script once per machine (state persists on
-# volume matrix_cursor_agent → /root/.cursor).
+# volume matrix_cursor_agent → /root/.cursor and matrix_cursor_config →
+# /root/.config/cursor (auth.json lives here).
 #
 # Alternatives:
 #   - Set CURSOR_API_KEY in .env (Dashboard → Integrations), then make up-dev
@@ -101,7 +102,7 @@ while [ "$SECONDS" -lt "$deadline" ]; do
   if cursor_is_logged_in "$status"; then
     echo ""
     echo "$status"
-    echo "✓ Container authenticated (shared by graph/synthesis/reflection via volume)."
+    echo "✓ Container authenticated (shared by graph/synthesis/reflection/dev_agent via volume)."
     exit 0
   fi
   sleep 3

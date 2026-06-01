@@ -84,6 +84,12 @@ def _thresholds_for(strategy_id: str) -> tuple[int, Decimal]:
         strategy_id, (MIN_EVAL_FOR_PROMOTION, MIN_FITNESS_FOR_PROMOTION)
     )
 
+
+def _lab_auto_apply_min_fitness(strategy_id: str, global_min: Decimal) -> Decimal:
+    """Auto-apply bar for lab_promotion — never below the scan threshold."""
+    _, scan_min = _thresholds_for(strategy_id)
+    return max(scan_min, global_min)
+
 # Risk-cap fields that must NEVER ride along with a proposal's after_params.
 FORBIDDEN_FIELDS = {
     "max_position_pct",
@@ -96,10 +102,9 @@ FORBIDDEN_FIELDS = {
 LAB_PROMOTION_TYPE = "lab_promotion"
 
 # Deterministic strategies whose rule-generated param_tune proposals are
-# eligible for auto-apply. matrix_agent is intentionally excluded — its
-# weight_tune proposals still require manual or lab-driven review.
+# eligible for auto-apply. matrix_agent is excluded — weight/param changes
+# from reflection go through lab_promotion or manual review.
 SAFE_PARAM_TUNE_STRATEGIES: frozenset[str] = frozenset({
-    "matrix_agent",
     "grid", "dca", "oi_delta", "oi_breakout",
     "funding_reversion",
     "bist_gap_fade", "bist_intraday_reversion", "bist_volume_breakout",
@@ -162,17 +167,16 @@ async def scan_for_promotions(
 
     min_eval / min_fitness default to per-strategy values from STRATEGY_THRESHOLDS,
     falling back to MIN_EVAL_FOR_PROMOTION / MIN_FITNESS_FOR_PROMOTION if not set.
+
+    Returns the new proposal id, or None if no candidate qualifies or a
+    pending proposal already exists.
     """
     _default_eval, _default_fit = _thresholds_for(strategy_id)
     if min_eval is None:
         min_eval = _default_eval
     if min_fitness is None:
         min_fitness = _default_fit
-    """Detect a promotable lab experiment and write a MutationProposal.
 
-    Returns the new proposal id, or None if no candidate qualifies or a
-    pending proposal already exists.
-    """
     async with shared_session_scope() as session:
         # Best eligible lab candidate
         cand_stmt = (
@@ -253,6 +257,7 @@ async def scan_for_promotions(
                 "lab_experiment_id": str(candidate.id),
                 "lab_generation": candidate.generation,
                 "fitness_score": str(candidate.fitness_score),
+                "promotion_min_fitness": str(min_fitness),
                 "n_evaluations": candidate.n_evaluations,
                 "n_wins": candidate.n_wins,
                 "win_rate": str(win_rate),
@@ -301,15 +306,7 @@ def _params_equivalent(a: dict[str, Any] | None, b: dict[str, Any] | None) -> bo
 
 
 async def apply_proposal(proposal_id: uuid.UUID) -> bool:
-    """Apply a pending lab_promotion proposal. Returns True on success.
-
-    Steps:
-        1. Load proposal; verify status=pending and type=lab_promotion.
-        2. Scrub forbidden fields from after_params (defense-in-depth).
-        3. Find current active StrategyConfig for the strategy; mark retired.
-        4. Insert new StrategyConfig at to_version with after_params, active.
-        5. Mark proposal applied, mark lab experiment promoted.
-    """
+    """Apply a pending MutationProposal. Returns True on success."""
     async with shared_session_scope() as session:
         proposal = await session.get(MutationProposal, proposal_id)
         if proposal is None:
@@ -318,10 +315,14 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
         if proposal.status != "pending":
             logger.error(f"apply: proposal {proposal_id} already {proposal.status}")
             return False
+
+        if proposal.proposal_type == "slot_adjustment":
+            return await _apply_slot_adjustment(session, proposal)
+
         if proposal.proposal_type != LAB_PROMOTION_TYPE:
-            # We can still apply non-lab proposals here, but the lab status flip
-            # below is skipped. Tighten later if needed.
-            logger.info(f"apply: non-lab proposal type {proposal.proposal_type}; proceeding")
+            logger.info(
+                f"apply: non-lab proposal type {proposal.proposal_type}; proceeding"
+            )
 
         scrubbed = _scrub_forbidden(proposal.after_params or {})
 
@@ -430,6 +431,87 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
     return True
 
 
+async def _apply_slot_adjustment(session, proposal: MutationProposal) -> bool:
+    """Apply slot_adjustment to strategy_slot_configs (not strategy_configs.params)."""
+    after = proposal.after_params or {}
+    try:
+        new_slots = int(after["allocated_slots"])
+    except (KeyError, TypeError, ValueError):
+        logger.error(
+            f"apply: slot_adjustment {proposal.id} missing allocated_slots in after_params"
+        )
+        return False
+
+    configs = list(
+        (
+            await session.execute(
+                select(StrategySlotConfig).where(
+                    StrategySlotConfig.strategy_id == proposal.strategy_id,
+                    StrategySlotConfig.asset_class == proposal.asset_class,
+                )
+            )
+        ).scalars()
+    )
+    if not configs:
+        logger.warning(
+            f"apply: no strategy_slot_configs for {proposal.strategy_id}/"
+            f"{proposal.asset_class}; marking applied anyway"
+        )
+
+    for cfg in configs:
+        cfg.allocated_slots = new_slots
+        cfg.updated_at = datetime.now(UTC)
+
+    proposal.status = "applied"
+    proposal.applied_at = datetime.now(UTC)
+    logger.info(
+        f"apply: slot_adjustment {proposal.id} → {proposal.strategy_id}/"
+        f"{proposal.asset_class} allocated_slots={new_slots} "
+        f"({len(configs)} wallet row(s))"
+    )
+    return True
+
+
+async def finalize_pending_slot_proposals() -> int:
+    """Close pending slot_adjustment rows that already match live slot configs."""
+    finalized = 0
+    async with shared_session_scope() as session:
+        pending = list(
+            (
+                await session.execute(
+                    select(MutationProposal)
+                    .where(MutationProposal.status == "pending")
+                    .where(MutationProposal.proposal_type == "slot_adjustment")
+                    .where(MutationProposal.source == "slot_scorer")
+                )
+            ).scalars()
+        )
+        for proposal in pending:
+            try:
+                target = int((proposal.after_params or {})["allocated_slots"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            rows = list(
+                (
+                    await session.execute(
+                        select(StrategySlotConfig).where(
+                            StrategySlotConfig.strategy_id == proposal.strategy_id,
+                            StrategySlotConfig.asset_class == proposal.asset_class,
+                        )
+                    )
+                ).scalars()
+            )
+            if not rows:
+                continue
+            if all(r.allocated_slots == target for r in rows):
+                proposal.status = "applied"
+                proposal.applied_at = datetime.now(UTC)
+                finalized += 1
+    if finalized:
+        logger.info(f"apply-safe: finalized {finalized} slot_adjustment audit row(s)")
+    return finalized
+
+
 async def scan_all_strategies() -> list[uuid.UUID]:
     """Run scan_for_promotions for every strategy that has lab evolution.
 
@@ -454,18 +536,18 @@ async def scan_all_strategies() -> list[uuid.UUID]:
 
 
 async def apply_best_pending_safe(
-    min_fitness: Decimal = Decimal("0.10"),
+    min_fitness: Decimal = Decimal("0.05"),
 ) -> list[uuid.UUID]:
     """Auto-apply eligible pending proposals across all strategies.
 
     Eligible proposal types and their criteria:
-      - lab_promotion: metrics_window["fitness_score"] >= min_fitness
-      - slot_adjustment (source=slot_scorer): metrics_window["consecutive_losses"] >= 5
-      - Everything else (weight_tune, llm_guide, …): NOT eligible.
-
-    Processes proposals oldest-first. Returns list of applied proposal ids.
-    Defensive: bad metrics_window values cause a skip + warning, never a crash.
+      - lab_promotion: fitness >= per-strategy scan threshold
+      - slot_adjustment (source=slot_scorer): all (updates strategy_slot_configs)
+      - param_tune (source=rule): strategy in SAFE_PARAM_TUNE_STRATEGIES
+      - weight_tune, llm_guide, …: NOT eligible.
     """
+    await finalize_pending_slot_proposals()
+
     async with shared_session_scope() as session:
         stmt = (
             select(MutationProposal)
@@ -489,30 +571,22 @@ async def apply_best_pending_safe(
                     f"fitness_score ({exc}); skipping"
                 )
                 continue
-            if fitness >= min_fitness:
+            bar = _lab_auto_apply_min_fitness(proposal.strategy_id, min_fitness)
+            if mw.get("promotion_min_fitness") is not None:
+                try:
+                    bar = max(bar, Decimal(str(mw["promotion_min_fitness"])))
+                except (TypeError, ValueError):
+                    pass
+            if fitness >= bar:
                 eligible_ids.append(pid)
             else:
                 logger.debug(
                     f"apply-safe: proposal {pid} lab_promotion fitness "
-                    f"{fitness} < {min_fitness}; skipping"
+                    f"{fitness} < {bar}; skipping"
                 )
 
         elif ptype == "slot_adjustment" and proposal.source == "slot_scorer":
-            try:
-                losses = int(mw["consecutive_losses"])
-            except (KeyError, TypeError, ValueError) as exc:
-                logger.warning(
-                    f"apply-safe: proposal {pid} slot_adjustment missing/bad "
-                    f"consecutive_losses ({exc}); skipping"
-                )
-                continue
-            if losses >= 5:
-                eligible_ids.append(pid)
-            else:
-                logger.debug(
-                    f"apply-safe: proposal {pid} slot_adjustment losses "
-                    f"{losses} < 5; skipping"
-                )
+            eligible_ids.append(pid)
 
         elif ptype == "param_tune" and proposal.source == "rule":
             if proposal.strategy_id in SAFE_PARAM_TUNE_STRATEGIES:

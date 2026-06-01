@@ -25,11 +25,13 @@ from matrix_shared import call_claude_json
 from matrix_shared.subscription_llm import MODEL_SONNET
 
 from graph.agent_extract import run_extract_agent
+from graph.chunking import ChunkConfig, plan_semantic_chunks
 from graph.parsing import (
     ALLOWED_EDGE_TYPES,
     ALLOWED_ENTITY_TYPES,
     Entity,
     Relation,
+    merge_extractions,
     parse_extraction,
 )
 
@@ -137,6 +139,59 @@ async def llm_extract(
     return entities, relations
 
 
+async def _run_agent_path(
+    title: str | None, body: str | None
+) -> tuple[list[Entity], list[Relation]] | None:
+    cfg = ChunkConfig.from_env()
+    text = (body or "").strip()
+    if not cfg.enabled or len(text) <= cfg.max_chars:
+        return await run_extract_agent(title, body)
+
+    chunks = plan_semantic_chunks(text, cfg)
+    if len(chunks) <= 1:
+        return await run_extract_agent(title, body)
+
+    logger.info(f"semantic chunking: {len(chunks)} chunks for {len(text)} chars")
+    parts: list[tuple[list[Entity], list[Relation]]] = []
+    for chunk in chunks:
+        chunk_title = title if chunk.index == 0 else None
+        chunk_body = chunk.text
+        if chunk.index > 0:
+            chunk_body = f"[section {chunk.index + 1}/{len(chunks)}]\n{chunk.text}"
+        result = await run_extract_agent(chunk_title, chunk_body)
+        if result is not None and result[0]:
+            parts.append(result)
+
+    if not parts:
+        return None
+    entities, relations = merge_extractions(parts)
+    return (entities, relations) if entities else None
+
+
+async def _llm_extract_chunked(
+    title: str | None, body: str | None
+) -> tuple[list[Entity], list[Relation]] | None:
+    cfg = ChunkConfig.from_env()
+    text = (body or "").strip()
+    if not cfg.enabled or len(text) <= 4000:
+        return await llm_extract(title, body)
+
+    chunks = plan_semantic_chunks(text, cfg)
+    if len(chunks) <= 1:
+        return await llm_extract(title, body)
+
+    parts: list[tuple[list[Entity], list[Relation]]] = []
+    for chunk in chunks:
+        chunk_title = title if chunk.index == 0 else None
+        result = await llm_extract(chunk_title, chunk.text)
+        if result is not None and result[0]:
+            parts.append(result)
+    if not parts:
+        return None
+    entities, relations = merge_extractions(parts)
+    return (entities, relations) if entities else None
+
+
 async def extract_entities(
     title: str | None, body: str | None
 ) -> tuple[list[Entity], list[Relation], str]:
@@ -145,14 +200,14 @@ async def extract_entities(
     'agent' | 'llm' | 'heuristic'.
     """
     try:
-        agent_result = await run_extract_agent(title, body)
+        agent_result = await _run_agent_path(title, body)
     except Exception as e:
         logger.warning(f"extract: agent path raised: {e}")
         agent_result = None
     if agent_result is not None and agent_result[0]:
         return agent_result[0], agent_result[1], "agent"
 
-    llm_result = await llm_extract(title, body)
+    llm_result = await _llm_extract_chunked(title, body)
     if llm_result is not None and llm_result[0]:
         return llm_result[0], llm_result[1], "llm"
 
