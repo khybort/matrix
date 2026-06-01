@@ -12,6 +12,7 @@ code in the same commit.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -66,6 +67,34 @@ DEFAULT_MIN_OUTCOMES = 200
 DEFAULT_MIN_WIN_RATE = Decimal("0.40")
 DEFAULT_MIN_TOTAL_PNL_USD = Decimal("0.00")
 DEFAULT_MAX_DRAWDOWN_PCT = Decimal("0.15")
+
+# Optional .env overrides for cert grants (defaults above = docs/TRADING.md).
+# Raise again before mainnet; unset vars restore production thresholds.
+_ENV_MIN_OBSERVATION_DAYS = "MATRIX_CERT_MIN_OBSERVATION_DAYS"
+_ENV_MIN_OUTCOMES = "MATRIX_CERT_MIN_OUTCOMES"
+_ENV_MIN_WIN_RATE = "MATRIX_CERT_MIN_WIN_RATE"
+_ENV_MIN_TOTAL_PNL_USD = "MATRIX_CERT_MIN_TOTAL_PNL_USD"
+_ENV_MAX_DRAWDOWN_PCT = "MATRIX_CERT_MAX_DRAWDOWN_PCT"
+
+
+def cert_eligibility_thresholds() -> dict[str, int | Decimal]:
+    """Thresholds for maybe_grant_certificate / evaluate_eligibility."""
+
+    def _int(name: str, default: int) -> int:
+        raw = os.environ.get(name, "").strip()
+        return int(raw) if raw else default
+
+    def _dec(name: str, default: Decimal) -> Decimal:
+        raw = os.environ.get(name, "").strip()
+        return Decimal(raw) if raw else default
+
+    return {
+        "min_observation_days": _int(_ENV_MIN_OBSERVATION_DAYS, DEFAULT_MIN_OBSERVATION_DAYS),
+        "min_outcomes": _int(_ENV_MIN_OUTCOMES, DEFAULT_MIN_OUTCOMES),
+        "min_win_rate": _dec(_ENV_MIN_WIN_RATE, DEFAULT_MIN_WIN_RATE),
+        "min_total_pnl_usd": _dec(_ENV_MIN_TOTAL_PNL_USD, DEFAULT_MIN_TOTAL_PNL_USD),
+        "max_drawdown_pct": _dec(_ENV_MAX_DRAWDOWN_PCT, DEFAULT_MAX_DRAWDOWN_PCT),
+    }
 
 # Drawdown denominator. Cumulative-PnL peak alone breaks down in early Phase
 # when peak is near zero; expressing dd as a fraction of starting capital
@@ -224,9 +253,8 @@ async def maybe_grant_certificate(
         ):
             return (False, None, "already granted")
 
-    # Forward only the kwargs the caller overrode; let evaluate_eligibility's
-    # own defaults win otherwise so docs/TRADING.md numbers stay authoritative.
-    kw: dict = {}
+    # Env overrides (MATRIX_CERT_*) apply unless caller passes explicit kwargs.
+    kw: dict = dict(cert_eligibility_thresholds())
     if min_observation_days is not None:
         kw["min_observation_days"] = min_observation_days
     if min_outcomes is not None:

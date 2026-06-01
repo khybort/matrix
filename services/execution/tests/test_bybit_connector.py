@@ -132,7 +132,7 @@ async def test_place_order_dry_run_when_creds_missing(wallet_id, grant_cert, mon
     assert resp.dry_run is True
     assert resp.ok is True
     assert resp.order_id is None
-    assert resp.raw.get("dry_run_reason", "").startswith("BYBIT_API_KEY")
+    assert resp.raw.get("dry_run_reason", "").startswith("BYBIT_TESTNET_API_KEY")
     assert "would_be_payload" in resp.raw
     assert resp.raw["would_be_payload"]["symbol"] == "BTCUSDT"
 
@@ -183,3 +183,16 @@ def test_signing_includes_all_required_headers():
     assert headers["X-BAPI-RECV-WINDOW"] == "5000"
     assert len(headers["X-BAPI-SIGN"]) == 64
     assert headers["Content-Type"] == "application/json"
+
+
+def test_credentials_use_testnet_env_when_testnet(monkeypatch):
+    monkeypatch.setenv("BYBIT_TESTNET_API_KEY", "tn-key")
+    monkeypatch.setenv("BYBIT_TESTNET_API_SECRET", "tn-secret")
+    monkeypatch.setenv("BYBIT_API_KEY", "mn-key")
+    monkeypatch.setenv("BYBIT_API_SECRET", "mn-secret")
+
+    connector = BybitConnector(testnet=True)
+    assert connector._credentials() == ("tn-key", "tn-secret")
+
+    connector_main = BybitConnector(testnet=False)
+    assert connector_main._credentials() == ("mn-key", "mn-secret")

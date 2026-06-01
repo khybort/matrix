@@ -70,14 +70,16 @@ async def _report_market(
 async def _heartbeat_once(cfg: _ExecCfg) -> None:
     live = _env_live_enabled()
     cap = os.environ.get("LIVE_CAPITAL_CAP_USD", "(unset)")
+    network = "testnet" if cfg.testnet else "mainnet"
     if live:
         logger.warning(
-            f"LIVE_EXECUTION_ENABLED=true; LIVE_CAPITAL_CAP_USD={cap}. "
+            f"LIVE_EXECUTION_ENABLED=true; network={network}; "
+            f"LIVE_CAPITAL_CAP_USD={cap}. "
             "Order submission still requires per-strategy cert + gate green."
         )
     else:
         logger.info(
-            "gate CLOSED (LIVE_EXECUTION_ENABLED=false). "
+            f"gate CLOSED (LIVE_EXECUTION_ENABLED=false, network={network}). "
             "Ready and idle; no orders will be submitted."
         )
 

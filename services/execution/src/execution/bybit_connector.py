@@ -179,6 +179,7 @@ class BybitConnector:
             capacity=rate_limit_per_sec,  # 1-second burst
         )
         self._client: httpx.AsyncClient | None = None
+        self._cred_label = "BYBIT_API_KEY / BYBIT_API_SECRET"
 
     # ---- env / readiness ----
 
@@ -186,11 +187,17 @@ class BybitConnector:
     def _live_enabled() -> bool:
         return os.environ.get("LIVE_EXECUTION_ENABLED", "false").strip().lower() == "true"
 
-    @staticmethod
-    def _credentials() -> tuple[str, str] | None:
-        key = os.environ.get("BYBIT_API_KEY", "").strip()
-        secret = os.environ.get("BYBIT_API_SECRET", "").strip()
+    def _credentials(self) -> tuple[str, str] | None:
+        if self.testnet:
+            key = os.environ.get("BYBIT_TESTNET_API_KEY", "").strip()
+            secret = os.environ.get("BYBIT_TESTNET_API_SECRET", "").strip()
+            label = "BYBIT_TESTNET_API_KEY / BYBIT_TESTNET_API_SECRET"
+        else:
+            key = os.environ.get("BYBIT_API_KEY", "").strip()
+            secret = os.environ.get("BYBIT_API_SECRET", "").strip()
+            label = "BYBIT_API_KEY / BYBIT_API_SECRET"
         if not key or not secret:
+            self._cred_label = label
             return None
         return key, secret
 
@@ -204,7 +211,7 @@ class BybitConnector:
         if not self._live_enabled():
             return True, "LIVE_EXECUTION_ENABLED is not 'true'"
         if self._credentials() is None:
-            return True, "BYBIT_API_KEY / BYBIT_API_SECRET missing"
+            return True, f"{self._cred_label} missing"
         return False, ""
 
     # ---- http client lifecycle ----

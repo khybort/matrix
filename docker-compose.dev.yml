@@ -122,6 +122,7 @@ services:
     volumes:
       - ./services/backtest/src:/workspace/services/backtest/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
+      - ./scripts:/workspace/scripts
 
   reflection:
     <<: *matrix-dev-watch

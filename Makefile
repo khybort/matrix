@@ -479,6 +479,14 @@ llm-haiku: ## Set default tier to Haiku (decision/feeder/bulletin; quality loops
 llm-sonnet: ## Set default tier back to Sonnet
 	@./scripts/llm_backend.sh sonnet
 
+.PHONY: bybit-test-order
+bybit-test-order: ## Place one small market order on Bybit testnet (BTCUSDT 0.001)
+	$(DC) $(DC_DEV) exec backtest uv run python /workspace/scripts/bybit_test_order.py
+
+.PHONY: trade-status
+trade-status: ## Show Bybit network + live execution gate from .env
+	@./scripts/trade_status.sh
+
 .PHONY: llm-status
 llm-status: ## Show current LLM backend + default tier (from .env)
 	@./scripts/llm_backend.sh status

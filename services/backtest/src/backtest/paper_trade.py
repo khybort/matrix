@@ -22,6 +22,7 @@ from sqlalchemy import func, select, text
 
 from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.allocation import expected_value, load_pair_edges, risk_multiplier
+from matrix_shared.exchange_shadow import shadow_close_position, shadow_open_position
 from matrix_shared.markets import all_markets
 from matrix_shared.models import (
     MarketBar,
@@ -599,6 +600,15 @@ async def _open_for_market(asset_class: str) -> int:
             f"opened {p.side} {p.symbol} [{p.asset_class}] notional={notional:.2f} "
             f"entry={entry:.4f} (pred={p.id}, strat={p.strategy_id}v{p.strategy_version})"
         )
+        try:
+            await shadow_open_position(
+                prediction=p,
+                wallet_id=wallet.id,
+                entry_price=entry,
+                notional_usd=notional,
+            )
+        except Exception as e:  # noqa: BLE001 — shadow must not break paper
+            logger.warning(f"shadow open error pred={p.id}: {e}")
     return opened
 
 
@@ -779,4 +789,8 @@ async def close_due_positions() -> int:
             f"exit={exit_px:.4f} pnl={pnl_usd:.4f}USD ({pnl_pct*100:.3f}%) "
             f"score={score:.3f}"
         )
+        try:
+            await shadow_close_position(prediction=pred, position=pos)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"shadow close error pos={pos.id}: {e}")
     return closed

@@ -9,6 +9,14 @@
 
 - `docker-compose.public.yml` + `make up-dev-public`, `make public-ip`, `scripts/duckdns-update.sh`
 
+## 2026-06-02 — Exchange shadow: paper trade mirrors to Bybit testnet
+
+- `matrix_shared/exchange_shadow.py`: when `LIVE_EXECUTION_ENABLED=true`, paper
+  opens/closes also submit market orders to Bybit (testnet via `BYBIT_TESTNET`).
+  Paper DB stays source of truth; exchange errors are logged only.
+- Env: `MATRIX_EXCHANGE_SHADOW=true` (default). Cert + per-trade size gate apply;
+  total `LIVE_CAPITAL_CAP_USD` does not block shadow (paper locked can exceed cap).
+
 ## 2026-06-02 — BIST 1m bar backfill (strategy preconditions)
 
 - `ingestion/bist/bars.py`: bootstrap + off-session 6h refresh for `1m` bars when missing/stale
