@@ -1,10 +1,11 @@
 """Crypto market adapter — Bybit/Binance-style perpetual & spot.
 
-Universe is env-driven (`CRYPTO_SYMBOLS=BTCUSDT,ETHUSDT,...`) or dynamically
-read from the `tradable_symbols` SHARED table (when populated by the universe
-manager). Falls back to the hardcoded 15-symbol default when both are absent.
-Live execution wiring lives in `services/execution/`; this module only declares
-routing + rules.
+Universe is discovered dynamically:
+  1. `tradable_symbols` active set (universe manager — primary)
+  2. `screener_universe_snapshot` top liquidity (bootstrap before first reconcile)
+  3. `CRYPTO_SYMBOLS` env (operator override only)
+
+No hardcoded symbol list. Empty universe until screener + labs have run.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import ClassVar
 
+from loguru import logger
 from sqlalchemy import desc, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,32 +25,34 @@ from matrix_shared.models import MarketTrade
 from .base import FeeModel, MarketAdapter
 from .registry import register
 
-# Suffixes that unambiguously mark a symbol as crypto-quoted.
 _QUOTE_SUFFIXES: tuple[str, ...] = ("USDT", "USDC", "USD", "BUSD", "FDUSD")
+_BOOTSTRAP_LIMIT = int(os.environ.get("CRYPTO_UNIVERSE_BOOTSTRAP_N", "25"))
 
-# Fallback universe when CRYPTO_SYMBOLS env is unset and the DB table is empty.
-_DEFAULT_UNIVERSE: tuple[str, ...] = (
-    "BTCUSDT",
-    "ETHUSDT",
-    "SOLUSDT",
-    "BNBUSDT",
-    "XRPUSDT",
-    "DOGEUSDT",
-    "ADAUSDT",
-    "AVAXUSDT",
-    "LINKUSDT",
-    "DOTUSDT",
-    "TRXUSDT",
-    "NEARUSDT",
-    "APTUSDT",
-    "ARBUSDT",
-    "SUIUSDT",
-)
+
+async def _async_bootstrap_from_screener(limit: int = _BOOTSTRAP_LIMIT) -> list[str]:
+    """Cold-start: top-N Bybit USDT perps by 24h turnover from the screener snapshot."""
+    from matrix_shared import session_scope
+
+    try:
+        async with session_scope() as db:
+            res = await db.execute(
+                text(
+                    "SELECT symbol FROM screener_universe_snapshot "
+                    "WHERE turnover24h IS NOT NULL AND turnover24h > 0 "
+                    "ORDER BY turnover24h DESC LIMIT :lim"
+                ),
+                {"lim": limit},
+            )
+            return [r[0] for r in res]
+    except Exception as e:
+        logger.debug(f"crypto universe screener bootstrap unavailable: {e}")
+        return []
 
 
 async def _async_db_active_universe() -> list[str]:
     """Async read of active crypto symbols from SHARED tradable_symbols."""
     from matrix_shared import shared_session_scope
+
     async with shared_session_scope() as db:
         result = await db.execute(
             text(
@@ -58,43 +62,40 @@ async def _async_db_active_universe() -> list[str]:
             )
         )
         rows = [r[0] for r in result]
-        return rows if rows else list(_DEFAULT_UNIVERSE)
+        if rows:
+            return rows
+    bootstrap = await _async_bootstrap_from_screener()
+    if bootstrap:
+        logger.info(
+            f"crypto universe: tradable_symbols empty; bootstrapping "
+            f"{len(bootstrap)} symbols from screener snapshot"
+        )
+        return bootstrap
+    logger.warning(
+        "crypto universe empty — enable screener + UNIVERSE_MANAGER_ENABLED "
+        "or set CRYPTO_SYMBOLS for a manual override"
+    )
+    return []
 
 
 def _db_active_universe() -> list[str]:
-    """Sync bridge to the SHARED tradable_symbols active set.
+    """Sync bridge when no event loop is running (CLI, cold import).
 
-    Uses asyncio.run() when there is no running event loop (ingestion startup,
-    strategy module import, agent config loader). When called from within a
-    running event loop (e.g. from labs main during argparse default resolution)
-    it falls back to _DEFAULT_UNIVERSE — async callers should use the async
-    CryptoMarket.universe(db) path instead, which correctly awaits the query.
+    Inside a running loop, returns [] — callers must use crypto_universe_async().
     """
     try:
         asyncio.get_running_loop()
-        # Inside a running event loop — asyncio.run() would raise or corrupt
-        # the lru_cache'd engine pool. Return default; async callers use
-        # CryptoMarket.universe(db) which awaits the DB read correctly.
-        return list(_DEFAULT_UNIVERSE)
+        return []
     except RuntimeError:
-        pass  # no running loop — safe to use asyncio.run()
+        pass
     try:
         return asyncio.run(_async_db_active_universe())
     except Exception:
-        return list(_DEFAULT_UNIVERSE)
+        return []
 
 
 def crypto_universe() -> list[str]:
-    """Single source of truth for the crypto symbol set.
-
-    Priority:
-      1. CRYPTO_SYMBOLS env (explicit operator override — always respected).
-      2. tradable_symbols SHARED table (dynamic universe from the potential-score
-         manager). Falls back to _DEFAULT_UNIVERSE when the table is empty.
-
-    Used by ingestion, every crypto strategy module, the agent, and
-    CryptoMarket.universe() so the tradable set is defined in exactly one place.
-    """
+    """Single source of truth for the crypto symbol set (sync)."""
     env = os.environ.get("CRYPTO_SYMBOLS", "").strip()
     if env:
         return [s.strip().upper() for s in env.split(",") if s.strip()]
@@ -102,12 +103,7 @@ def crypto_universe() -> list[str]:
 
 
 async def crypto_universe_async() -> list[str]:
-    """Async single-source-of-truth — same priority as crypto_universe() but
-    safe to call from inside a running event loop. The sync `_db_active_universe`
-    can't `asyncio.run()` under a live loop and silently returns _DEFAULT_UNIVERSE;
-    async consumers (e.g. the ingestion adapter's reconcile loop) MUST use this so
-    they actually track the potential-scored active set instead of the default.
-    """
+    """Async single-source-of-truth — safe under a running event loop."""
     env = os.environ.get("CRYPTO_SYMBOLS", "").strip()
     if env:
         return [s.strip().upper() for s in env.split(",") if s.strip()]
@@ -122,7 +118,6 @@ class CryptoMarket(MarketAdapter):
         env = os.environ.get("CRYPTO_SYMBOLS", "").strip()
         if env:
             return [s.strip().upper() for s in env.split(",") if s.strip()]
-        # Async path — preferred when a session is already available.
         try:
             result = await db.execute(
                 text(
@@ -132,16 +127,19 @@ class CryptoMarket(MarketAdapter):
                 )
             )
             rows = [r[0] for r in result]
-            return rows if rows else list(_DEFAULT_UNIVERSE)
+            if rows:
+                return rows
         except Exception:
-            return list(_DEFAULT_UNIVERSE)
+            pass
+        bootstrap = await _async_bootstrap_from_screener()
+        return bootstrap if bootstrap else []
 
     def claims_symbol(self, symbol: str) -> bool:
         s = symbol.upper()
         return any(s.endswith(suf) and len(s) > len(suf) for suf in _QUOTE_SUFFIXES)
 
     def is_session_open(self, ts: datetime | None = None) -> bool:  # noqa: ARG002
-        return True  # 24/7
+        return True
 
     def fees(self, symbol: str) -> FeeModel:  # noqa: ARG002
         return FeeModel(

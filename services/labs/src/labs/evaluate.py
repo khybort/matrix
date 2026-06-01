@@ -16,6 +16,7 @@ from sqlalchemy import desc, select
 
 from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.models import LabEvaluation, LabExperiment, MarketBar, MarketTrade
+from matrix_shared.trading import apply_slippage
 
 from labs.decide import decide_with_genome
 from labs.genome import Genome
@@ -165,10 +166,12 @@ async def score_due_evaluations(stale_after_s: int = 600) -> tuple[int, int]:
                 stale += 1
             continue
 
+        entry_adj = apply_slippage(ev.entry_price, ev.side, opening=True)
+        exit_adj = apply_slippage(mark, ev.side, opening=False)
         if ev.side == "long":
-            pnl_pct = (mark - ev.entry_price) / ev.entry_price
+            pnl_pct = (exit_adj - entry_adj) / entry_adj
         else:
-            pnl_pct = (ev.entry_price - mark) / ev.entry_price
+            pnl_pct = (entry_adj - exit_adj) / entry_adj
         capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
         score = capped / SCORE_CAP_PCT  # in [-1, 1]
 
@@ -184,10 +187,11 @@ async def score_due_evaluations(stale_after_s: int = 600) -> tuple[int, int]:
             exp_db = await session.get(LabExperiment, ev.experiment_id)
             if exp_db is not None:
                 exp_db.n_evaluations += 1
-                if score > 0:
+                if pnl_pct > 0:
                     exp_db.n_wins += 1
                 exp_db.total_score = exp_db.total_score + score
-                # fitness: avg_score * sqrt(min(n, 25)/25), to value sample size
+                # fitness: slippage-adjusted avg score × sample-size factor.
+                # Win counting uses pnl_pct>0 (USD-equivalent) not score>0.
                 avg = exp_db.total_score / Decimal(exp_db.n_evaluations)
                 from decimal import Decimal as D
                 sample_factor = (

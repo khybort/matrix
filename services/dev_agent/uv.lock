@@ -220,6 +220,22 @@ wheels = [
 ]
 
 [[package]]
+name = "cursor-sdk"
+version = "0.1.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dc/11/9b158a5d6552b099d6db6b86314430e55690589afffd09633f9aef91e2fa/cursor_sdk-0.1.6.tar.gz", hash = "sha256:182220898bcd55966e99655c5c1be93126295319d38961011925eab2af7abcc4", size = 1175, upload-time = "2026-05-29T12:24:09.796Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/53/40/c7c1d98eefbdd62702486a5debd81d2c8c717f424d60d6c3215baa7cc4ae/cursor_sdk-0.1.6-py3-none-macosx_11_0_arm64.whl", hash = "sha256:606f949317e91b96fa1c4b854e37c92dc9d99ed736c843c6601a2a3eee0d41fd", size = 52647139, upload-time = "2026-05-29T12:23:55.772Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/d6/10a2387980274b3968eedc71e4f9c0a0df16b249f41b3eb2ac10c1ac53f2/cursor_sdk-0.1.6-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:a3280d0956bc517e6dcec44abcc4ea3a595c84a1f72326c48cf9220bd4e89954", size = 54249819, upload-time = "2026-05-29T12:23:58.644Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/9f/3c87fcf245f83970d5d76f22e5880cae4ff44d3b4b6922b1955b097c5150/cursor_sdk-0.1.6-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:e593108451d33298e3c5f7b3174de5f9e36f07fd2a24f7267b0204454e559323", size = 61273380, upload-time = "2026-05-29T12:24:01.565Z" },
+    { url = "https://files.pythonhosted.org/packages/39/c7/4aacc3672c3688dea97fb6492bf7e00ce7c8d57db008c484b12f7eab110c/cursor_sdk-0.1.6-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:04277e5b923e13e2b7a07dd1cdd61e2614ebbf507f8c6777760664bb29249d86", size = 61966173, upload-time = "2026-05-29T12:24:04.44Z" },
+    { url = "https://files.pythonhosted.org/packages/96/49/0f2380a8b29fd41a1e21d6451657e4c0b9f6275c6d2e48250a92a073e52c/cursor_sdk-0.1.6-py3-none-win_amd64.whl", hash = "sha256:41d41213751a58dd7af4eddbe43224ce73b280d0ec49149f5a3988e933fdffcd", size = 48675453, upload-time = "2026-05-29T12:24:07.681Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.136.3"
 source = { registry = "https://pypi.org/simple" }
@@ -481,12 +497,14 @@ dependencies = [
     { name = "anyio" },
     { name = "asyncpg" },
     { name = "claude-agent-sdk" },
+    { name = "cursor-sdk" },
     { name = "httpx" },
     { name = "loguru" },
     { name = "orjson" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "watchfiles" },
 ]
 
 [package.metadata]
@@ -494,12 +512,20 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.7.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "claude-agent-sdk", specifier = ">=0.0.10" },
+    { name = "cursor-sdk", specifier = ">=0.1.0" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "orjson", specifier = ">=3.10.0" },
     { name = "pydantic", specifier = ">=2.10.0" },
     { name = "pydantic-settings", specifier = ">=2.7.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
+    { name = "watchfiles", specifier = ">=1.2.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24.0" },
 ]
 
 [[package]]

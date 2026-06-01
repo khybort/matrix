@@ -45,20 +45,21 @@ class AgentConfig:
 
 
 # Fallback used during bootstrap before any strategy_configs row exists.
-# When a strategy is RETIRED (had a row, now status != 'active'), the
-# agent main loop checks `is_fallback` and skips that strategy entirely.
+# v3 hypothesis (CHANGES.md 2026-05-26): oi_delta + news at long horizon.
 FALLBACK = AgentConfig(
     version=1,
     weights={
-        "trade_flow": Decimal("0.35"),
-        "funding": Decimal("0.20"),
-        "oi_delta": Decimal("0.20"),
-        "ob_imbalance": Decimal("0.15"),
-        "news": Decimal("0.10"),
+        "trade_flow": Decimal("0.05"),
+        "funding": Decimal("0.05"),
+        "oi_delta": Decimal("0.40"),
+        "ob_imbalance": Decimal("0.05"),
+        "news": Decimal("0.40"),
     },
-    signal_threshold=Decimal("0.18"),
-    horizon_seconds=120,
-    explore_epsilon=0.15,
+    signal_threshold=Decimal("0.15"),
+    horizon_seconds=1800,
+    tp_pct=Decimal("0.02"),
+    sl_pct=Decimal("0.01"),
+    explore_epsilon=0.03,
     is_fallback=True,
 )
 
@@ -107,11 +108,11 @@ async def load_agent_config(
     cfg = AgentConfig(
         version=row.version,
         weights=weights,
-        signal_threshold=Decimal(str(params.get("signal_threshold", "0.18"))),
-        horizon_seconds=int(params.get("horizon_seconds", 120)),
+        signal_threshold=Decimal(str(params.get("signal_threshold", "0.15"))),
+        horizon_seconds=int(params.get("horizon_seconds", 1800)),
         tp_pct=Decimal(str(params.get("tp_pct", "0.02"))),
         sl_pct=Decimal(str(params.get("sl_pct", "0.01"))),
-        explore_epsilon=float(params.get("explore_epsilon", 0.15)),
+        explore_epsilon=float(params.get("explore_epsilon", 0.03)),
     )
     _cache[key] = (now, cfg)
     return cfg

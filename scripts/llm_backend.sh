@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Toggle the Matrix LLM backend + default tier by rewriting keys in .env.
 #
-# Backend axis (subscription <-> bedrock) and tier axis (haiku <-> sonnet) are
-# orthogonal: switching one preserves the other. After any switch, restart the
+# Backend axis (subscription <-> bedrock <-> cursor) and tier axis (haiku <-> sonnet)
+# are orthogonal: switching one preserves the other. After any switch, restart the
 # stack so containers re-read .env:  make down && make up-dev   (or: make restart)
 #
-# Secrets (AWS creds) are written to .env only — never echoed. .env is gitignored.
+# Secrets (AWS creds, optional CURSOR_API_KEY) are written to .env only — never echoed.
+# .env is gitignored.
 #
-# Usage: scripts/llm_backend.sh <bedrock|subscription|haiku|sonnet|status>
+# Usage: scripts/llm_backend.sh <bedrock|subscription|cursor|haiku|sonnet|status>
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,8 +34,9 @@ upsert_env() { # key value  — replace existing `key=` line (move to end) or ap
 get_env() { grep "^$1=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
 
 cmd_subscription() {
-  # Clear the Bedrock backend; empty values fall back to subscription auth
+  # Clear alternate backends; empty values fall back to subscription auth
   # (CLAUDE_CODE_OAUTH_TOKEN, left untouched) and Anthropic short-name models.
+  upsert_env MATRIX_LLM_BACKEND ""
   upsert_env CLAUDE_CODE_USE_BEDROCK ""
   upsert_env AWS_ACCESS_KEY_ID ""
   upsert_env AWS_SECRET_ACCESS_KEY ""
@@ -52,6 +54,7 @@ cmd_subscription() {
 
 cmd_bedrock() {
   command -v aws >/dev/null || { echo "✗ aws CLI not found on host"; exit 1; }
+  upsert_env MATRIX_LLM_BACKEND ""
   local creds
   if ! creds="$(aws configure export-credentials --profile "$PROFILE" --format env-no-export 2>/dev/null)"; then
     echo "✗ Could not export credentials for profile '$PROFILE'."
@@ -88,15 +91,59 @@ cmd_tier() { # haiku|sonnet
   echo "  Restart to apply:  make down && make up-dev"
 }
 
+_cursor_cli_logged_in() {
+  command -v cursor >/dev/null 2>&1 || return 1
+  local out
+  out="$(cursor agent status 2>&1)" || return 1
+  case "$out" in
+    *"Not logged in"*|*"Authentication required"*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+cmd_cursor() {
+  upsert_env MATRIX_LLM_BACKEND "cursor"
+  upsert_env MATRIX_CURSOR_MODEL "auto"
+  upsert_env CLAUDE_CODE_USE_BEDROCK ""
+  upsert_env AWS_ACCESS_KEY_ID ""
+  upsert_env AWS_SECRET_ACCESS_KEY ""
+  upsert_env AWS_SESSION_TOKEN ""
+  upsert_env AWS_REGION ""
+  upsert_env MATRIX_MODEL_HAIKU ""
+  upsert_env MATRIX_MODEL_SONNET ""
+  upsert_env MATRIX_MODEL_OPUS ""
+  echo "✓ LLM backend → Cursor Auto (MATRIX_LLM_BACKEND=cursor, model=auto)"
+  if [ -n "$(get_env CURSOR_API_KEY)" ]; then
+    echo "  Auth: CURSOR_API_KEY set (optional API-key override)"
+  elif _cursor_cli_logged_in; then
+    echo "  Auth: cursor agent login (subscription-style CLI session)"
+  else
+    echo "⚠ Not authenticated — host login does not reach Docker."
+    echo "      make cursor-login-docker   # once per machine (persists in volume)"
+    echo "  Or set CURSOR_API_KEY in .env (Dashboard → Integrations) for CI/Docker."
+  fi
+  echo "  Restart to apply:  make down && make up-dev"
+}
+
 cmd_status() {
-  local be tier hk sn region keyhint
-  be="$(get_env CLAUDE_CODE_USE_BEDROCK)"
+  local be tier hk sn region keyhint cursor_keyhint
+  be="$(get_env MATRIX_LLM_BACKEND)"
   tier="$(get_env MATRIX_DEFAULT_MODEL)"
   hk="$(get_env MATRIX_MODEL_HAIKU)"
   sn="$(get_env MATRIX_MODEL_SONNET)"
   region="$(get_env AWS_REGION)"
   keyhint="$(get_env AWS_ACCESS_KEY_ID | cut -c1-6)"
-  if [ -n "$be" ]; then
+  cursor_keyhint="$(get_env CURSOR_API_KEY | cut -c1-8)"
+  if [ "$be" = "cursor" ]; then
+    cursor_model="$(get_env MATRIX_CURSOR_MODEL)"
+    if [ -n "$(get_env CURSOR_API_KEY)" ]; then
+      echo "Backend       : cursor-auto (api_key=${cursor_keyhint}…, model=${cursor_model:-auto})"
+    elif _cursor_cli_logged_in; then
+      echo "Backend       : cursor-auto (cli-login, model=${cursor_model:-auto})"
+    else
+      echo "Backend       : cursor-auto (not authenticated, model=${cursor_model:-auto})"
+    fi
+  elif [ -n "$(get_env CLAUDE_CODE_USE_BEDROCK)" ]; then
     echo "Backend       : bedrock (region=$region, key=${keyhint}…)"
   else
     echo "Backend       : subscription"
@@ -109,8 +156,9 @@ cmd_status() {
 case "${1:-}" in
   subscription) cmd_subscription ;;
   bedrock)      cmd_bedrock ;;
+  cursor)       cmd_cursor ;;
   haiku)        cmd_tier haiku ;;
   sonnet)       cmd_tier sonnet ;;
   status)       cmd_status ;;
-  *) echo "usage: $0 <bedrock|subscription|haiku|sonnet|status>"; exit 2 ;;
+  *) echo "usage: $0 <bedrock|subscription|cursor|haiku|sonnet|status>"; exit 2 ;;
 esac

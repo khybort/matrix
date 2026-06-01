@@ -1,6 +1,8 @@
-"""Seed / refresh the `bist_symbols` table.
+"""Discover / refresh the `bist_symbols` table from a live market feed.
 
-Run once at bootstrap, and again on a cadence (daily) to pick up changes.
+Usage:
+    uv run matrix-bist-symbols              # discover once
+    uv run matrix-bist-symbols --loop 86400 # daily refresh
 """
 
 from __future__ import annotations
@@ -8,59 +10,52 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from datetime import UTC, datetime
 
 from loguru import logger
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from matrix_shared import session_scope
-from matrix_shared.models import BistSymbol
-
-from ingestion.bist.universe import deduped_seed
+from ingestion.bist.discover import refresh_universe
 
 
-async def seed_universe() -> int:
-    """Upsert the embedded seed list into `bist_symbols`. Returns inserted count."""
-    seed = deduped_seed()
-    rows = [
-        {
-            "symbol": s.symbol,
-            "name": s.name,
-            "sector": s.sector,
-            "index_membership": s.index_membership,
-            "active": True,
-            "last_refreshed_at": datetime.now(UTC),
-        }
-        for s in seed
-    ]
+async def _run_once(*, bootstrap_active: bool | None) -> int:
+    return await refresh_universe(bootstrap_active=bootstrap_active)
 
-    async with session_scope() as session:
-        stmt = pg_insert(BistSymbol).values(rows)
-        update_cols = {
-            "name": stmt.excluded.name,
-            "sector": stmt.excluded.sector,
-            "index_membership": stmt.excluded.index_membership,
-            "active": stmt.excluded.active,
-            "last_refreshed_at": stmt.excluded.last_refreshed_at,
-        }
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["symbol"], set_=update_cols
-        )
-        result = await session.execute(stmt)
-        return result.rowcount or 0
+
+async def _run_loop(interval_s: float, *, bootstrap_active: bool | None) -> None:
+    while True:
+        try:
+            await refresh_universe(bootstrap_active=bootstrap_active)
+        except Exception as e:
+            logger.exception(f"BIST discover failed: {e}")
+        await asyncio.sleep(interval_s)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Seed BIST symbol universe")
-    parser.add_argument("--once", action="store_true", help="Run once and exit")
+    parser = argparse.ArgumentParser(description="Discover BIST symbol universe")
+    parser.add_argument("--once", action="store_true", help="Run once and exit (default)")
+    parser.add_argument(
+        "--loop",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Re-discover on this interval (e.g. 86400 for daily)",
+    )
+    parser.add_argument(
+        "--bootstrap-active",
+        action="store_true",
+        help="Force active=true on all discovered symbols (first-time bootstrap)",
+    )
     args = parser.parse_args()
-    _ = args  # currently only "once" mode; future: --refresh-from-kap
 
     logger.remove()
     logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level: <5} | {message}")
 
-    count = asyncio.run(seed_universe())
-    logger.info(f"bist_symbols upserted: {count}")
+    bootstrap = True if args.bootstrap_active else None
+    if args.loop is not None and not args.once:
+        asyncio.run(_run_loop(args.loop, bootstrap_active=bootstrap))
+        return
+
+    count = asyncio.run(_run_once(bootstrap_active=bootstrap))
+    logger.info(f"bist_symbols refreshed: {count}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,13 @@
+# Public dashboard access — bind web to the host (default: all interfaces).
+#
+# Use with dev or prod stack, e.g.:
+#   make up-dev-public
+#   make up-prod-public
+#
+# Then open http://<public-ip>:3030 or your DuckDNS / sslip.io hostname.
+# Dashboard has NO built-in auth — only expose on networks you accept.
+
+services:
+  web:
+    ports:
+      - "${MATRIX_PUBLIC_WEB_BIND:-0.0.0.0:3030}:3030"

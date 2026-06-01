@@ -159,8 +159,8 @@ function BistOverview({ bist }: { bist: Dashboard["bist"] }) {
 
       {bist.bars.length === 0 ? (
         <EmptyHint>
-          No bars yet — run <code className="mono">make bist-seed</code> then{" "}
-          <code className="mono">make bist-poll</code> (or wait for the unified ingestion container).
+          No bars yet — run <code className="mono">make bist-seed</code> (dynamic discover)
+          then wait for ingestion or <code className="mono">make bist-poll</code>.
         </EmptyHint>
       ) : (
         <div className="overflow-x-auto">

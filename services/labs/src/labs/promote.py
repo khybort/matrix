@@ -99,7 +99,8 @@ LAB_PROMOTION_TYPE = "lab_promotion"
 # eligible for auto-apply. matrix_agent is intentionally excluded — its
 # weight_tune proposals still require manual or lab-driven review.
 SAFE_PARAM_TUNE_STRATEGIES: frozenset[str] = frozenset({
-    "grid", "dca", "oi_delta",
+    "matrix_agent",
+    "grid", "dca", "oi_delta", "oi_breakout",
     "funding_reversion",
     "bist_gap_fade", "bist_intraday_reversion", "bist_volume_breakout",
     "momentum_xs",
@@ -119,6 +120,34 @@ def _scrub_forbidden(params: dict[str, Any]) -> dict[str, Any]:
             out[k] = _scrub_forbidden(v)
         else:
             out[k] = v
+    return out
+
+
+def _enrich_lab_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Ensure promoted genomes carry paper-trade fields the live agent expects."""
+    out = dict(params or {})
+    out.setdefault("tp_pct", "0.02")
+    out.setdefault("sl_pct", "0.01")
+    out.setdefault("explore_epsilon", 0.05)
+    if "horizon_seconds" in out:
+        try:
+            h = int(out["horizon_seconds"])
+            out["horizon_seconds"] = max(600, min(3600, h))
+        except (TypeError, ValueError):
+            out["horizon_seconds"] = 1800
+    return out
+
+
+def _merge_strategy_params(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Merge a proposal patch into existing params (preserve unstated keys)."""
+    out = dict(current or {})
+    for key, val in patch.items():
+        if key == "weights" and isinstance(val, dict):
+            merged = dict(out.get("weights") or {})
+            merged.update(val)
+            out["weights"] = merged
+        else:
+            out[key] = val
     return out
 
 
@@ -196,7 +225,7 @@ async def scan_for_promotions(
             logger.debug("promote scan: candidate params match current; skipping")
             return None
 
-        after_params = _scrub_forbidden(candidate.params or {})
+        after_params = _scrub_forbidden(_enrich_lab_params(candidate.params or {}))
 
         win_rate = (
             Decimal(candidate.n_wins) / Decimal(candidate.n_evaluations)
@@ -263,6 +292,11 @@ def _params_equivalent(a: dict[str, Any] | None, b: dict[str, Any] | None) -> bo
             return False
     except (ArithmeticError, ValueError):
         return False
+    try:
+        if int(a.get("horizon_seconds", -1)) != int(b.get("horizon_seconds", -1)):
+            return False
+    except (TypeError, ValueError):
+        pass
     return True
 
 
@@ -291,14 +325,26 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
 
         scrubbed = _scrub_forbidden(proposal.after_params or {})
 
-        # Retire existing active (same strategy_id + asset_class)
         cur_stmt = (
             select(StrategyConfig)
             .where(StrategyConfig.strategy_id == proposal.strategy_id)
             .where(StrategyConfig.asset_class == proposal.asset_class)
             .where(StrategyConfig.status == "active")
+            .order_by(desc(StrategyConfig.version))
+            .limit(1)
         )
-        for cfg in (await session.execute(cur_stmt)).scalars():
+        current_cfg = (await session.execute(cur_stmt)).scalar_one_or_none()
+        current_params = (current_cfg.params if current_cfg else {}) or {}
+        merged_params = _merge_strategy_params(current_params, scrubbed)
+
+        # Retire existing active (same strategy_id + asset_class)
+        retire_stmt = (
+            select(StrategyConfig)
+            .where(StrategyConfig.strategy_id == proposal.strategy_id)
+            .where(StrategyConfig.asset_class == proposal.asset_class)
+            .where(StrategyConfig.status == "active")
+        )
+        for cfg in (await session.execute(retire_stmt)).scalars():
             cfg.status = "retired"
 
         # `to_version` is computed when the proposal is created and can go
@@ -320,7 +366,7 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
             asset_class=proposal.asset_class,
             version=new_version,
             status="active",
-            params=scrubbed,
+            params=merged_params,
             rationale=proposal.rationale,
             promoted_at=datetime.now(UTC),
         )

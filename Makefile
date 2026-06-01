@@ -14,9 +14,11 @@
 
 DC          := docker compose
 DC_BASE     := -f docker-compose.yml
-DC_DEV      := $(DC_BASE) -f docker-compose.dev.yml
+DC_LIMITS   := -f docker-compose.limits.yml
+DC_DEV      := $(DC_BASE) -f docker-compose.dev.yml $(DC_LIMITS)
 DC_PROD     := $(DC_BASE) -f docker-compose.prod.yml
-DC_LOCAL    := $(DC_BASE) -f docker-compose.dev.yml -f docker-compose.local.yml
+DC_LOCAL    := $(DC_BASE) -f docker-compose.dev.yml -f docker-compose.local.yml $(DC_LIMITS)
+DC_PUBLIC   := -f docker-compose.public.yml
 
 PSQL        := $(DC) exec postgres psql -U matrix -d matrix
 PSQL_SHARED := $(DC) exec postgres-shared psql -U matrix -d matrix_shared
@@ -70,6 +72,30 @@ up-dev: ## Start everything in dev mode (hot reload, SHARED → .env URL)
 .PHONY: up-dev-local
 up-dev-local: ## Dev mode + local postgres-shared (no Neon needed; full offline)
 	$(DC) $(DC_LOCAL) up -d
+
+.PHONY: up-dev-public
+up-dev-public: ## Dev stack + web on 0.0.0.0:3030 (internet / DuckDNS / sslip.io)
+	$(DC) $(DC_DEV) $(DC_PUBLIC) up -d
+
+.PHONY: up-prod-public
+up-prod-public: ## Prod stack + web on 0.0.0.0:3030
+	$(DC) $(DC_PROD) $(DC_PUBLIC) up -d
+
+.PHONY: public-ip
+public-ip: ## Print public IPv4 + sslip.io hostname for :3030
+	@IP=$$(curl -4 -fsS --max-time 10 https://api.ipify.org); \
+	H=$$(echo "$$IP" | tr '.' '-'); \
+	echo "Public IP:  $$IP"; \
+	echo "Dashboard:  http://$$IP:3030"; \
+	echo "sslip.io:   http://$$H.sslip.io:3030  (no signup; updates when IP changes)"
+
+.PHONY: duckdns-update
+duckdns-update: ## Point DUCKDNS_SUBDOMAIN.duckdns.org at this host (needs .env vars)
+	@./scripts/duckdns-update.sh
+
+.PHONY: up-dev-core
+up-dev-core: ## Dev core only: DB + ingestion + bars + graph + agent + strategy (CPU limits)
+	$(DC) $(DC_LOCAL) up -d postgres postgres-shared ingestion-market bars-aggregator graph agent strategy
 
 .PHONY: up-prod
 up-prod: ## Start everything in prod mode (built images, restart=always)
@@ -268,16 +294,20 @@ stats: ## Quick state summary (counts per major table)
 		ORDER BY k;"
 
 .PHONY: bist-seed
-bist-seed: ## Seed the BIST symbol universe (idempotent)
-	$(DC) $(DC_BASE) exec ingestion uv run python -m ingestion.bist.symbols --once
+bist-seed: ## Discover BIST symbols from live feed (first boot: activates all)
+	$(DC) $(DC_DEV) exec ingestion-market uv run matrix-bist-symbols --bootstrap-active
+
+.PHONY: bist-discover
+bist-discover: ## Refresh BIST symbol metadata (new listings only; active flags unchanged)
+	$(DC) $(DC_DEV) exec ingestion-market uv run matrix-bist-symbols
 
 .PHONY: bist-poll
 bist-poll: ## Run one BIST bar poll cycle and exit
-	$(DC) $(DC_BASE) exec ingestion uv run python -m ingestion.bist.bars --once
+	$(DC) $(DC_DEV) exec ingestion-market uv run matrix-bist-bars --once
 
 .PHONY: bist-bars-backfill
 bist-bars-backfill: ## Backfill BIST 1m bars (last 5d via yfinance; works off-session)
-	$(DC) $(DC_BASE) exec ingestion-market uv run matrix-bist-bars --once --interval 1m --period 5d
+	$(DC) $(DC_DEV) exec ingestion-market uv run matrix-bist-bars --once --interval 1m --period 5d
 
 .PHONY: bist-stats
 bist-stats: ## BIST-specific counts (symbols, bars by interval, predictions)
@@ -317,8 +347,8 @@ universe-status: ## Show scored/active tradable universe (top 80 by score)
 	@$(PSQL_SHARED) -c "SELECT asset_class, symbol, active, round(score::numeric,4) AS score, liquidity_usd, rank, became_active_at, last_scored_at FROM tradable_symbols WHERE active OR score > 0 ORDER BY asset_class, score DESC NULLS LAST LIMIT 80"
 
 .PHONY: bist-seed-universe
-bist-seed-universe: ## One-shot: upsert the embedded BIST symbol universe into bist_symbols
-	$(DC) $(DC_BASE) exec ingestion uv run matrix-bist-symbols
+bist-seed-universe: ## Alias for bist-seed (dynamic discover, no embedded list)
+	$(MAKE) bist-seed
 
 .PHONY: cert-scan
 cert-scan: ## Scan active strategies; auto-grant paper_trade_certificate where eligible
@@ -422,6 +452,24 @@ llm-bedrock: ## Route LLM through AWS Bedrock (efsora-admin profile -> .env)
 .PHONY: llm-subscription
 llm-subscription: ## Route LLM back through Claude Code subscription (OAuth)
 	@./scripts/llm_backend.sh subscription
+
+.PHONY: llm-cursor
+llm-cursor: ## Route all LLM calls through Cursor Auto (`cursor agent login` or API key)
+	@./scripts/llm_backend.sh cursor
+
+.PHONY: cursor-login-docker
+cursor-login-docker: ## One-time Cursor CLI login inside matrix-agent (persists on matrix_cursor_agent volume)
+	@./scripts/cursor_login_docker.sh
+
+.PHONY: lock-llm-services
+lock-llm-services: ## Refresh uv.lock for services using matrix-shared LLM (after dep changes)
+	@for svc in synthesis graph reflection brain agent backtest dev_agent; do \
+	  echo "==> $$svc"; \
+	  docker compose run --rm --no-deps --entrypoint "" \
+	    -v "$$(pwd)/packages/python-shared:/workspace/packages/python-shared" \
+	    -v "$$(pwd)/services/$$svc:/workspace/services/$$svc" \
+	    $$svc sh -c "cd /workspace/services/$$svc && uv lock -q && uv sync -q"; \
+	done
 
 .PHONY: llm-haiku
 llm-haiku: ## Set default tier to Haiku (decision/feeder/bulletin; quality loops stay Sonnet)

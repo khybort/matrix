@@ -17,7 +17,7 @@ class StrategyMetrics:
     version: int
     n_outcomes: int
     avg_score: Decimal
-    win_rate: Decimal  # share of positive scores
+    win_rate: Decimal  # share of outcomes with positive pnl_usd
     total_pnl_usd: Decimal
     by_symbol: dict[str, dict[str, str]]  # symbol → {n, avg_score, ...}
 
@@ -33,7 +33,7 @@ async def metrics_window(
                 func.count(Outcome.id),
                 func.avg(Outcome.score),
                 func.sum(Outcome.pnl_usd),
-                func.sum(case((Outcome.score > 0, 1), else_=0)),
+                func.sum(case((Outcome.pnl_usd > 0, 1), else_=0)),
             )
             .join(Prediction, Prediction.id == Outcome.prediction_id)
             .where(Prediction.strategy_id == strategy_id)

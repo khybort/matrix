@@ -143,7 +143,13 @@ _bedrock_next_try = 0.0
 _bedrock_backoff = 0.0
 
 
+def _cursor_primary() -> bool:
+    return os.environ.get("MATRIX_LLM_BACKEND", "").strip().lower() == "cursor"
+
+
 def _bedrock_primary() -> bool:
+    if _cursor_primary():
+        return False
     return bool(os.environ.get("CLAUDE_CODE_USE_BEDROCK"))
 
 
@@ -151,20 +157,37 @@ def _subscription_ready() -> bool:
     return bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
 
 
+def _cursor_ready() -> bool:
+    from matrix_shared.cursor_llm import cursor_enabled
+
+    return cursor_enabled()
+
+
+def _primary_backend_label() -> str:
+    if _cursor_primary():
+        return "cursor"
+    if _bedrock_primary():
+        return "bedrock"
+    return "subscription"
+
+
 def backend_state() -> dict[str, Any]:
     """Observability snapshot of the failover state machine (for dashboards)."""
     now = time.monotonic()
     return {
-        "primary": "bedrock" if _bedrock_primary() else "subscription",
+        "primary": _primary_backend_label(),
         "bedrock_demoted": _bedrock_demoted,
         "bedrock_down_for_s": (now - _bedrock_down_since) if _bedrock_down_since else 0.0,
         "bedrock_next_try_in_s": max(0.0, _bedrock_next_try - now),
         "subscription_available": _subscription_ready(),
+        "cursor_available": _cursor_ready(),
     }
 
 
 def _plan_backends() -> list[str]:
     """Ordered backends to attempt for this call (empty list = degraded → None)."""
+    if _cursor_primary():
+        return ["cursor"] if _cursor_ready() else []
     now = time.monotonic()
     if not _bedrock_primary():
         return ["subscription"] if _subscription_ready() else []
@@ -253,16 +276,18 @@ def _breaker_record(is_error: bool | None) -> None:
 def subscription_enabled() -> bool:
     """True when any supported LLM backend is configured.
 
-    Backends, in priority order:
-      1. Claude Code subscription — `CLAUDE_CODE_OAUTH_TOKEN` set. Default.
-      2. AWS Bedrock — `CLAUDE_CODE_USE_BEDROCK=1` + AWS creds in env.
-      3. Google Vertex — `CLAUDE_CODE_USE_VERTEX=1` + Google creds in env.
+    Backends (selected by `make llm-*` writing `.env`):
+      1. Cursor Auto — `MATRIX_LLM_BACKEND=cursor` + (`cursor agent login` or
+         optional `CURSOR_API_KEY` for CI/Docker).
+      2. Claude Code subscription — `CLAUDE_CODE_OAUTH_TOKEN` set. Default.
+      3. AWS Bedrock — `CLAUDE_CODE_USE_BEDROCK=1` + AWS creds in env.
+      4. Google Vertex — `CLAUDE_CODE_USE_VERTEX=1` + Google creds in env.
 
-    The `claude_agent_sdk` (via the bundled `claude` CLI) handles backend
-    selection itself based on these env vars; we just need *one* of them to
-    be true for the LLM path to fire. The historical name `subscription_*`
-    is kept for backward compatibility — read it as "is LLM path ready?".
+    The historical name `subscription_*` is kept for backward compatibility —
+    read it as "is LLM path ready?".
     """
+    if _cursor_primary():
+        return _cursor_ready()
     return bool(
         os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
         or os.environ.get("CLAUDE_CODE_USE_BEDROCK")
@@ -274,6 +299,10 @@ async def _single_shot_once(
     backend: str, *, user: str, system: str | None, model: str | None
 ) -> tuple[str | None, bool]:
     """One single-shot SDK call on a specific backend. Returns (text, is_error)."""
+    if backend == "cursor":
+        from matrix_shared.cursor_llm import cursor_single_shot
+
+        return await cursor_single_shot(user=user, system=system, model=model)
     try:
         from claude_agent_sdk import ClaudeAgentOptions, query
     except ImportError as e:
@@ -414,6 +443,8 @@ async def call_subscription_agent(
     max_turns: int = 12,
     session_id: str = "agent",
     limiter: Any | None = None,
+    tool_registry: Any | None = None,
+    mcp_server_name: str | None = None,
 ) -> AsyncIterator[Any]:
     """Run a multi-step SDK tool loop on the subscription path; yield AgentEvents.
 
@@ -432,6 +463,22 @@ async def call_subscription_agent(
         return
     backend = plan[0]
     if backend == "subscription" and breaker_is_open():
+        return
+
+    if backend == "cursor":
+        from matrix_shared.cursor_llm import cursor_agent_stream
+
+        async for ev in cursor_agent_stream(
+            prompt=prompt,
+            system=system,
+            model=model,
+            tool_registry=tool_registry,
+            mcp_server_name=mcp_server_name,
+            max_turns=max_turns,
+            session_id=session_id,
+            limiter=limiter,
+        ):
+            yield ev
         return
 
     try:

@@ -10,7 +10,7 @@ Usage:
     uv run python -m ingestion.main --symbols BTCUSDT ETHUSDT   # crypto override
 
 Crypto symbols can still be overridden via CLI or `CRYPTO_SYMBOLS` env;
-BIST universe comes from `bist_symbols` (run `matrix-bist-symbols`).
+BIST universe comes from `bist_symbols` (run `matrix-bist-symbols --bootstrap-active` on first boot).
 """
 
 from __future__ import annotations

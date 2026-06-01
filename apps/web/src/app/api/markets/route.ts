@@ -73,7 +73,7 @@ export async function GET() {
         `;
         let universeSize = 0;
         if (m.assetClass === "bist") {
-          const [r] = await sql`
+          const [r] = await sqlLocal`
             SELECT COUNT(*) AS n FROM bist_symbols WHERE active = TRUE
           `;
           universeSize = Number(r?.n ?? 0);

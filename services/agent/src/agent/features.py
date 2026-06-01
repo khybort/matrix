@@ -39,6 +39,7 @@ class SymbolFeatures:
     funding_rate: Decimal | None = None
     open_interest: Decimal | None = None
     oi_delta_pct_5m: Decimal | None = None  # change over last 5min
+    price_change_pct_5m: Decimal | None = None  # last_price vs ~5min ago
 
     # News (last 1h count + simple keyword-based polarity hint)
     n_news_1h: int = 0
@@ -109,20 +110,27 @@ async def extract_symbol_features(symbol: str) -> SymbolFeatures:
         if tk is not None:
             f.funding_rate = tk.funding_rate
             f.open_interest = tk.open_interest
+            if tk.last_price is not None:
+                f.last_price = tk.last_price
             if tk.open_interest:
                 older = now - timedelta(minutes=5)
                 older_stmt = (
-                    select(TickerSnapshot.open_interest)
+                    select(TickerSnapshot.open_interest, TickerSnapshot.last_price)
                     .where(TickerSnapshot.symbol == symbol)
                     .where(TickerSnapshot.snapshot_ts <= older)
                     .order_by(desc(TickerSnapshot.snapshot_ts))
                     .limit(1)
                 )
-                old_oi_row = (await session.execute(older_stmt)).first()
-                if old_oi_row and old_oi_row[0]:
-                    old_oi = Decimal(old_oi_row[0])
-                    if old_oi > 0:
-                        f.oi_delta_pct_5m = (tk.open_interest - old_oi) / old_oi
+                old_row = (await session.execute(older_stmt)).first()
+                if old_row:
+                    if old_row[0]:
+                        old_oi = Decimal(old_row[0])
+                        if old_oi > 0 and tk.open_interest:
+                            f.oi_delta_pct_5m = (tk.open_interest - old_oi) / old_oi
+                    if old_row[1] and tk.last_price:
+                        old_px = Decimal(old_row[1])
+                        if old_px > 0:
+                            f.price_change_pct_5m = (tk.last_price - old_px) / old_px
 
         # Recent news (1h window) — count + sample of titles. Filtered loosely
         # for symbol relevance: includes title containing the symbol's base

@@ -65,21 +65,16 @@ async def _mark_processed(doc_id, source: str) -> None:
         doc.meta = new_meta
 
 
-async def _tick(limit: int, reprocess: bool) -> int:
-    batch = await _fetch_batch(limit, reprocess)
-    if not batch:
-        return 0
-
-    processed = 0
-    for doc in batch:
+async def _process_doc(doc, sem: asyncio.Semaphore) -> bool:
+    async with sem:
         try:
             entities, relations, source = await extract_entities(doc.title, doc.body)
         except Exception as e:
             logger.exception(f"extract failed for {doc.id}: {e}")
-            continue
+            return False
         if not entities:
             await _mark_processed(doc.id, source)
-            continue
+            return False
         try:
             await upsert_document(
                 doc.id,
@@ -91,7 +86,6 @@ async def _tick(limit: int, reprocess: bool) -> int:
             for ent in entities:
                 await upsert_entity(ent.type, ent.canonical, ent.display)
                 await link_mentions(doc.id, ent.type, ent.canonical)
-            # Typed edges between entities (LLM-only; heuristic returns [])
             for rel in relations:
                 try:
                     await link_typed_edge(
@@ -106,15 +100,27 @@ async def _tick(limit: int, reprocess: bool) -> int:
                     logger.warning(f"relation upsert failed: {e}")
         except Exception as e:
             logger.exception(f"graph upsert failed for {doc.id}: {e}")
-            continue
+            return False
         await _mark_processed(doc.id, source)
-        processed += 1
         logger.info(
             f"processed {doc.id} ({doc.source}): {len(entities)} entities, "
             f"{len(relations)} relations (src={source})"
         )
+        return True
 
-    return processed
+
+async def _tick(limit: int, reprocess: bool) -> int:
+    batch = await _fetch_batch(limit, reprocess)
+    if not batch:
+        return 0
+
+    # 4 concurrent agent loops — rate_limiter inside extract_entities throttles
+    # actual Bedrock throughput; the semaphore caps in-flight doc coroutines.
+    sem = asyncio.Semaphore(4)
+    results = await asyncio.gather(
+        *[_process_doc(doc, sem) for doc in batch], return_exceptions=True
+    )
+    return sum(1 for r in results if r is True)
 
 
 async def run(

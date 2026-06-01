@@ -88,15 +88,33 @@ def test_param_tune_grid_price_band_knob():
 
 
 def test_param_tune_grid_tightens_on_high_winrate():
-    """win_rate >= 0.5 but avg_score still negative → tighten (direction -1).
-
-    n=52 → idx=0 → horizon_s selected; direction=-1 → should decrease.
-    """
-    m = _metrics(strategy_id="grid", win_rate=Decimal("0.60"), avg_score=Decimal("-0.08"), n_outcomes=52)
+    """High win_rate + negative avg_score (but tune still triggered) → tighten."""
+    m = _metrics(
+        strategy_id="grid",
+        win_rate=Decimal("0.60"),
+        avg_score=Decimal("-0.08"),
+        total_pnl_usd=Decimal("2.0"),
+        n_outcomes=52,
+    )
     draft = rule_propose_param_tune("grid", _grid_params(), m)
     assert draft is not None
     after_horizon = int(draft.after_params["horizon_s"])
-    assert after_horizon < 300, "horizon_s should decrease when win_rate >= 0.5"
+    assert after_horizon < 300, "horizon_s should decrease when profitable with good win_rate"
+
+
+def test_param_tune_grid_widens_when_winrate_ok_but_pnl_negative():
+    """High win_rate but negative PnL → losers bigger than winners → widen."""
+    m = _metrics(
+        strategy_id="grid",
+        win_rate=Decimal("0.60"),
+        avg_score=Decimal("-0.08"),
+        total_pnl_usd=Decimal("-12.0"),
+        n_outcomes=52,
+    )
+    draft = rule_propose_param_tune("grid", _grid_params(), m)
+    assert draft is not None
+    after_horizon = int(draft.after_params["horizon_s"])
+    assert after_horizon > 300
 
 
 # ---------------------------------------------------------------------------
@@ -114,21 +132,27 @@ def test_param_tune_dca_lengthens_interval_on_poor_winrate():
 
 
 def test_param_tune_dca_shortens_interval_on_good_winrate():
-    """DCA win_rate >= 0.5 but losing → shorten cadence."""
-    m = _metrics(strategy_id="dca", win_rate=Decimal("0.55"), avg_score=Decimal("-0.06"), n_outcomes=50)
+    """High win_rate + mildly bad score but positive PnL → shorten cadence."""
+    m = _metrics(
+        strategy_id="dca",
+        win_rate=Decimal("0.55"),
+        avg_score=Decimal("-0.06"),
+        total_pnl_usd=Decimal("2.0"),
+        n_outcomes=50,
+    )
     draft = rule_propose_param_tune("dca", _dca_params(), m)
     assert draft is not None
     after = int(draft.after_params["interval_minutes"])
-    assert after < 60, "interval_minutes should decrease when win_rate >= 0.5"
+    assert after < 60, "interval_minutes should decrease when profitable with good win_rate"
 
 
 def test_param_tune_dca_clamps_at_min():
-    """interval_minutes must not go below the minimum (15)."""
+    """At minimum interval but still losing PnL → lengthen (not clamp to None)."""
     params = {"interval_minutes": 15}
     m = _metrics(strategy_id="dca", win_rate=Decimal("0.55"), avg_score=Decimal("-0.06"), n_outcomes=50)
     draft = rule_propose_param_tune("dca", params, m)
-    # Already at min with direction=-1 → clamped → no change → None
-    assert draft is None, "should return None when already at the minimum"
+    assert draft is not None
+    assert int(draft.after_params["interval_minutes"]) == 30
 
 
 def test_param_tune_dca_clamps_at_max():

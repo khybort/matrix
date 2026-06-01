@@ -22,12 +22,17 @@ from reflection.metrics import StrategyMetrics
 # Single source of truth for MutationDraft + risk-cap stripping.
 from reflection.parsing import MutationDraft
 
-# ---------------------------------------------------------------------------
-# Param-tune table for deterministic strategies (grid / dca / oi_delta).
+# Param-tune table for deterministic strategies and matrix_agent runtime knobs.
 # Keys: strategy_id → { param_name → (step, min, max) }.
-# matrix_agent is intentionally absent — it uses the weight tuner path.
-# ---------------------------------------------------------------------------
 PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
+    "matrix_agent": {
+        # horizon_seconds: extend toward the 1800s+ regime where slippage < signal.
+        "horizon_seconds": (Decimal("300"), Decimal("600"), Decimal("3600")),
+        "signal_threshold": (Decimal("0.02"), Decimal("0.08"), Decimal("0.30")),
+        "tp_pct": (Decimal("0.002"), Decimal("0.010"), Decimal("0.040")),
+        "sl_pct": (Decimal("0.002"), Decimal("0.005"), Decimal("0.020")),
+        "explore_epsilon": (Decimal("0.02"), Decimal("0"), Decimal("0.15")),
+    },
     "grid": {
         # price_band_pct: widen/narrow ±price band around the 24h median.
         "price_band_pct": (Decimal("0.005"), Decimal("0.005"), Decimal("0.10")),
@@ -50,6 +55,12 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
         # tp/sl: take-profit and stop-loss percentages.
         "tp_pct": (Decimal("0.002"), Decimal("0.003"), Decimal("0.030")),
         "sl_pct": (Decimal("0.002"), Decimal("0.002"), Decimal("0.015")),
+    },
+    "oi_breakout": {
+        "oi_threshold_pct": (Decimal("0.005"), Decimal("0.005"), Decimal("0.10")),
+        "horizon_s": (Decimal("300"), Decimal("600"), Decimal("3600")),
+        "tp_pct": (Decimal("0.002"), Decimal("0.010"), Decimal("0.040")),
+        "sl_pct": (Decimal("0.002"), Decimal("0.005"), Decimal("0.020")),
     },
     "funding_reversion": {
         # high_funding: minimum |funding_rate| to trigger a signal (per 8h).
@@ -144,13 +155,19 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
 
 LLM_MODEL = MODEL_SONNET
 
-# Mutation triggers
-NEG_AVG_SCORE_TRIGGER = Decimal("-0.05")  # below this avg score → propose mutation
-MIN_N_OUTCOMES = 10  # need at least this many outcomes to act
+# Mutation triggers — fire when PnL is negative OR avg score is poor.
+NEG_AVG_SCORE_TRIGGER = Decimal("-0.05")
+MIN_N_OUTCOMES = 10
 
 # How aggressive each mutation step is
-WEIGHT_PERTURB = Decimal("0.1")  # max ±10% relative to current weight
-THRESHOLD_PERTURB = Decimal("0.05")  # absolute step
+WEIGHT_PERTURB = Decimal("0.05")  # shift toward alpha features
+THRESHOLD_PERTURB = Decimal("0.03")  # loosen threshold when losing (CHANGES.md)
+HORIZON_STEP_S = 300
+TARGET_HORIZON_S = 1800
+
+# Empirically stronger long-horizon features (2026-05-26 diagnosis).
+ALPHA_FEATURES = ("oi_delta", "news")
+NOISE_FEATURES = ("trade_flow", "ob_imbalance", "funding")
 
 
 def _normalize_weights(weights: dict[str, Decimal]) -> dict[str, Decimal]:
@@ -160,6 +177,33 @@ def _normalize_weights(weights: dict[str, Decimal]) -> dict[str, Decimal]:
     return {k: v / total for k, v in weights.items()}
 
 
+def _underperforming(
+    m: StrategyMetrics,
+    *,
+    min_outcomes: int,
+    score_trigger: Decimal,
+) -> bool:
+    """True when we have enough samples and paper PnL or score says 'fix this'."""
+    if m.n_outcomes < min_outcomes:
+        return False
+    if m.total_pnl_usd < 0:
+        return True
+    return m.avg_score < score_trigger
+
+
+def _merge_params(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Deep-merge a mutation patch into the live params dict."""
+    out = dict(current or {})
+    for key, val in patch.items():
+        if key == "weights" and isinstance(val, dict):
+            merged_w = dict(out.get("weights") or {})
+            merged_w.update(val)
+            out["weights"] = merged_w
+        else:
+            out[key] = val
+    return out
+
+
 def rule_propose(
     current_params: dict[str, Any],
     m: StrategyMetrics,
@@ -167,52 +211,73 @@ def rule_propose(
     min_outcomes: int = MIN_N_OUTCOMES,
     score_trigger: Decimal = NEG_AVG_SCORE_TRIGGER,
 ) -> MutationDraft | None:
-    """If win rate poor, perturb weights toward signals that performed best.
-
-    Logic: rebalance weights inversely to per-symbol performance is hard
-    without per-feature attribution, so we use a simpler heuristic — when
-    avg_score is negative, **dampen the news weight** (the noisiest feature)
-    and re-distribute to the more deterministic signals.
+    """When paper PnL is negative, shift weight toward oi_delta/news and loosen
+    threshold / extend horizon — opposite of the pre-2026-06 heuristic that
+    dampened news and raised threshold (which contradicted CHANGES.md diagnosis).
     """
-    if m.n_outcomes < min_outcomes or m.avg_score >= score_trigger:
+    if not _underperforming(m, min_outcomes=min_outcomes, score_trigger=score_trigger):
         return None
 
-    weights = {k: Decimal(v) for k, v in current_params.get("weights", {}).items()}
+    weights = {k: Decimal(str(v)) for k, v in current_params.get("weights", {}).items()}
     if not weights:
         return None
     before = dict(weights)
 
-    # Dampen news weight; redistribute reduction proportionally to others.
-    news = weights.get("news", Decimal("0"))
-    if news > Decimal("0.05"):
-        reduction = news * Decimal("0.5")
-        weights["news"] = news - reduction
-        others = {k: v for k, v in weights.items() if k != "news"}
-        others_sum = sum(others.values(), Decimal("0"))
-        if others_sum > 0:
-            for k in others:
-                weights[k] = weights[k] + reduction * (weights[k] / others_sum)
+    # Move mass from noisy microstructure features toward oi_delta + news.
+    shift = WEIGHT_PERTURB
+    noise_pool = sum(weights.get(k, Decimal("0")) for k in NOISE_FEATURES)
+    if noise_pool >= shift:
+        taken = Decimal("0")
+        for feat in NOISE_FEATURES:
+            if taken >= shift:
+                break
+            w = weights.get(feat, Decimal("0"))
+            if w <= 0:
+                continue
+            cut = min(w, shift - taken)
+            weights[feat] = w - cut
+            taken += cut
+        if taken > 0:
+            alpha_share = taken / Decimal(len(ALPHA_FEATURES))
+            for feat in ALPHA_FEATURES:
+                weights[feat] = weights.get(feat, Decimal("0")) + alpha_share
 
     weights = _normalize_weights(weights)
 
-    # Also raise signal_threshold slightly to filter weaker signals
-    sig_thr = Decimal(current_params.get("signal_threshold", "0.18"))
-    sig_thr_new = min(sig_thr + THRESHOLD_PERTURB, Decimal("0.5"))
+    # Loosen threshold — tighter thresholds hurt win rate at short horizons.
+    sig_thr = Decimal(str(current_params.get("signal_threshold", "0.18")))
+    sig_thr_new = max(sig_thr - THRESHOLD_PERTURB, Decimal("0.08"))
 
-    after = {
+    horizon = int(current_params.get("horizon_seconds", 120))
+    horizon_new = horizon
+    if horizon < TARGET_HORIZON_S:
+        horizon_new = min(horizon + HORIZON_STEP_S, TARGET_HORIZON_S)
+
+    explore = float(current_params.get("explore_epsilon", 0.15))
+    explore_new = max(explore - 0.05, 0.02)
+
+    patch = {
         "weights": {k: str(v.quantize(Decimal("0.0001"))) for k, v in weights.items()},
         "signal_threshold": str(sig_thr_new.quantize(Decimal("0.0001"))),
+        "horizon_seconds": horizon_new,
+        "explore_epsilon": round(explore_new, 3),
     }
-    before_serializable = {
-        "weights": {k: str(v) for k, v in before.items()},
-        "signal_threshold": str(sig_thr),
-    }
+    after = _merge_params(current_params, patch)
+    before_serializable = _merge_params(
+        current_params,
+        {
+            "weights": {k: str(v) for k, v in before.items()},
+            "signal_threshold": str(sig_thr),
+            "horizon_seconds": horizon,
+            "explore_epsilon": explore,
+        },
+    )
 
     rationale = (
-        f"avg_score={m.avg_score:.4f} over {m.n_outcomes} outcomes is below "
-        f"the {NEG_AVG_SCORE_TRIGGER} trigger. Dampening news weight (noisiest "
-        f"feature) and tightening signal_threshold to reduce false signals. "
-        f"win_rate={m.win_rate:.3f} total_pnl_usd={m.total_pnl_usd:.2f}."
+        f"total_pnl_usd={m.total_pnl_usd:.2f} avg_score={m.avg_score:.4f} over "
+        f"{m.n_outcomes} outcomes (win_rate={m.win_rate:.3f}). Shifting weight "
+        f"toward oi_delta/news, lowering signal_threshold, extending horizon toward "
+        f"{TARGET_HORIZON_S}s, reducing exploration."
     )
 
     return MutationDraft(
@@ -250,7 +315,7 @@ def rule_propose_param_tune(
     """
     if strategy_id not in PARAM_TUNERS:
         return None
-    if m.n_outcomes < min_outcomes or m.avg_score >= score_trigger:
+    if not _underperforming(m, min_outcomes=min_outcomes, score_trigger=score_trigger):
         return None
 
     tuner = PARAM_TUNERS[strategy_id]
@@ -272,8 +337,13 @@ def rule_propose_param_tune(
     except (ArithmeticError, ValueError):
         return None
 
-    # Direction: widen/lengthen when win_rate is poor (signal fires too often).
-    direction = Decimal("1") if m.win_rate < Decimal("0.5") else Decimal("-1")
+    # Per-knob direction: widen/lengthen when PnL negative or win_rate poor.
+    # High win_rate + mildly negative score but positive PnL → tighten instead.
+    losing = m.total_pnl_usd < 0 or m.win_rate < Decimal("0.5")
+    if knob in {"signal_threshold", "explore_epsilon"}:
+        direction = Decimal("-1") if losing else Decimal("1")
+    else:
+        direction = Decimal("1") if losing else Decimal("-1")
     new_value = current + direction * step
     new_value = max(lo, min(hi, new_value))
     if new_value == current:
@@ -284,8 +354,11 @@ def rule_propose_param_tune(
     before_params = dict(current_params)
 
     # Integer params stay integer; decimal params serialized as strings.
-    if knob in {"horizon_s", "interval_minutes"}:
+    int_params = {"horizon_s", "interval_minutes", "horizon_seconds", "lookback_days", "top_k", "min_passes", "n_grids"}
+    if knob in int_params:
         after_params[knob] = int(new_value)
+    elif knob == "explore_epsilon":
+        after_params[knob] = float(new_value)
     else:
         after_params[knob] = str(new_value.quantize(Decimal("0.0001")))
 
@@ -317,7 +390,9 @@ async def llm_propose(
         f"  win_rate={m.win_rate}\n"
         f"  total_pnl_usd={m.total_pnl_usd}\n"
         f"  by_symbol={orjson.dumps(m.by_symbol).decode()}\n\n"
-        "Propose ONE parameter mutation that could improve average score. "
+        "Propose ONE parameter mutation that could improve **total_pnl_usd** "
+        "(not just average score). Prefer extending horizon_seconds toward "
+        "1800+ and shifting weight toward oi_delta/news when losing. "
         "DO NOT propose changes to risk caps (max_position_pct, "
         "daily_loss_circuit_pct, max_concurrent_positions) — those are off-limits. "
         "Respond with JSON: "

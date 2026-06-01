@@ -32,12 +32,36 @@ from matrix_shared.markets import all_markets
 from matrix_shared.models import Prediction, TradableSymbol
 
 from agent.config import load_agent_config
-from agent.decide import decide
+from agent.decide import decide_batch
 from agent.features import extract_symbol_features
 
 AGENT_STRATEGY_ID = "matrix_agent"
 
 DEFAULT_INTERVAL_S = 15.0
+
+
+async def _recent_signal_exists(
+    symbol: str, asset_class: str, horizon_seconds: int
+) -> bool:
+    """Skip re-emitting while a prior matrix_agent signal is still live.
+
+    Matches deterministic strategy dedup: one open prediction per
+    symbol within the horizon window prevents 15s spam filling the wallet.
+    """
+    since = datetime.now(UTC) - timedelta(seconds=horizon_seconds)
+    async with shared_session_scope() as session:
+        row = (
+            await session.execute(
+                select(Prediction.id)
+                .where(Prediction.strategy_id == AGENT_STRATEGY_ID)
+                .where(Prediction.symbol == symbol)
+                .where(Prediction.asset_class == asset_class)
+                .where(Prediction.status == "open")
+                .where(Prediction.generated_at >= since)
+                .limit(1)
+            )
+        ).first()
+        return row is not None
 
 
 def _exchange_for(asset_class: str) -> str:
@@ -154,26 +178,60 @@ async def _tick(symbols: list[str]) -> int:
     except Exception:
         pass
 
-    persisted = 0
-    for symbol, asset_class in targets:
-        cfg = cfgs[asset_class]
-        # If the strategy has no active strategy_configs row (retired or never
-        # promoted), skip emission entirely. The fallback config exists only
-        # for bootstrap before the first promotion.
-        if cfg.is_fallback:
-            logger.debug(
-                f"{symbol} [{asset_class}]: skip; no active config for {AGENT_STRATEGY_ID}"
-            )
-            continue
+    # Filter to symbols with an active config
+    active_targets = [
+        (sym, ac) for sym, ac in targets
+        if not cfgs[ac].is_fallback
+    ]
+    for sym, ac in targets:
+        if cfgs[ac].is_fallback:
+            logger.debug(f"{sym} [{ac}]: skip; no active config for {AGENT_STRATEGY_ID}")
+
+    if not active_targets:
+        return 0
+
+    # Pre-filter: skip symbols that already have an open prediction within their
+    # horizon window. Avoids burning LLM tokens on symbols where the dedup check
+    # would reject the signal anyway. Checks run in parallel.
+    async def _has_recent(sym: str, ac: str) -> bool:
         try:
-            features = await extract_symbol_features(symbol)
-            decision = await decide(
-                features, cfg, asset_class=asset_class,
-                symbol_edge=edge_map.get(symbol),
-            )
+            return await _recent_signal_exists(sym, ac, cfgs[ac].horizon_seconds)
+        except Exception:
+            return False
+
+    dedup_flags = await asyncio.gather(*[_has_recent(s, ac) for s, ac in active_targets])
+    fresh_targets = [t for t, dup in zip(active_targets, dedup_flags) if not dup]
+    for (sym, ac), dup in zip(active_targets, dedup_flags):
+        if dup:
+            logger.debug(f"{sym} [{ac}]: pre-dedup skip (open signal within horizon)")
+
+    if not fresh_targets:
+        return 0
+
+    # Parallel feature extraction — only for symbols without a recent signal
+    async def _safe_features(sym: str, ac: str):
+        try:
+            return sym, ac, await extract_symbol_features(sym)
         except Exception as e:
-            logger.exception(f"agent error for {symbol} ({asset_class}): {e}")
-            continue
+            logger.exception(f"feature extraction failed for {sym} ({ac}): {e}")
+            return sym, ac, None
+
+    feat_results = await asyncio.gather(*[_safe_features(s, ac) for s, ac in fresh_targets])
+    valid = [(sym, ac, feat) for sym, ac, feat in feat_results if feat is not None]
+
+    if not valid:
+        return 0
+
+    # One batch LLM call for all symbols → concurrent lessons
+    batch_items = [
+        (feat, cfgs[ac], ac, edge_map.get(sym))
+        for sym, ac, feat in valid
+    ]
+    decisions = await decide_batch(batch_items, strategy_id=AGENT_STRATEGY_ID)
+
+    persisted = 0
+    for (symbol, asset_class, _feat), decision in zip(valid, decisions):
+        cfg = cfgs[asset_class]
 
         if decision.side == "hold" or decision.last_price is None:
             logger.debug(f"{symbol} [{asset_class}]: HOLD ({decision.thesis[:80]})")
@@ -185,6 +243,11 @@ async def _tick(symbols: list[str]) -> int:
             logger.debug(
                 f"{symbol} [{asset_class}]: skip; conf={decision.confidence:.3f}"
             )
+            continue
+
+        # Dedup guard: belt-and-suspenders in case a concurrent tick slipped through
+        if await _recent_signal_exists(symbol, asset_class, cfg.horizon_seconds):
+            logger.debug(f"{symbol} [{asset_class}]: dedup skip (concurrent race)")
             continue
 
         now = datetime.now(UTC)

@@ -48,5 +48,7 @@ class BrainRuntime:
             max_turns=self.max_turns,
             session_id=session_id,
             limiter=get_rate_limiter(),
+            tool_registry=self.registry,
+            mcp_server_name=_SERVER_NAME,
         ):
             yield ev

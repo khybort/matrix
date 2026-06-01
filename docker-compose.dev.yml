@@ -6,8 +6,22 @@
 # any Python file change triggers watchfiles to restart the process — no
 # rebuild required.
 #
+# Python reload uses matrix_shared.dev_watchfiles (2.5s debounce, 2s post-start
+# grace, ignores tests/__pycache__) instead of the stock watchfiles CLI — see
+# packages/python-shared/src/matrix_shared/dev_watchfiles.py.
+#
 # The web service swaps to the `dev` stage in apps/web/Dockerfile, which
 # runs `pnpm dev` for full HMR.
+
+x-matrix-dev-watch: &matrix-dev-watch
+  entrypoint: ["uv", "run", "--with", "watchfiles", "python", "-m", "matrix_shared.dev_watchfiles"]
+
+# For `make llm-cursor`: persist container `agent login` state across restarts.
+# Do NOT mount ~/.local/share/cursor-agent from the host — on macOS that replaces
+# the in-image Linux CLI with Mach-O binaries (Exec format error in Docker).
+# Host `cursor agent login` does not propagate to Linux containers; use
+# `docker exec -it matrix-agent agent login` once, or set CURSOR_API_KEY in .env.
+x-cursor-agent-auth-volume: &cursor-agent-auth-volume matrix_cursor_agent:/root/.cursor
 
 services:
   # Python services — common pattern: mount src dirs + wrap CMD with watchfiles
@@ -16,7 +30,7 @@ services:
   # yfinance poller). Crypto symbols still passed explicitly for parity
   # with the historical default; BIST universe comes from bist_symbols.
   ingestion-market:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m ingestion.main --markets crypto bist --mainnet"
       - "/workspace/services/ingestion/src"
@@ -26,7 +40,7 @@ services:
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
   ingestion-news:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m ingestion.news --interval 300"
       - "/workspace/services/ingestion/src"
@@ -36,7 +50,7 @@ services:
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
   bars-aggregator:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m ingestion.bars --interval 60 --lookback-minutes 5"
       - "/workspace/services/ingestion/src"
@@ -46,7 +60,7 @@ services:
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
   graph:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m graph.main --interval 60"
       - "/workspace/services/graph/src"
@@ -54,9 +68,10 @@ services:
     volumes:
       - ./services/graph/src:/workspace/services/graph/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
+      - *cursor-agent-auth-volume
 
   agent:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m agent.main --interval 15"
       - "/workspace/services/agent/src"
@@ -66,9 +81,10 @@ services:
       - ./services/agent/src:/workspace/services/agent/src
       - ./services/graph/src:/workspace/services/graph/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
+      - *cursor-agent-auth-volume
 
   strategy:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m strategy.main --interval 30"
       - "/workspace/services/strategy/src"
@@ -78,7 +94,7 @@ services:
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
   agent-lessons:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m agent_lessons.main"
       - "/workspace/services/agent_lessons/src"
@@ -88,7 +104,7 @@ services:
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
   backtest-api:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m backtest.api"
       - "/workspace/services/backtest/src"
@@ -98,7 +114,7 @@ services:
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
   backtest:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m backtest.main --interval 5"
       - "/workspace/services/backtest/src"
@@ -108,7 +124,7 @@ services:
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
   reflection:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m reflection.main --interval 600 --no-llm"
       - "/workspace/services/reflection/src"
@@ -116,9 +132,10 @@ services:
     volumes:
       - ./services/reflection/src:/workspace/services/reflection/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
+      - *cursor-agent-auth-volume
 
   labs:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m labs.main --eval-interval 20 --evolve-interval 300 --promote-scan-interval 600 --auto-apply-safe"
       - "/workspace/services/labs/src"
@@ -132,7 +149,7 @@ services:
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
   synthesis:
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m synthesis.main --interval 3600 --hours 6"
       - "/workspace/services/synthesis/src"
@@ -142,6 +159,7 @@ services:
       - ./services/synthesis/src:/workspace/services/synthesis/src
       - ./services/graph/src:/workspace/services/graph/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
+      - *cursor-agent-auth-volume
 
   dev_agent:
     # Dev safety: force the spawned `claude` CLI onto subscription auth so a
@@ -150,7 +168,7 @@ services:
     # picks via .env.
     environment:
       ANTHROPIC_API_KEY: ""
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m dev_agent.main"
       - "/workspace/services/dev_agent/src"
@@ -163,7 +181,7 @@ services:
     # Dev safety: force the spawned `claude` CLI onto subscription auth.
     environment:
       ANTHROPIC_API_KEY: ""
-    entrypoint: ["uv", "run", "watchfiles", "--filter", "python"]
+    <<: *matrix-dev-watch
     command:
       - "python -m brain.main"
       - "/workspace/services/brain/src"
@@ -174,6 +192,7 @@ services:
     volumes:
       - ./services/brain/src:/workspace/services/brain/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
+      - *cursor-agent-auth-volume
 
   web:
     build:
@@ -187,3 +206,7 @@ services:
       - ./apps/web/tsconfig.json:/app/apps/web/tsconfig.json
       - ./apps/web/next-env.d.ts:/app/apps/web/next-env.d.ts
       - ./apps/web/postcss.config.js:/app/apps/web/postcss.config.js
+
+volumes:
+  matrix_cursor_agent:
+    name: matrix_cursor_agent

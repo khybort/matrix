@@ -49,12 +49,33 @@ function pickMarket(req: Request): string | null {
 export async function GET(req: Request) {
   const market = pickMarket(req);
   try {
-    const [walletRow] = await sql`
-      SELECT id, name, starting_capital_usd, cash_usd, locked_usd,
-             max_position_pct, max_concurrent_positions, daily_loss_circuit_pct,
-             circuit_tripped_at, day_start_equity
-      FROM wallets ORDER BY created_at LIMIT 1
-    `;
+    const [walletRow] =
+      market === "bist"
+        ? await sql`
+            SELECT id, name, asset_class, starting_capital_usd, cash_usd, locked_usd,
+                   max_position_pct, max_concurrent_positions, daily_loss_circuit_pct,
+                   circuit_tripped_at, day_start_equity
+            FROM wallets
+            WHERE asset_class = 'bist'
+            ORDER BY created_at
+            LIMIT 1
+          `
+        : await sql`
+            SELECT id, name, asset_class, starting_capital_usd, cash_usd, locked_usd,
+                   max_position_pct, max_concurrent_positions, daily_loss_circuit_pct,
+                   circuit_tripped_at, day_start_equity
+            FROM wallets
+            WHERE asset_class = 'crypto'
+            ORDER BY created_at
+            LIMIT 1
+          `;
+
+    if (!walletRow) {
+      return NextResponse.json(
+        { ok: false, error: "no wallet row for dashboard market" },
+        { status: 500 },
+      );
+    }
 
     const equityCurve = await sql`
       SELECT snapshot_ts, equity_usd, cash_usd, locked_usd, n_open_positions,
@@ -65,15 +86,26 @@ export async function GET(req: Request) {
       LIMIT 200
     `;
 
-    const openPositions = await sql`
-      SELECT p.id, p.symbol, p.side, p.asset_class, p.notional_usd,
-             p.opened_price, p.opened_at,
-             pr.strategy_id, pr.strategy_version, pr.close_by, pr.confidence
-      FROM paper_positions p
-      JOIN predictions pr ON pr.id = p.prediction_id
-      WHERE p.status = 'open' AND p.wallet_id = ${walletRow.id}
-      ORDER BY p.opened_at DESC
-    `;
+    const openPositions = market
+      ? await sql`
+          SELECT p.id, p.symbol, p.side, p.asset_class, p.notional_usd,
+                 p.opened_price, p.opened_at,
+                 pr.strategy_id, pr.strategy_version, pr.close_by, pr.confidence
+          FROM paper_positions p
+          JOIN predictions pr ON pr.id = p.prediction_id
+          WHERE p.status = 'open'
+            AND p.asset_class = ${market}
+          ORDER BY p.opened_at DESC
+        `
+      : await sql`
+          SELECT p.id, p.symbol, p.side, p.asset_class, p.notional_usd,
+                 p.opened_price, p.opened_at,
+                 pr.strategy_id, pr.strategy_version, pr.close_by, pr.confidence
+          FROM paper_positions p
+          JOIN predictions pr ON pr.id = p.prediction_id
+          WHERE p.status = 'open'
+          ORDER BY p.opened_at DESC
+        `;
 
     const recentPredictions = market
       ? await sql`
@@ -199,7 +231,8 @@ export async function GET(req: Request) {
     `;
 
     // ---- BIST overview: universe size, freshest bar timestamps, position summary
-    const [bistSymbolStats] = await sql`
+    // bist_symbols lives on LOCAL tier (strategy + ingestion read via session_scope).
+    const [bistSymbolStats] = await sqlLocal`
       SELECT
         COUNT(*) FILTER (WHERE active) AS active,
         COUNT(*) FILTER (WHERE NOT active) AS inactive,

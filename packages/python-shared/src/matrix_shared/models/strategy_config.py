@@ -23,7 +23,9 @@ class StrategyConfig(Base, TimestampMixin):
 
     __tablename__ = "strategy_configs"
     __table_args__ = (
-        UniqueConstraint("strategy_id", "version", name="uq_strategy_configs_id_ver"),
+        UniqueConstraint(
+            "strategy_id", "asset_class", "version", name="uq_strategy_configs_id_class_ver"
+        ),
         Index("ix_strategy_configs_status", "strategy_id", "status"),
         Index("ix_strategy_configs_asset_class", "asset_class"),
     )

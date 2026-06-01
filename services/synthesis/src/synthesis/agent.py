@@ -77,6 +77,8 @@ async def run_synthesis_agent(window_hours: float) -> list[Theme] | None:
             max_turns=10,
             session_id=_SERVER,
             limiter=get_rate_limiter(),
+            tool_registry=registry,
+            mcp_server_name=_SERVER,
         ):
             if ev.type == "assistant_text":
                 parts.append(ev.payload.get("text", ""))

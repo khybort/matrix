@@ -23,8 +23,12 @@ x-logging: &default_logging
 x-shared-local-url: &shared_local_url
   SHARED_DATABASE_URL: postgres://matrix:matrix_dev_only@postgres-shared:5432/matrix_shared
 
+x-cpu-shared-db: &cpu_shared_db
+  cpus: ${MATRIX_CPU_SHARED_DB:-0.25}
+
 services:
   postgres-shared:
+    <<: *cpu_shared_db
     build:
       context: ./infra/db
     image: matrix-postgres:local

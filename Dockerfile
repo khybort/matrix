@@ -66,7 +66,8 @@ ARG SERVICE
 COPY services/${SERVICE}/src /workspace/services/${SERVICE}/src
 
 WORKDIR /workspace/services/${SERVICE}
-RUN uv sync --frozen
+RUN uv sync --frozen \
+    && uv pip install watchfiles
 
 # dev_agent and brain additionally need Node.js + the Claude Code CLI because
 # claude_agent_sdk (Python) spawns the `claude` binary as its transport.
@@ -80,6 +81,15 @@ RUN if [ "${SERVICE}" = "dev_agent" ] || [ "${SERVICE}" = "brain" ]; then \
         && rm -rf /var/lib/apt/lists/* \
         && npm install -g @anthropic-ai/claude-code ; \
     fi
+# LLM services using the Cursor backend spawn `cursor agent` (subscription login
+# or optional CURSOR_API_KEY). Install the CLI in-image; mount host auth dirs in compose.
+RUN case "${SERVICE}" in graph|agent|brain|synthesis|reflection) \
+        curl -fsSL https://cursor.com/install | bash \
+        && printf '%s\n' '#!/bin/sh' 'if [ "$1" = "agent" ]; then shift; fi' 'exec /root/.local/bin/agent "$@"' \
+            > /root/.local/bin/cursor \
+        && chmod +x /root/.local/bin/cursor ;; \
+    esac
+ENV PATH="/root/.local/bin:${PATH}"
 
 # Generic entrypoint: `uv run python -m <module>`. Compose passes the module
 # (e.g. ingestion.main, ingestion.news, agent.main, labs.main) + args.

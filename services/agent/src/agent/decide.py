@@ -9,6 +9,7 @@ adds context-aware reasoning when AI_GATEWAY_API_KEY is configured.
 
 from __future__ import annotations
 
+import asyncio
 import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -20,7 +21,7 @@ from matrix_shared.agent_lessons import lessons_relevant_to
 
 from agent.config import FALLBACK, AgentConfig
 from agent.features import SymbolFeatures
-from agent.llm import call_llm_decision, llm_enabled
+from agent.llm import call_llm_decision, call_llm_decisions_batch, llm_enabled
 
 # Lessons with confidence at or above this threshold change behavior.
 # 0.4 captures buckets at ~25+ observations on the synthesizer's confidence
@@ -74,12 +75,19 @@ def _funding_score(f: SymbolFeatures) -> Decimal:
 
 
 def _oi_score(f: SymbolFeatures) -> Decimal:
-    """OI jump + price up → momentum continuation. We don't yet track price
-    delta separately; use OI direction as a proxy momentum nudge."""
+    """OI jump aligned with 5m price direction → momentum; divergence → dampen."""
     if f.oi_delta_pct_5m is None:
         return Decimal("0")
-    # ±2% OI swing → ±1
     scaled = f.oi_delta_pct_5m / Decimal("0.02")
+    scaled = max(min(scaled, Decimal("1")), Decimal("-1"))
+
+    if f.price_change_pct_5m is not None and f.price_change_pct_5m != 0:
+        price_dir = Decimal("1") if f.price_change_pct_5m > 0 else Decimal("-1")
+        oi_dir = Decimal("1") if scaled > 0 else Decimal("-1")
+        if price_dir != oi_dir:
+            scaled *= Decimal("0.25")
+        else:
+            scaled = abs(scaled) * price_dir
     return max(min(scaled, Decimal("1")), Decimal("-1"))
 
 
@@ -447,3 +455,66 @@ async def _apply_lessons(
         )
 
     return d
+
+
+async def decide_batch(
+    items: list[tuple[SymbolFeatures, AgentConfig | None, str, float | None]],
+    strategy_id: str = "matrix_agent",
+    explore_rand: Callable[[], float] = random.random,
+) -> list[Decision]:
+    """Batch decide: one LLM call for all symbols, concurrent lessons.
+
+    Each item is (features, cfg, asset_class, symbol_edge).
+    Falls back to rule-based per symbol when LLM omits it.
+    """
+    if not items:
+        return []
+
+    rules = [
+        rule_decide(
+            f,
+            cfg.weights if cfg else WEIGHTS,
+            cfg.signal_threshold if cfg else RULE_SIGNAL_THRESHOLD,
+            asset_class=asset_class,
+        )
+        for f, cfg, asset_class, _ in items
+    ]
+
+    llm_map: dict[str, LLMDecision] = {}
+    if llm_enabled():
+        prompts = [(f.symbol, _llm_prompt(f)) for f, _, _, _ in items]
+        llm_map = await call_llm_decisions_batch(prompts)
+
+    bases: list[Decision] = []
+    for (f, cfg, asset_class, symbol_edge), rule in zip(items, rules):
+        llm = llm_map.get(f.symbol)
+        if llm is not None:
+            base = Decision(
+                symbol=f.symbol,
+                side=llm.side,
+                confidence=Decimal(str(llm.confidence)),
+                thesis=f"LLM: {llm.reasoning} || rule: {rule.thesis}",
+                method="llm",
+                feature_dump={**rule.feature_dump, "llm_confidence": llm.confidence},
+                last_price=f.last_price,
+            )
+        else:
+            logger.debug(f"llm batch missed {f.symbol}, falling back to rule")
+            base = rule
+        epsilon = float(cfg.explore_epsilon) if cfg else EXPLORE_EPSILON_DEFAULT
+        bases.append(
+            maybe_explore(
+                base,
+                epsilon=epsilon,
+                roll=explore_rand(),
+                asset_class=asset_class,
+                symbol_edge=symbol_edge,
+            )
+        )
+
+    return list(
+        await asyncio.gather(*[
+            _apply_lessons(b, f, strategy_id)
+            for (f, _, _, _), b in zip(items, bases)
+        ])
+    )

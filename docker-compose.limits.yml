@@ -1,0 +1,77 @@
+# CPU caps for local dev — keeps Matrix from saturating OrbStack / the host.
+#
+# Applied automatically by `make up-dev` and `make up-dev-local`.
+# Defaults below are the "performance" profile (~4.5 cores max if all pegged).
+# Tighten after host RAM/CPU is scarce (e.g. MATRIX_CPU_HEAVY=0.5).
+# Override per tier via .env (fractional CPUs, e.g. 0.5 = half a core):
+#   MATRIX_CPU_HEAVY  — ingestion-market, web
+#   MATRIX_CPU_DB     — postgres
+#   MATRIX_CPU_WORKER — agent, labs, graph, strategy, backtest, bars-aggregator
+#   MATRIX_CPU_LIGHT  — news, reflection, lessons, synthesis, brain, dev_agent
+#
+# Recreate containers after changing limits:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+#     -f docker-compose.limits.yml up -d --force-recreate
+
+name: matrix
+
+x-cpu-heavy: &cpu_heavy
+  cpus: ${MATRIX_CPU_HEAVY:-1.0}
+
+x-cpu-db: &cpu_db
+  cpus: ${MATRIX_CPU_DB:-0.75}
+
+x-cpu-worker: &cpu_worker
+  cpus: ${MATRIX_CPU_WORKER:-0.5}
+
+x-cpu-light: &cpu_light
+  cpus: ${MATRIX_CPU_LIGHT:-0.25}
+
+services:
+  postgres:
+    <<: *cpu_db
+
+  ingestion-market:
+    <<: *cpu_heavy
+
+  ingestion-news:
+    <<: *cpu_light
+
+  bars-aggregator:
+    <<: *cpu_worker
+
+  graph:
+    <<: *cpu_worker
+
+  agent:
+    <<: *cpu_worker
+
+  agent-lessons:
+    <<: *cpu_light
+
+  strategy:
+    <<: *cpu_worker
+
+  backtest:
+    <<: *cpu_light
+
+  backtest-api:
+    <<: *cpu_light
+
+  reflection:
+    <<: *cpu_light
+
+  labs:
+    <<: *cpu_worker
+
+  synthesis:
+    <<: *cpu_light
+
+  dev_agent:
+    <<: *cpu_light
+
+  brain:
+    <<: *cpu_light
+
+  web:
+    <<: *cpu_heavy

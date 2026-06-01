@@ -19,15 +19,12 @@ from strategy.modules.crypto.screener_follow import ScreenerFollow
 STRATEGIES: list[type] = [
     FundingReversion,
     OiDelta,
+    OiBreakout,
     Grid,
     MomentumXs,
     ScreenerFollow,
     CashAndCarry,
-    # Dca: -$8.67/24h, avg_score -0.148 (2026-05-28). Long-only accumulator hurts
-    #      in sideways/down markets; re-enable when funding_rate trend confirms
-    #      sustained upward pressure or lab genome proves its signal.
-    # OiBreakout: -$1.81/24h, 7% win rate (2026-05-28). Signal not yet validated;
-    #             kept in lab evolution pool, re-register once fitness >= 0.05.
+    Dca,
 ]
 
 __all__ = [

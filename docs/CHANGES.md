@@ -5,12 +5,129 @@
 
 ---
 
+## 2026-06-02 — Public dashboard overlay (DuckDNS / host :3030)
+
+- `docker-compose.public.yml` + `make up-dev-public`, `make public-ip`, `scripts/duckdns-update.sh`
+
 ## 2026-06-02 — BIST 1m bar backfill (strategy preconditions)
 
 - `ingestion/bist/bars.py`: bootstrap + off-session 6h refresh for `1m` bars when missing/stale
 - `make bist-bars-backfill`: one-shot `1m` / `5d` pull via yfinance (works outside TR session)
 
-## 2026-05-23 — Bootstrap (initial author: assistant, on behalf of user)
+## 2026-06-01 — Cursor Auto LLM backend (`make llm-cursor`)
+
+Third LLM backend alongside subscription and Bedrock. `make llm-cursor` sets
+`MATRIX_LLM_BACKEND=cursor`; all LLM calls use **model=auto** (tier pins ignored).
+Auth is subscription-style: `cursor agent login` on the host (browser OAuth);
+`CURSOR_API_KEY` is optional for CI/Docker. Single-shot calls use `cursor agent -p`;
+tool loops use `cursor-sdk` with the same login or API key. Docker: Cursor CLI
+installed in graph/agent/brain/synthesis/reflection images; dev compose uses a
+`matrix_cursor_agent` volume on `/root/.cursor` (`make cursor-login-docker` or
+`docker exec -it matrix-agent cursor agent login` once per machine — do not mount macOS
+`~/.local/share/cursor-agent`, it breaks the Linux CLI). Restart stack after
+switching. **dev_agent** still uses `claude_agent_sdk` directly (not wired).
+
+---
+
+## 2026-06-01 — Dev CPU limits (docker-compose.limits.yml)
+
+`make up-dev` / `up-dev-local` merge `docker-compose.limits.yml`. Default
+**performance** caps: heavy 1.0, db 0.75, worker 0.5, light 0.25. Tighten via
+`MATRIX_CPU_*` in `.env`. `make up-dev-core` = trading core only (7 services).
+Recreate after limit changes: `--force-recreate`.
+
+---
+
+## 2026-06-01 — Dev watchfiles debounce (restart storm)
+
+`docker-compose.dev.yml` uses `matrix_shared.dev_watchfiles` instead of the
+stock `watchfiles` CLI: 2.5s debounce, 2s post-start grace, ignores
+`tests/` + tool caches. Tunable via `MATRIX_WATCH_DEBOUNCE_MS` /
+`MATRIX_WATCH_GRACE_S`. Recreate dev containers after pull:
+`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`.
+
+---
+
+## 2026-06-01 — Profit loop fix: align mutations + lab scoring with paper PnL
+
+Self-improvement was optimizing the wrong objective and mutating in the wrong direction:
+
+- **reflection/mutate**: rule path now triggers on negative `total_pnl_usd`, shifts weight toward `oi_delta`/`news`, *lowers* threshold, extends `horizon_seconds`, reduces `explore_epsilon` (reverses the pre-2026-06 heuristic that dampened news and raised threshold). `matrix_agent` added to `PARAM_TUNERS` + safe auto-apply.
+- **reflection/metrics**: `win_rate` now counts `pnl_usd > 0`, not `score > 0`.
+- **labs/evaluate**: slippage-adjusted PnL via `matrix_shared.trading.apply_slippage`; wins counted on `pnl_pct > 0`.
+- **labs/promote**: merge patches into existing params (no more partial overwrites); lab promotions enriched with `tp_pct`/`sl_pct`/`explore_epsilon`; `_params_equivalent` includes `horizon_seconds`.
+- **agent**: v3 defaults (1800s horizon, 40/40 oi_delta/news, threshold 0.15, explore 5%); OI score aligned with 5m price direction.
+- **migration 0034**: upgrades legacy short-horizon `matrix_agent` configs to v3 params.
+
+Run `make migrate` to apply 0034 on existing DBs.
+
+---
+
+## 2026-06-01 — Seed missing strategy_configs (0035)
+
+Registered crypto/BIST modules were skipped by the dispatcher because no
+`strategy_configs` row existed (0026/0027 only UPDATE). Migration 0035
+INSERTs grid, funding_reversion, oi_delta + four BIST strategies with slot
+configs. Also fixes `uq_strategy_configs_id_ver` → per-asset_class unique
+and seeds BIST `matrix_agent`. Run `make migrate-local-shared`.
+
+---
+
+## 2026-06-01 — Re-enable dca + oi_breakout for analysis (0036)
+
+Registry + migration re-open `dca` and `oi_breakout` with slot configs.
+Crypto wallet cap raised 50→80 for parallel paper analysis. `bars.py` now
+rolls 1m→1h bars so `momentum_xs` can fire. Run migrate + restart
+`bars-aggregator` and `strategy`.
+
+---
+
+## 2026-06-01 — matrix_agent slot cap + dedup + bar rollup tuning (0037)
+
+- Migration 0037: `matrix_agent` capped at 18 concurrent slots; other crypto
+  strategies rebalanced (sum of caps 64 / wallet 80).
+- `agent/main.py`: horizon dedup — no repeat signal per symbol within 1800s.
+- `explore_epsilon` lowered to 0.03.
+- `bars-aggregator`: lookback 120m + 168h REST backfill on startup (compose).
+
+---
+
+## 2026-06-01 — Profit-first allocation: strategy×symbol fit + dynamic risk
+
+- `matrix_shared/allocation.py`: pair-edge from closed paper trades, EV ranking
+  (symbol + strategy perf + pairing), and `risk_multiplier` for notional sizing.
+- `paper_trade.py`: candidates sorted by full EV; position size scales with
+  confidence, strategy `perf_score`, pair history, and consecutive losses.
+
+---
+
+## 2026-06-01 — Dynamic universe: remove hardcoded crypto fallback
+
+- `crypto_universe()`: no `_DEFAULT_UNIVERSE`; reads `tradable_symbols.active`,
+  cold-bootstraps from `screener_universe_snapshot`, else empty.
+- Compose: `UNIVERSE_MANAGER_ENABLED/ENFORCE=true` by default; ingestion no
+  longer passes BTCUSDT/ETHUSDT on the CLI.
+
+---
+
+## 2026-06-01 — Dev watchfiles crash-loop fix
+
+- `Dockerfile`: `uv pip install watchfiles` after service `uv sync` so dev
+  hot-reload works in every service venv.
+- `docker-compose.dev.yml`: entrypoint uses `uv run --with watchfiles` +
+  `matrix_shared.dev_watchfiles` (debounced reload).
+
+---
+
+## 2026-06-01 — BIST dynamic discover (no embedded seed)
+
+- `ingestion/bist/discover.py`: fetches ~600+ tickers from configurable JSON
+  endpoint (default Fintables public API); upserts `bist_symbols`, deactivates
+  delisted. Embedded `BIST_SEED` list removed.
+- BIST ingestor runs discover on startup + daily refresh (`BIST_DISCOVER_INTERVAL_S`).
+- `make bist-seed` → `matrix-bist-symbols --bootstrap-active` via ingestion-market.
+
+---
 
 - Foundation docs created: `VISION.md`, `ARCHITECTURE.md`, `ROADMAP.md`, `WORK_SPLIT.md`
 - `CLAUDE.md` written with two-machine instructions

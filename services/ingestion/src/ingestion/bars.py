@@ -209,6 +209,45 @@ async def _earliest_trade_ts() -> datetime | None:
         return v
 
 
+_ROLLUP_1H_SQL = text("""
+INSERT INTO market_bars
+  (id, symbol, asset_class, interval, ts, open, high, low, close, volume, source, created_at)
+SELECT
+  gen_random_uuid(),
+  symbol,
+  asset_class,
+  '1h'                                      AS interval,
+  date_trunc('hour', ts)                    AS ts,
+  (array_agg(open ORDER BY ts ASC))[1]      AS open,
+  MAX(high)                                 AS high,
+  MIN(low)                                  AS low,
+  (array_agg(close ORDER BY ts DESC))[1]   AS close,
+  SUM(volume)                               AS volume,
+  'rollup_1h'                               AS source,
+  NOW()                                     AS created_at
+FROM market_bars
+WHERE asset_class = 'crypto'
+  AND interval = '1m'
+  AND ts >= :since
+  AND ts <  :until
+GROUP BY symbol, asset_class, date_trunc('hour', ts)
+ON CONFLICT (asset_class, symbol, interval, ts) DO UPDATE
+  SET open   = EXCLUDED.open,
+      high   = EXCLUDED.high,
+      low    = EXCLUDED.low,
+      close  = EXCLUDED.close,
+      volume = EXCLUDED.volume,
+      source = EXCLUDED.source
+""")
+
+
+async def rollup_1h_bars(since: datetime, until: datetime) -> int:
+    """Roll 1m crypto bars into 1h bars for momentum_xs and similar strategies."""
+    async with session_scope() as session:
+        result = await session.execute(_ROLLUP_1H_SQL, {"since": since, "until": until})
+        return result.rowcount or 0
+
+
 async def backfill_all() -> int:
     """Aggregate every bar from the earliest trade to NOW. One-shot."""
     earliest = await _earliest_trade_ts()
@@ -218,7 +257,8 @@ async def backfill_all() -> int:
     until = datetime.now(timezone.utc)
     logger.info(f"backfill: aggregating {earliest.isoformat()} → {until.isoformat()}")
     n = await aggregate_window(earliest, until)
-    logger.info(f"backfill: wrote/updated {n} bar rows")
+    h = await rollup_1h_bars(earliest, until)
+    logger.info(f"backfill: wrote/updated {n} 1m bar rows, {h} 1h rollup rows")
     return n
 
 
@@ -227,8 +267,13 @@ async def tick(lookback_minutes: int) -> int:
     until = datetime.now(timezone.utc)
     since = until - timedelta(minutes=lookback_minutes)
     n = await aggregate_window(since, until)
-    if n:
-        logger.info(f"tick: upserted {n} bar rows in last {lookback_minutes}m")
+    # Roll up last 8 days of 1m → 1h (covers momentum_xs 7d lookback + buffer).
+    h_since = until - timedelta(days=8)
+    h = await rollup_1h_bars(h_since, until)
+    if n or h:
+        logger.info(
+            f"tick: upserted {n} 1m + {h} 1h bar rows in last {lookback_minutes}m window"
+        )
     return n
 
 

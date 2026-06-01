@@ -14,7 +14,17 @@ from matrix_shared.subscription_llm import call_subscription_agent
 
 
 @pytest.mark.asyncio
-async def test_yields_nothing_when_subscription_disabled(monkeypatch):
-    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+async def test_yields_nothing_when_no_llm_backend(monkeypatch):
+    """Container .env often has Bedrock/OAuth; blank every backend for this test."""
+    for key in (
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CURSOR_API_KEY",
+        "MATRIX_LLM_BACKEND",
+        "AWS_ACCESS_KEY_ID",
+    ):
+        monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv(key, "")
     events = [e async for e in call_subscription_agent(prompt="hi")]
     assert events == []

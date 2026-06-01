@@ -21,6 +21,7 @@ from loguru import logger
 from sqlalchemy import func, select, text
 
 from matrix_shared import local_session_scope, shared_session_scope
+from matrix_shared.allocation import expected_value, load_pair_edges, risk_multiplier
 from matrix_shared.markets import all_markets
 from matrix_shared.models import (
     MarketBar,
@@ -467,7 +468,9 @@ async def _open_for_market(asset_class: str) -> int:
         # Batch-load per-symbol potential scores for the edge multiplier.
         # Symbols absent from tradable_symbols get score=None → neutral (1.0×).
         symbols_needed = {p.symbol for p in candidates_raw}
+        strategy_ids_needed = {p.strategy_id for p in candidates_raw}
         symbol_scores: dict[str, float] = {}
+        pair_edges: dict[tuple[str, str], float] = {}
         if symbols_needed:
             score_rows = (
                 await session.execute(
@@ -477,15 +480,25 @@ async def _open_for_market(asset_class: str) -> int:
                 )
             ).all()
             symbol_scores = {sym: sc for sym, sc in score_rows if sc is not None}
+            pair_edges = await load_pair_edges(
+                session,
+                wallet_id=wallet.id,
+                strategy_ids=strategy_ids_needed,
+                symbols=symbols_needed,
+            )
 
         def _ev(p: Prediction) -> float:
-            conf = float(p.confidence)
             tp = float(p.tp_pct) if p.tp_pct is not None else float(SCORE_CAP_PCT)
             sl = float(p.sl_pct) if p.sl_pct is not None else float(SCORE_CAP_PCT)
-            base_ev = conf * tp - (1.0 - conf) * sl
-            sc = symbol_scores.get(p.symbol)
-            multiplier = max(0.5, min(1.5, 0.5 + sc)) if sc is not None else 1.0
-            return base_ev * multiplier
+            cfg = slot_configs.get(p.strategy_id)
+            return expected_value(
+                confidence=float(p.confidence),
+                tp_pct=tp,
+                sl_pct=sl,
+                symbol_edge=symbol_scores.get(p.symbol),
+                strategy_perf=cfg.perf_score if cfg is not None else None,
+                pair_edge=pair_edges.get((p.strategy_id, p.symbol)),
+            )
 
         candidates = sorted(candidates_raw, key=_ev, reverse=True)
 
@@ -532,11 +545,15 @@ async def _open_for_market(asset_class: str) -> int:
             continue
         entry = _apply_slippage(last_px, p.side, opening=True)
 
-        # Floor 0.2 was over-sizing 0.05-confidence exploration probes 4×.
-        # A probe should risk ~confidence × max_notional, not 4× that.
+        cfg = slot_configs.get(p.strategy_id)
         conf = max(Decimal("0.05"), min(Decimal("1.0"), p.confidence))
-        notional = max_notional * conf
-        notional = notional.quantize(Decimal("0.01"))
+        risk = risk_multiplier(
+            confidence=conf,
+            perf_score=cfg.perf_score if cfg is not None else None,
+            pair_edge=pair_edges.get((p.strategy_id, p.symbol)),
+            consecutive_losses=cfg.consecutive_losses if cfg is not None else 0,
+        )
+        notional = (max_notional * risk).quantize(Decimal("0.01"))
 
         async with shared_session_scope() as session:
             wallet = await _resolve_wallet(session, p.asset_class)
