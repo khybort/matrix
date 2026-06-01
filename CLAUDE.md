@@ -38,6 +38,8 @@ cat .matrix-node.json 2>/dev/null || echo "unset"
 
 1. **Oturum başı**: `git pull --rebase` (remote varsa) → `TaskList` → ne işin var bak
 2. **Atomik commit**: `feat:`, `fix:`, `chore:`, `docs:` prefiks, küçük scope
+   - Commit mesajında **IDE/LLM vendor adları / Co-authored-by** yasak — yalnızca Matrix değişikliğini yaz.
+   - `make install-hooks` → `prepare-commit-msg` vendor trailer'larını otomatik temizler.
 3. **Push sık** (remote eklendiğinde): her anlamlı iş bitiminde
 4. **Çakışma**: rebase tercih. Docs çakışmasında merge OK
 5. **Sırlar/keys**: asla commit etme. `.env.local` gitignored. Şablon `.env.example`

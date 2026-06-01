@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Reject commit messages that still mention authoring-tool vendors after sanitization.
+# Install with: make install-hooks
+
+set -euo pipefail
+MSG_FILE="${1:?missing commit message file}"
+if grep -qiE '(^|[[:space:],:(-])(cursor|claude)([[:space:],.)]|$|agent@|_agent_sdk| agent login)' "$MSG_FILE"; then
+  echo "✘ commit message must not reference authoring-tool vendor names" >&2
+  echo "  describe the Matrix change only; Co-authored-by trailers are stripped automatically" >&2
+  exit 1
+fi

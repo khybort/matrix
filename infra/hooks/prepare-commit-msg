@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Strip vendor IDE/LLM names and Co-authored-by trailers before a commit is created.
+# Install with: make install-hooks
+
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+MSG_FILE="${1:?missing commit message file}"
+python3 "$ROOT/scripts/strip_commit_vendor_refs.py" "$MSG_FILE"

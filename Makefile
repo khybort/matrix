@@ -433,10 +433,12 @@ shared-test: ## Run matrix-shared test suite (host)
 	cd packages/python-shared && uv run --no-sync pytest -v
 
 .PHONY: install-hooks
-install-hooks: ## Install git hooks (pre-push: blocks dev-agent/* branches)
+install-hooks: ## Install git hooks (pre-push + commit message sanitizer)
 	cp infra/hooks/pre-push .git/hooks/pre-push
-	chmod +x .git/hooks/pre-push
-	@echo "✓ pre-push hook installed"
+	cp infra/hooks/prepare-commit-msg .git/hooks/prepare-commit-msg
+	cp infra/hooks/commit-msg .git/hooks/commit-msg
+	chmod +x .git/hooks/pre-push .git/hooks/prepare-commit-msg .git/hooks/commit-msg
+	@echo "✓ pre-push, prepare-commit-msg, commit-msg hooks installed"
 
 ##@ Backtest
 
