@@ -64,7 +64,7 @@ services:
   graph:
     <<: *matrix-dev-watch
     command:
-      - "python -m graph.main --interval 60"
+      - "python -m graph.main --interval 20"
       - "/workspace/services/graph/src"
       - "/workspace/packages/python-shared/src"
     volumes:

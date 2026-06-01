@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-06-02 — Graph backlog drain fix
+
+- `graph/main.py`: `_fetch_batch` SQL-filters unprocessed docs (was top-N newest then
+  filter → 0/tick when recent rows already processed). Higher defaults: batch 50,
+  interval 20s, concurrency 6. Stale docs (>7d) use heuristic-only path; backfill
+  pauses while unprocessed > 20.
+
 ## 2026-06-02 — Mutation proposal auto-apply fixes
 
 - `apply_proposal`: `slot_adjustment` updates `strategy_slot_configs` (was wrongly

@@ -11,7 +11,7 @@ Process tracking is via raw_documents.meta JSONB — we set
 (MERGE is idempotent) and triggered by clearing that key.
 
 Usage:
-    uv run python -m graph.main                  # default 60s loop, batch 25
+    uv run python -m graph.main                  # default 20s loop, batch 50
     uv run python -m graph.main --once --limit 10
     uv run python -m graph.main --reprocess      # ignore processed flag
 """
@@ -20,14 +20,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import signal
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from loguru import logger
 from matrix_shared import session_scope
 from matrix_shared.models import RawDocument
-from sqlalchemy import desc, select
+from sqlalchemy import select, text
 
 from graph.age import (
     graph_summary,
@@ -38,22 +39,76 @@ from graph.age import (
 )
 from graph.backfill import BackfillConfig, backfill_tick, count_pending
 from graph.chunking import ChunkConfig, plan_semantic_chunks
-from graph.extract import extract_entities
+from graph.extract import extract_entities, heuristic_extract
 from graph.publish import DEFAULT_ASSETS, publish_all
 
-DEFAULT_INTERVAL_S = 60.0
-DEFAULT_BATCH = 25
-DEFAULT_PUBLISH_INTERVAL_S = 120.0  # publish federated aggregates twice / 60s extract loop
+DEFAULT_INTERVAL_S = float(os.environ.get("GRAPH_INTERVAL_S", "20"))
+DEFAULT_BATCH = max(1, int(os.environ.get("GRAPH_BATCH", "50")))
+DEFAULT_CONCURRENCY = max(1, int(os.environ.get("GRAPH_CONCURRENCY", "6")))
+DEFAULT_STALE_HEURISTIC_DAYS = float(os.environ.get("GRAPH_STALE_HEURISTIC_DAYS", "7"))
+DEFAULT_BACKFILL_PAUSE_UNPROCESSED = max(
+    0, int(os.environ.get("GRAPH_BACKFILL_PAUSE_UNPROCESSED", "20"))
+)
+DEFAULT_PUBLISH_INTERVAL_S = 120.0  # publish federated aggregates twice / extract loop
 PROCESSED_KEY = "graph_processed_at"
+
+
+async def count_unprocessed() -> int:
+    async with session_scope() as session:
+        row = await session.execute(
+            text("""
+                SELECT COUNT(*)::int
+                FROM raw_documents
+                WHERE NOT (meta::jsonb ? :key)
+            """),
+            {"key": PROCESSED_KEY},
+        )
+        return int(row.scalar_one())
 
 
 async def _fetch_batch(limit: int, reprocess: bool) -> list[RawDocument]:
     async with session_scope() as session:
-        stmt = select(RawDocument).order_by(desc(RawDocument.published_at)).limit(limit)
-        rows = list((await session.execute(stmt)).scalars())
-    if reprocess:
-        return rows
-    return [r for r in rows if PROCESSED_KEY not in (r.meta or {})]
+        if reprocess:
+            rows = await session.execute(
+                text("""
+                    SELECT id
+                    FROM raw_documents
+                    ORDER BY published_at DESC NULLS LAST
+                    LIMIT :lim
+                """),
+                {"lim": limit},
+            )
+        else:
+            rows = await session.execute(
+                text("""
+                    SELECT id
+                    FROM raw_documents
+                    WHERE NOT (meta::jsonb ? :key)
+                    ORDER BY published_at DESC NULLS LAST
+                    LIMIT :lim
+                """),
+                {"key": PROCESSED_KEY, "lim": limit},
+            )
+        ids = [r[0] for r in rows]
+        if not ids:
+            return []
+        docs = list(
+            (await session.execute(select(RawDocument).where(RawDocument.id.in_(ids))))
+            .scalars()
+            .all()
+        )
+    order = {doc_id: i for i, doc_id in enumerate(ids)}
+    docs.sort(key=lambda d: order[d.id])
+    return docs
+
+
+def _doc_is_stale(doc: RawDocument) -> bool:
+    if DEFAULT_STALE_HEURISTIC_DAYS <= 0 or doc.published_at is None:
+        return False
+    pub = doc.published_at
+    if pub.tzinfo is None:
+        pub = pub.replace(tzinfo=UTC)
+    return pub < datetime.now(UTC) - timedelta(days=DEFAULT_STALE_HEURISTIC_DAYS)
 
 
 async def _mark_processed(
@@ -82,7 +137,12 @@ async def _process_doc(doc, sem: asyncio.Semaphore) -> bool:
     async with sem:
         chunks = _chunk_count(doc.body)
         try:
-            entities, relations, source = await extract_entities(doc.title, doc.body)
+            if _doc_is_stale(doc):
+                entities = heuristic_extract(doc.title, doc.body)
+                relations = []
+                source = "heuristic"
+            else:
+                entities, relations, source = await extract_entities(doc.title, doc.body)
         except Exception as e:
             logger.exception(f"extract failed for {doc.id}: {e}")
             return False
@@ -124,17 +184,24 @@ async def _process_doc(doc, sem: asyncio.Semaphore) -> bool:
 
 
 async def _tick(limit: int, reprocess: bool) -> int:
+    backlog = await count_unprocessed()
     batch = await _fetch_batch(limit, reprocess)
     if not batch:
+        if backlog and not reprocess:
+            logger.warning(f"tick: {backlog} unprocessed but fetch returned 0")
         return 0
+    if backlog:
+        logger.info(f"tick: backlog {backlog}, batch {len(batch)}")
 
-    # 4 concurrent agent loops — rate_limiter inside extract_entities throttles
-    # actual Bedrock throughput; the semaphore caps in-flight doc coroutines.
-    sem = asyncio.Semaphore(4)
+    sem = asyncio.Semaphore(DEFAULT_CONCURRENCY)
     results = await asyncio.gather(
         *[_process_doc(doc, sem) for doc in batch], return_exceptions=True
     )
-    return sum(1 for r in results if r is True)
+    ok = sum(1 for r in results if r is True)
+    if ok:
+        remaining = await count_unprocessed()
+        logger.info(f"tick: processed {ok}/{len(batch)} ({remaining} left)")
+    return ok
 
 
 async def run(
@@ -168,8 +235,6 @@ async def run(
         loop_started = asyncio.get_event_loop().time()
         try:
             n = await _tick(limit, reprocess=False)
-            if n:
-                logger.info(f"tick: processed {n} documents")
         except Exception as e:
             logger.exception(f"tick failed: {e}")
 
@@ -177,12 +242,19 @@ async def run(
             backfill_cfg.enabled
             and loop_started - last_backfill >= backfill_cfg.interval_s
         ):
-            try:
-                await backfill_tick(_process_doc)
-                last_backfill = loop_started
-            except Exception as e:
-                logger.exception(f"backfill tick failed: {e}")
-                last_backfill = loop_started
+            unprocessed = await count_unprocessed()
+            if unprocessed > DEFAULT_BACKFILL_PAUSE_UNPROCESSED:
+                logger.debug(
+                    f"backfill paused: {unprocessed} unprocessed "
+                    f"(resumes at <= {DEFAULT_BACKFILL_PAUSE_UNPROCESSED})"
+                )
+            else:
+                try:
+                    await backfill_tick(_process_doc)
+                    last_backfill = loop_started
+                except Exception as e:
+                    logger.exception(f"backfill tick failed: {e}")
+                    last_backfill = loop_started
 
         if loop_started - last_publish >= publish_interval_s:
             try:
@@ -257,7 +329,8 @@ def main() -> None:
         return
 
     logger.info(
-        f"graph start: limit={args.limit} once={args.once} reprocess={args.reprocess} "
+        f"graph start: limit={args.limit} interval={args.interval}s "
+        f"concurrency={DEFAULT_CONCURRENCY} once={args.once} reprocess={args.reprocess} "
         f"publish_interval={args.publish_interval}s assets={args.assets}"
     )
     if args.once:
