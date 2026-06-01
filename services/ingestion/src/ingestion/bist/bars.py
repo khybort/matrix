@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from matrix_shared import session_scope
@@ -45,6 +45,11 @@ INTRADAY_INTERVAL = "1m"
 EOD_INTERVAL = "1d"
 INTRADAY_POLL_S = 60
 EOD_POLL_S = 3600
+# yfinance retains ~7d of 1m history; refresh off-session so strategies have
+# intraday bars even before the next TR open (gap_fade / volume_breakout need 1m).
+INTRADAY_BACKFILL_PERIOD = "5d"
+OFF_SESSION_1M_REFRESH_H = 6
+UPSERT_CHUNK = 2500  # asyncpg caps bind params at 32767 (~11 cols/row)
 
 
 def in_session(now: datetime | None = None) -> bool:
@@ -65,6 +70,43 @@ async def load_active_symbols() -> list[str]:
             select(BistSymbol.symbol).where(BistSymbol.active.is_(True))
         )
         return sorted({r[0] for r in rows})
+
+
+async def intraday_bootstrap_needed(*, max_age: timedelta = timedelta(days=2)) -> bool:
+    """True when we have no recent 1m BIST bars (strategies cannot fire)."""
+    async with session_scope() as session:
+        count = await session.scalar(
+            select(func.count())
+            .select_from(MarketBar)
+            .where(MarketBar.asset_class == "bist")
+            .where(MarketBar.interval == INTRADAY_INTERVAL)
+        )
+        if not count:
+            return True
+        latest = await session.scalar(
+            select(func.max(MarketBar.ts))
+            .where(MarketBar.asset_class == "bist")
+            .where(MarketBar.interval == INTRADAY_INTERVAL)
+        )
+    if latest is None:
+        return True
+    if latest.tzinfo is None:
+        latest = latest.replace(tzinfo=UTC)
+    return latest < datetime.now(UTC) - max_age
+
+
+async def backfill_intraday(symbols: list[str], *, period: str = INTRADAY_BACKFILL_PERIOD) -> int:
+    """Pull rolling 1m history (works outside TR session via yfinance)."""
+    if not symbols:
+        return 0
+    t0 = datetime.now(UTC)
+    inserted = await poll_once(symbols, interval=INTRADAY_INTERVAL, period=period)
+    dt = (datetime.now(UTC) - t0).total_seconds()
+    logger.info(
+        f"BIST 1m backfill: syms={len(symbols)} inserted={inserted} "
+        f"period={period} took={dt:.1f}s"
+    )
+    return inserted
 
 
 def _yahoo_ticker(symbol: str) -> str:
@@ -155,13 +197,17 @@ def _rows_from_batch(
 async def _upsert(rows: list[dict]) -> int:
     if not rows:
         return 0
+    total = 0
     async with session_scope() as session:
-        stmt = pg_insert(MarketBar).values(rows)
-        stmt = stmt.on_conflict_do_nothing(
-            constraint="uq_market_bars_class_sit"
-        )
-        result = await session.execute(stmt)
-        return result.rowcount or 0
+        for i in range(0, len(rows), UPSERT_CHUNK):
+            chunk = rows[i : i + UPSERT_CHUNK]
+            stmt = pg_insert(MarketBar).values(chunk)
+            stmt = stmt.on_conflict_do_nothing(
+                constraint="uq_market_bars_class_sit"
+            )
+            result = await session.execute(stmt)
+            total += result.rowcount or 0
+    return total
 
 
 async def poll_once(symbols: list[str], *, interval: str, period: str) -> int:
@@ -193,12 +239,20 @@ async def run() -> None:
         loop.add_signal_handler(sig, _handle_signal)
 
     last_eod_pull: datetime | None = None
+    last_off_session_1m: datetime | None = None
     while not stop.is_set():
         symbols = await load_active_symbols()
         if not symbols:
-            logger.warning("no active BIST symbols — run `matrix-bist-symbols` to seed")
+            logger.warning(
+                "no active BIST symbols — run `matrix-bist-symbols --bootstrap-active` "
+                "or wait for bist discover on ingestion startup"
+            )
             await asyncio.sleep(60)
             continue
+
+        if await intraday_bootstrap_needed():
+            await backfill_intraday(symbols)
+            last_off_session_1m = datetime.now(UTC)
 
         if in_session():
             t0 = datetime.now(UTC)
@@ -215,6 +269,13 @@ async def run() -> None:
                 inserted = await poll_once(symbols, interval=EOD_INTERVAL, period="5d")
                 last_eod_pull = now
                 logger.info(f"EOD poll: syms={len(symbols)} inserted={inserted}")
+            stale_1m = (
+                last_off_session_1m is None
+                or (now - last_off_session_1m) > timedelta(hours=OFF_SESSION_1M_REFRESH_H)
+            )
+            if stale_1m:
+                await backfill_intraday(symbols)
+                last_off_session_1m = now
             sleep_s = EOD_POLL_S
 
         try:
@@ -247,7 +308,9 @@ def main() -> None:
 
     if args.once:
         interval = args.interval or (INTRADAY_INTERVAL if in_session() else EOD_INTERVAL)
-        period = args.period or ("1d" if interval.endswith("m") else "5d")
+        period = args.period or (
+            INTRADAY_BACKFILL_PERIOD if interval.endswith("m") else "5d"
+        )
 
         async def _once() -> None:
             symbols = await load_active_symbols()

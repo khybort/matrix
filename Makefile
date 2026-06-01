@@ -275,6 +275,10 @@ bist-seed: ## Seed the BIST symbol universe (idempotent)
 bist-poll: ## Run one BIST bar poll cycle and exit
 	$(DC) $(DC_BASE) exec ingestion uv run python -m ingestion.bist.bars --once
 
+.PHONY: bist-bars-backfill
+bist-bars-backfill: ## Backfill BIST 1m bars (last 5d via yfinance; works off-session)
+	$(DC) $(DC_BASE) exec ingestion-market uv run matrix-bist-bars --once --interval 1m --period 5d
+
 .PHONY: bist-stats
 bist-stats: ## BIST-specific counts (symbols, bars by interval, predictions)
 	@$(PSQL) -c "SELECT 'bist_symbols.active' AS k, COUNT(*) FROM bist_symbols WHERE active \

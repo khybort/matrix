@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-06-02 — BIST 1m bar backfill (strategy preconditions)
+
+- `ingestion/bist/bars.py`: bootstrap + off-session 6h refresh for `1m` bars when missing/stale
+- `make bist-bars-backfill`: one-shot `1m` / `5d` pull via yfinance (works outside TR session)
+
 ## 2026-05-23 — Bootstrap (initial author: assistant, on behalf of user)
 
 - Foundation docs created: `VISION.md`, `ARCHITECTURE.md`, `ROADMAP.md`, `WORK_SPLIT.md`
