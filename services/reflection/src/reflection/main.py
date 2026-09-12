@@ -1,8 +1,10 @@
 """Reflection loop: scan active strategies, compute window metrics,
 propose mutations, write MutationProposal rows.
 
-Mutations are not auto-applied — they're stored as `pending` proposals
-for downstream review (manual or future auto-promotion logic).
+Proposals are written as `pending`; the labs daemon (`--auto-apply-safe`)
+auto-applies lab_promotion / slot_adjustment / rule param_tune for the
+SAFE_PARAM_TUNE_STRATEGIES set, everything else waits for the dashboard.
+Every proposal is scoped to the StrategyConfig's `asset_class`.
 
 Usage:
     uv run python -m reflection.main                  # default 600s (10min) loop
@@ -39,12 +41,15 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
 
     for cfg in active_configs:
         try:
-            m = await metrics_window(cfg.strategy_id, cfg.version, window_hours=window_hours)
+            m = await metrics_window(
+                cfg.strategy_id, cfg.version,
+                asset_class=cfg.asset_class, window_hours=window_hours,
+            )
         except Exception as e:
             logger.exception(f"metrics window failed for {cfg.strategy_id}: {e}")
             continue
         logger.info(
-            f"{cfg.strategy_id} v{cfg.version}: n={m.n_outcomes} "
+            f"{cfg.strategy_id}/{cfg.asset_class} v{cfg.version}: n={m.n_outcomes} "
             f"avg_score={m.avg_score:.4f} win_rate={m.win_rate:.3f} "
             f"pnl={m.total_pnl_usd:.4f}USD"
         )
@@ -83,10 +88,11 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
             continue
 
         # Avoid spamming duplicate proposals: if a pending exists for the
-        # same from_version, skip.
+        # same (asset_class, from_version), skip.
         async with shared_session_scope() as session:
             existing_stmt = select(MutationProposal).where(
                 MutationProposal.strategy_id == cfg.strategy_id,
+                MutationProposal.asset_class == cfg.asset_class,
                 MutationProposal.from_version == cfg.version,
                 MutationProposal.status == "pending",
             )
@@ -104,10 +110,12 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
                 "total_pnl_usd": str(m.total_pnl_usd),
                 "by_symbol": m.by_symbol,
                 "window_hours": window_hours,
+                "asset_class": cfg.asset_class,
             }
             session.add(
                 MutationProposal(
                     strategy_id=cfg.strategy_id,
+                    asset_class=cfg.asset_class,
                     from_version=cfg.version,
                     to_version=cfg.version + 1,
                     proposal_type=draft.proposal_type,

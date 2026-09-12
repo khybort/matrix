@@ -20,11 +20,22 @@ class StrategyMetrics:
     win_rate: Decimal  # share of outcomes with positive pnl_usd
     total_pnl_usd: Decimal
     by_symbol: dict[str, dict[str, str]]  # symbol → {n, avg_score, ...}
+    asset_class: str | None = None  # None = unscoped (legacy callers)
 
 
 async def metrics_window(
-    strategy_id: str, version: int, *, window_hours: float = 24.0
+    strategy_id: str,
+    version: int,
+    *,
+    asset_class: str | None = None,
+    window_hours: float = 24.0,
 ) -> StrategyMetrics:
+    """Aggregate outcomes for (strategy_id, version[, asset_class]).
+
+    Always pass `asset_class` from the StrategyConfig row being reflected on:
+    `matrix_agent` exists in crypto AND bist, and BIST strategies must never
+    be scored (or mutated) against crypto rows.
+    """
     since = datetime.now(UTC) - timedelta(hours=window_hours)
     async with shared_session_scope() as session:
         # Aggregate
@@ -40,6 +51,8 @@ async def metrics_window(
             .where(Prediction.strategy_version == version)
             .where(Outcome.observed_at >= since)
         )
+        if asset_class is not None:
+            agg_stmt = agg_stmt.where(Prediction.asset_class == asset_class)
         n, avg, total, wins = (await session.execute(agg_stmt)).one()
         n = int(n or 0)
         avg = Decimal(avg) if avg is not None else Decimal("0")
@@ -61,6 +74,8 @@ async def metrics_window(
             .where(Outcome.observed_at >= since)
             .group_by(Prediction.symbol)
         )
+        if asset_class is not None:
+            sym_stmt = sym_stmt.where(Prediction.asset_class == asset_class)
         by_symbol: dict[str, dict[str, str]] = {}
         for sym, count, sym_avg, sym_total in (await session.execute(sym_stmt)).all():
             by_symbol[sym] = {
@@ -77,4 +92,5 @@ async def metrics_window(
         win_rate=win_rate,
         total_pnl_usd=total,
         by_symbol=by_symbol,
+        asset_class=asset_class,
     )

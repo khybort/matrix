@@ -50,7 +50,7 @@ def _error(msg: str) -> dict:
     return {"content": [{"type": "text", "text": f"ERROR: {msg}"}], "is_error": True}
 
 
-def _build_registry(strategy_id: str) -> ToolRegistry:
+def _build_registry(strategy_id: str, asset_class: str | None = None) -> ToolRegistry:
     reg = ToolRegistry()
 
     @tool(
@@ -71,13 +71,14 @@ def _build_registry(strategy_id: str) -> ToolRegistry:
             "       p.asset_class, p.created_at "
             "FROM outcomes o JOIN predictions p ON p.id = o.prediction_id "
             "WHERE p.strategy_id = :sid "
+            "  AND (:ac IS NULL OR p.asset_class = :ac) "
             "  AND p.created_at >= NOW() - (:hours || ' hours')::interval "
             "ORDER BY p.created_at DESC LIMIT :lim"
         )
         try:
             async with shared_session_scope() as session:
                 rows = (await session.execute(
-                    sql, {"sid": strategy_id, "hours": str(hours), "lim": cap}
+                    sql, {"sid": strategy_id, "ac": asset_class, "hours": str(hours), "lim": cap}
                 )).mappings().all()
         except Exception as e:
             return _error(f"query failed: {e}")
@@ -117,11 +118,14 @@ def _build_registry(strategy_id: str) -> ToolRegistry:
             "SELECT pattern_kind, pattern_description, verdict, confidence, "
             "       n_observations, win_rate, total_pnl_usd "
             "FROM agent_lessons WHERE strategy_id = :sid AND status = 'active' "
+            "  AND (:ac IS NULL OR asset_class = :ac) "
             "ORDER BY confidence DESC NULLS LAST LIMIT 20"
         )
         try:
             async with shared_session_scope() as session:
-                rows = (await session.execute(sql, {"sid": strategy_id})).mappings().all()
+                rows = (await session.execute(
+                    sql, {"sid": strategy_id, "ac": asset_class}
+                )).mappings().all()
         except Exception as e:
             return _error(f"query failed: {e}")
         return _text([dict(r) for r in rows])
@@ -191,7 +195,7 @@ async def run_reflection_agent(
 ) -> MutationDraft | None:
     if not subscription_enabled():
         return None
-    registry = _build_registry(strategy_id)
+    registry = _build_registry(strategy_id, getattr(m, "asset_class", None))
     server = build_sdk_mcp_server(_SERVER, registry)
     allowed = mcp_tool_names(_SERVER, registry)
     allowed_set = frozenset(allowed)

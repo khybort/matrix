@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-09-12 — P0.3: reflection proposals + metrics scoped by `asset_class`
+
+- `reflection/metrics.metrics_window(..., asset_class=)` filters predictions by market;
+  `StrategyMetrics.asset_class` carried through. `reflection/main._tick` passes
+  `cfg.asset_class` to metrics, dedup and the `MutationProposal` row (was defaulting to
+  `crypto`, so BIST proposals were applied against — and kept re-creating — crypto rows:
+  `bist_volume_breakout/crypto` reached v686 while `bist_volume_breakout/bist` stayed v1).
+- Reflection agent tools `recent_outcomes` / `active_lessons` filter by the metrics' asset_class.
+- Data fix (shared DB, one-off, no migration): the 3 phantom active
+  `bist_*/crypto` StrategyConfig rows were set to `retired` with a rationale note. Their 1,781
+  applied crypto-labelled proposals and 3 phantom crypto slot rows are left as history.
+
 ## 2026-09-12 — P0.2: strategy dispatcher binds `strategy_configs.params` + version
 
 - `strategy/params.py`: `build_kwargs` (alias `price_band_pct→band_pct`, `horizon_seconds→horizon_s`;
