@@ -61,3 +61,6 @@ docs/superpowers/
 
 # dev_agent runtime worktrees (scratch git checkouts the agent spawns per task)
 worktrees/
+
+# scheduled pg_dump output (infra/db/backup.sh)
+backups/
