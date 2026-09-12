@@ -275,9 +275,10 @@ services:
     profiles: ["phase6"]
     logging: *default_logging
 
-  # Telegram bot: alert push (circuit/cert/live-flag/equity drop) + /status,
-  # /strategies, /circuit, /help commands. Read-only — never submits orders.
-  # TELEGRAM_BOT_TOKEN unset → dry-run (logs alerts, no push).
+  # Telegram bot: alert push (circuit/cert/live-flag/equity drop + liveness:
+  # paper engine / signals / ingestion stalled, LLM rule-only, disk pressure,
+  # dev_agent failures) + /status, /strategies, /circuit, /help commands.
+  # Read-only — never submits orders. TELEGRAM_BOT_TOKEN unset → dry-run.
   notify:
     build:
       <<: *python-build
@@ -295,8 +296,8 @@ services:
       TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
     command: ["notify.main", "--poll-interval", "60"]
     restart: unless-stopped
-    # Bring up when TELEGRAM_BOT_TOKEN is set: docker compose --profile notify up -d notify
-    profiles: ["notify"]
+    # Always on: without TELEGRAM_BOT_TOKEN it runs dry-run (alerts in logs),
+    # so liveness detection keeps working on a half-configured node.
     logging: *default_logging
 
   # Live-execution gateway (Phase 0 skeleton). Loops idle, logs "GATE CLOSED"

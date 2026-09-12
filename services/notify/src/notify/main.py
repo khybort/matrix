@@ -26,6 +26,7 @@ from notify.alerts import (
     detect_alerts,
 )
 from notify.bot import build_application, push
+from notify.health import HealthFlags, collect_health, detect_health_alerts
 from notify.state import (
     get_active_strategies,
     get_default_wallet,
@@ -70,6 +71,7 @@ async def _poll_loop(
     app, interval_s: float, stop: asyncio.Event, *, dry_run: bool = False
 ) -> None:
     snap = PollSnapshot()
+    health_flags = HealthFlags()
     # Seed once before going into the loop so the first tick has a baseline.
     try:
         snap.wallet = await get_default_wallet()
@@ -94,6 +96,15 @@ async def _poll_loop(
         except Exception as e:
             logger.exception(f"poller tick failed: {e}")
             alerts = []
+
+        # Cross-process liveness (paper engine / signals / ingestion / LLM /
+        # disk / dev_agent) — derived from table freshness, restart-safe.
+        try:
+            sample = await collect_health(health_flags)
+            health_alerts, health_flags = detect_health_alerts(health_flags, sample)
+            alerts.extend(health_alerts)
+        except Exception as e:
+            logger.exception(f"health probe failed: {e}")
 
         for level, text in alerts:
             # Special sentinel from alerts.py — replace with the actual summary.

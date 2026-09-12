@@ -266,7 +266,7 @@ async def _tick(symbols: list[str]) -> int:
             tp_pct=cfg.tp_pct,
             sl_pct=cfg.sl_pct,
             thesis=decision.thesis,
-            context={**decision.feature_dump, "agent_version": cfg.version},
+            context={**decision.feature_dump, "agent_version": cfg.version, "method": decision.method},
             status="open",
         )
         async with shared_session_scope() as session:

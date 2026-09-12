@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-09-12 — P0.4: notify always-on + cross-process liveness alerts
+
+- `docker-compose.yml`: `notify` no longer profile-gated; without `TELEGRAM_BOT_TOKEN` it runs
+  dry-run (alerts in logs) so detection never depends on Telegram setup.
+- `notify/health.py`: table-freshness detectors (restart-safe, work across containers):
+  paper engine stalled (`wallet_snapshots`), crypto signals stalled (`predictions`), ingestion
+  stalled (`market_ticker_snapshots`), bars stalled (`market_bars` 1m), disk pressure, LLM path
+  rule-only (`predictions.context.method`), dev_agent task failed / stuck heartbeat.
+  Edge-triggered with hourly re-alert + recovery INFO. Thresholds via `MATRIX_HEALTH_*`.
+- `agent/main.py`: persists `method` (`rule`/`llm`/`+explore`/`+lesson`) into `predictions.context`
+  so LLM-vs-rule decisions are queryable (also the basis for the method-level A/B in P3).
+
 ## 2026-09-12 — P0.3: reflection proposals + metrics scoped by `asset_class`
 
 - `reflection/metrics.metrics_window(..., asset_class=)` filters predictions by market;

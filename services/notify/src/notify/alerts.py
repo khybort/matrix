@@ -212,5 +212,7 @@ def format_help() -> str:
         "  ⚠️ LIVE_EXECUTION_ENABLED flipped\n"
         "  ⚡ equity dropped > 1% since last check\n"
         "  ℹ️ paper_trade_certificate granted\n"
-        "  ℹ️ daily summary (once per UTC day)"
+        "  ℹ️ daily summary (once per UTC day)\n"
+        "  ⚠️ paper engine / ingestion stalled, disk pressure\n"
+        "  ⚡ signals stalled, LLM path rule-only, dev_agent task failed/stuck"
     )
