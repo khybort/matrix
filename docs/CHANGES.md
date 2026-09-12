@@ -5,6 +5,19 @@
 
 ---
 
+## 2026-09-12 — P1.1: mutation efficacy + automatic rollback
+
+- `reflection/efficacy.py`: every `applied` proposal (≥24h old) gets a before/after comparison of
+  realised outcome PnL (from_version window vs the version it created, `metrics_window.applied_version`)
+  → verdict `pending | insufficient | negative | neutral | positive` (two-sample z on mean pnl/outcome),
+  stored in `metrics_window.efficacy` (JSON, no schema change). `negative` while that version is still
+  active → **auto-rollback**: new config version with the proposal's `before_params`, auditable
+  `rollback` proposal (source `efficacy`), original marked `reverted`. Bounded to 25 proposals/tick
+  (`MATRIX_EFFICACY_*` env for windows/thresholds/rollback toggle).
+- `reflection/main._tick`: runs the efficacy pass; skips drafts whose `after_params` equal a mutation
+  reverted in the last 7 days (oscillation guard).
+- `labs/promote.apply_proposal`: records `metrics_window.applied_version` (the real new version).
+
 ## 2026-09-12 — P0.6: realistic execution cost model
 
 - `matrix_shared/trading.py`: `execution_cost_bps(asset_class, symbol)` = FeeModel `taker_bps +

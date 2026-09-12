@@ -25,6 +25,7 @@ from matrix_shared import shared_session_scope
 from matrix_shared.models import MutationProposal, StrategyConfig
 from sqlalchemy import select
 
+from reflection.efficacy import evaluate_applied_proposals, recently_reverted
 from reflection.metrics import metrics_window
 from reflection.mutate import llm_propose, rule_propose, rule_propose_param_tune
 
@@ -86,6 +87,18 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
         if draft is None:
             logger.info(f"{cfg.strategy_id}: no proposal (criteria not met or no change)")
             continue
+
+        # Oscillation guard: efficacy rolled these exact params back recently —
+        # re-proposing them would just re-run the same losing experiment.
+        try:
+            if await recently_reverted(cfg.strategy_id, cfg.asset_class, draft.after_params):
+                logger.info(
+                    f"{cfg.strategy_id}/{cfg.asset_class}: draft matches a recently reverted "
+                    f"mutation; skipping"
+                )
+                continue
+        except Exception as e:
+            logger.warning(f"revert-guard check failed (proceeding): {e}")
 
         # Avoid spamming duplicate proposals: if a pending exists for the
         # same (asset_class, from_version), skip.
@@ -158,6 +171,13 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
                 )
     except Exception:
         logger.exception("auto-grant pass failed (non-fatal)")
+
+    # Efficacy pass — measure every applied mutation's before/after PnL and
+    # auto-rollback the ones that made things significantly worse.
+    try:
+        await evaluate_applied_proposals()
+    except Exception:
+        logger.exception("efficacy pass failed (non-fatal)")
 
     # Slot scoring pass — update per-strategy slot allocations
     try:

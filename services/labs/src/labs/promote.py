@@ -412,6 +412,9 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
 
         proposal.status = "applied"
         proposal.applied_at = datetime.now(UTC)
+        # Record the version this proposal actually produced (to_version can
+        # be stale, see above) so reflection.efficacy compares the right rows.
+        proposal.metrics_window = {**(proposal.metrics_window or {}), "applied_version": new_version}
 
         # If this came from labs, mark the source experiment promoted
         lab_id_str = (proposal.metrics_window or {}).get("lab_experiment_id")
