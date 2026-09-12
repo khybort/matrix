@@ -5,6 +5,14 @@
 
 ---
 
+## 2026-09-12 — Otonomi denetimi + planı (`docs/AUTONOMY_PLAN.md`)
+
+- Ajan/tool, memory, self-learning ve insan-bağımlı ops noktaları denetlendi; bulgular dosya:satır
+  referanslı. Kritik: 11 stratejide param mutasyonları no-op (dispatcher DB params geçmiyor),
+  reflection proposal'ları `asset_class` taşımıyor (BIST → crypto fantom v686), cert eşikleri `.env`
+  ile 0 gün / −$50'e gevşetilmiş, dev_agent `merged` sadece DB etiketi (0 gerçek merge), `notify`
+  çalışmıyor, retention/backup yok (local DB 97 GB). Sıralı P0-P5 planı ve ilk 10 iş dokümanda.
+
 ## 2026-06-02 — Graph backlog drain fix
 
 - `graph/main.py`: `_fetch_batch` SQL-filters unprocessed docs (was top-N newest then
