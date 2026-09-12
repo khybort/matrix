@@ -115,6 +115,27 @@ services:
     restart: unless-stopped
     logging: *default_logging
 
+  # Scheduled logical backups of both tiers → ./backups/<ts>/{local,shared}.dump
+  # (pg_dump -Fc, raw market_* stream tables schema-only, 14-day prune).
+  # `make backup-now` runs one immediately. See infra/db/backup.sh.
+  backup:
+    image: matrix-postgres:local
+    container_name: matrix-backup
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: matrix_dev_only
+      BACKUP_INTERVAL_H: ${BACKUP_INTERVAL_H:-24}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./backups:/backups
+      - ./infra/db/backup.sh:/backup.sh:ro
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    command: ["loop"]
+    restart: unless-stopped
+    logging: *default_logging
+
   # One-shot Alembic migration runner. Used via `make migrate`.
   migrate:
     build:

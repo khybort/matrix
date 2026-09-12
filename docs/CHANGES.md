@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-09-12 — P0.5: retention + scheduled backups
+
+- `matrix_shared/retention.py`: policy table (`market_trades` 7d, `market_orderbook_snapshots` 2d,
+  `market_ticker_snapshots` 30d, `wallet_snapshots` 30d), bounded batched deletes through the
+  existing `(symbol|wallet_id, ts)` indexes under a wall-clock budget. `bars-aggregator` runs
+  `prune_once()` every 5 min (`MATRIX_RETENTION_*`). `make retention-drain` forces a full pass;
+  `make db-compact TABLE=` (VACUUM FULL) returns space to the OS.
+- `paper_trade._snapshot_one`: `wallet_snapshots` row written at most every 60s
+  (`WALLET_SNAPSHOT_INTERVAL_S`); circuit/trailing-stop still evaluated every tick.
+- `backup` compose sidecar (`infra/db/backup.sh`): daily `pg_dump -Fc` of both tiers to
+  `./backups/<ts>/`, market stream tables schema-only (52 MB + 30 MB instead of ~90 GB), 14-day prune.
+  `make backup-now` for an immediate one. First backup taken 2026-09-12 15:35 UTC.
+- Found while testing: bars-aggregator's startup `backfill_all()` and the backtest test
+  cleanup (`DELETE … WHERE exchange_trade_id IN`, no usable index) both full-scan the 302M-row
+  trades table; both become cheap once retention has drained it.
+
 ## 2026-09-12 — P0.4: notify always-on + cross-process liveness alerts
 
 - `docker-compose.yml`: `notify` no longer profile-gated; without `TELEGRAM_BOT_TOKEN` it runs

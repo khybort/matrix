@@ -13,6 +13,8 @@ See docs/TRADING.md for the risk rules this engine enforces.
 
 from __future__ import annotations
 
+import os
+
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -64,6 +66,7 @@ SCORE_CAP_PCT = Decimal("0.01")  # ±1% horizon caps the score at ±1
 # we have no live price are flat-closed to prevent indefinite orphan
 # accumulation (the KONYA BIST bug: positions stuck 72h with no price data).
 ORPHAN_STALE_THRESHOLD_S = 86400  # 24h past close_by
+WALLET_SNAPSHOT_INTERVAL_S = float(os.environ.get("WALLET_SNAPSHOT_INTERVAL_S", "60"))
 
 
 async def _latest_funding_rate(symbol: str) -> Decimal | None:
@@ -317,18 +320,28 @@ async def _snapshot_one(wallet_id: uuid.UUID) -> None:
 
         realized = wallet.cash_usd + wallet.locked_usd - wallet.starting_capital_usd
 
-        session.add(
-            WalletSnapshot(
-                wallet_id=wallet.id,
-                snapshot_ts=datetime.now(UTC),
-                equity_usd=equity,
-                cash_usd=wallet.cash_usd,
-                locked_usd=wallet.locked_usd,
-                n_open_positions=n_open,
-                realized_pnl_usd=realized,
-                unrealized_pnl_usd=unrealized,
+        # Persist the equity curve at most every WALLET_SNAPSHOT_INTERVAL_S
+        # (default 60s). Circuit/trailing-stop logic below still runs every
+        # tick off the live `equity` — only the row write is thinned (the 5s
+        # cadence produced ~17k rows/wallet/day for nothing).
+        last_ts = (await session.execute(
+            select(func.max(WalletSnapshot.snapshot_ts))
+            .where(WalletSnapshot.wallet_id == wallet.id)
+        )).scalar()
+        now_ts = datetime.now(UTC)
+        if last_ts is None or (now_ts - last_ts).total_seconds() >= WALLET_SNAPSHOT_INTERVAL_S:
+            session.add(
+                WalletSnapshot(
+                    wallet_id=wallet.id,
+                    snapshot_ts=now_ts,
+                    equity_usd=equity,
+                    cash_usd=wallet.cash_usd,
+                    locked_usd=wallet.locked_usd,
+                    n_open_positions=n_open,
+                    realized_pnl_usd=realized,
+                    unrealized_pnl_usd=unrealized,
+                )
             )
-        )
 
         if wallet.circuit_tripped_at is None:
             if _circuit_should_trip(wallet, equity):

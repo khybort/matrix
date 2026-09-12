@@ -169,6 +169,19 @@ backup: ## pg_dumpall LOCAL + SHARED to ./backups/<ts>/
 	@echo "→ backup at $(BACKUP_DIR)/$(BACKUP_TS)/"
 	@ls -lh $(BACKUP_DIR)/$(BACKUP_TS)/
 
+.PHONY: backup-now
+backup-now: ## Run one scheduled-style backup now (pg_dump -Fc, market streams schema-only) → ./backups/<ts>/
+	$(DC) $(DC_BASE) run --rm backup once
+
+.PHONY: retention-drain
+retention-drain: ## Prune ALL rows past retention windows now (bars-aggregator does this gradually); MAX_MIN caps runtime
+	$(DC) $(DC_BASE) exec bars-aggregator uv run python -c "import asyncio; from matrix_shared.retention import drain; print(asyncio.run(drain(max_minutes=float('$(or $(MAX_MIN),0)'))))"
+
+.PHONY: db-compact
+db-compact: ## VACUUM FULL one LOCAL table to return disk to the OS (LOCKS the table): make db-compact TABLE=market_trades
+	@if [ -z "$(TABLE)" ]; then echo "Usage: make db-compact TABLE=<table>" && exit 1; fi
+	$(PSQL) -c "VACUUM (FULL, VERBOSE, ANALYZE) $(TABLE);"
+
 .PHONY: restore-local
 restore-local: ## Restore LOCAL from a dump file: make restore-local FILE=backups/<ts>/local.sql
 	@if [ -z "$(FILE)" ]; then echo "Usage: make restore-local FILE=<path>" && exit 1; fi

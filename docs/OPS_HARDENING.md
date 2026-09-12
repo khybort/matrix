@@ -12,15 +12,27 @@ preventive defaults baked into the stack.
 | Postgres health gating | `pg_isready` healthcheck; dependents `depends_on … service_healthy` | base compose |
 | Risk caps | Hard caps in `wallets` table, never mutated by code | `docs/TRADING.md` |
 | Builds | `make build` cached; `make migrate` always rebuilds migrate image first | `Makefile` |
+| Retention | `market_trades` 7d, `market_orderbook_snapshots` 2d, `market_ticker_snapshots` 30d, `wallet_snapshots` 30d — pruned in bounded batches every 5 min by `bars-aggregator` (`MATRIX_RETENTION_*_DAYS`, `_BUDGET_S`, `_BATCH`, `_ENABLED`) | `matrix_shared/retention.py` |
+| Equity curve cadence | `wallet_snapshots` written at most every 60s (`WALLET_SNAPSHOT_INTERVAL_S`); circuit checks still every tick | `backtest/paper_trade.py` |
+| Backups | `backup` sidecar: `pg_dump -Fc` both tiers every 24h → `./backups/<ts>/`, market stream tables schema-only, 14-day prune (`BACKUP_INTERVAL_H`, `BACKUP_KEEP_DAYS`) | `infra/db/backup.sh` |
+| Liveness alerts | `notify` always on; stalls in paper engine / signals / ingestion / bars, disk pressure, LLM rule-only, dev_agent failures → Telegram (or logs in dry-run) | `services/notify/health.py` |
 
 ## Daily / weekly habits
 
+Backups and retention run unattended (see table above). What is still worth
+a human glance:
+
 ```bash
 make disk            # docker system df — eyeball it
-make backup          # pg_dumpall both DBs to ./backups/<ts>/
+make backup-now      # extra backup before risky work (the sidecar does daily)
 make ps              # are all expected containers up?
 make stats           # row counts per major table
 ```
+
+Disk is only returned to the OS by `VACUUM FULL`; retention alone stops the
+growth. After the first drain of a huge table: `make db-compact TABLE=market_trades`
+(locks the table for the duration — run off-hours). `make retention-drain`
+forces the whole backlog through now instead of the 5-minute trickle.
 
 ## Failure modes & recovery
 

@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import os
 import signal
+import time
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -310,11 +311,25 @@ async def run(
     except Exception as e:
         logger.exception(f"startup trade backfill failed: {e}")
 
+    # Retention owner: this daemon already touches every market table and
+    # has both DB URLs, so it prunes raw telemetry on a slow cadence
+    # (matrix_shared.retention; MATRIX_RETENTION_* env tunes windows/budget).
+    retention_interval_s = float(os.environ.get("MATRIX_RETENTION_INTERVAL_S", "300"))
+    retention_enabled = os.environ.get("MATRIX_RETENTION_ENABLED", "true").strip().lower() != "false"
+    last_prune = 0.0
+
     while not stop.is_set():
         try:
             await tick(lookback_minutes)
         except Exception as e:
             logger.exception(f"tick failed: {e}")
+        if retention_enabled and time.monotonic() - last_prune >= retention_interval_s:
+            last_prune = time.monotonic()
+            try:
+                from matrix_shared.retention import prune_once
+                await prune_once()
+            except Exception as e:
+                logger.exception(f"retention prune failed: {e}")
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval_s)
         except TimeoutError:
