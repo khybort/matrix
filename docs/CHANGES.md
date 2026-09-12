@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-09-12 — P0.6: realistic execution cost model
+
+- `matrix_shared/trading.py`: `execution_cost_bps(asset_class, symbol)` = FeeModel `taker_bps +
+  slippage_bps`; `apply_slippage(..., asset_class=, symbol=)` market-aware (legacy flat 2 bps only
+  when no market given); `funding_pnl_usd()` for directional perp holds.
+- `CryptoMarket.fees`: taker 10 → **5.5 bps** (Bybit non-VIP), maker 1 → 2, slippage 2 → per side
+  7.5 bps, round trip 15 bps (was 4 bps and no fees at all in the paper engine).
+- `backtest/paper_trade.py`: entry/exit fills use the market cost; crypto long/short closes add
+  funding paid/received over the hold. `labs/evaluate.py` and `backtest/historical.py` +
+  matrix_agent replayer use the same function. Expect paper PnL to look worse — it is now honest.
+  TRADING.md gains a "Paper-trade cost model" section.
+
 ## 2026-09-12 — P0.5: retention + scheduled backups
 
 - `matrix_shared/retention.py`: policy table (`market_trades` 7d, `market_orderbook_snapshots` 2d,

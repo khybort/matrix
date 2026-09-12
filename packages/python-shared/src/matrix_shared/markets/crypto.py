@@ -142,9 +142,12 @@ class CryptoMarket(MarketAdapter):
         return True
 
     def fees(self, symbol: str) -> FeeModel:  # noqa: ARG002
+        # Bybit USDT-perp non-VIP: maker 0.02% / taker 0.055%; paper fills
+        # are market orders, so the engine charges taker + 2 bps slippage per
+        # side (15 bps round trip). Keep in sync with any fee-tier change.
         return FeeModel(
-            maker_bps=Decimal("1"),
-            taker_bps=Decimal("10"),
+            maker_bps=Decimal("2"),
+            taker_bps=Decimal("5.5"),
             slippage_bps=Decimal("2"),
         )
 

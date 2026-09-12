@@ -26,6 +26,7 @@ from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.allocation import expected_value, load_pair_edges, risk_multiplier
 from matrix_shared.exchange_shadow import shadow_close_position, shadow_open_position
 from matrix_shared.markets import all_markets
+from matrix_shared.trading import apply_slippage, funding_pnl_usd
 from matrix_shared.models import (
     MarketBar,
     MarketTrade,
@@ -60,7 +61,7 @@ async def _resolve_wallet(session, asset_class: str) -> Wallet | None:
     ).scalar_one_or_none()
 FRESHNESS_S = 60                       # crypto: ticks every few seconds
 FRESHNESS_S_BARS = 60 * 30             # BIST 1m bars + 15min Yahoo delay window
-SLIPPAGE_BPS = Decimal("2")
+SLIPPAGE_BPS = Decimal("2")  # legacy flat allowance; live fills use FeeModel via matrix_shared.trading
 SCORE_CAP_PCT = Decimal("0.01")  # ±1% horizon caps the score at ±1
 # Positions whose close_by is more than this far in the past AND for which
 # we have no live price are flat-closed to prevent indefinite orphan
@@ -122,15 +123,18 @@ async def _latest_price(symbol: str, asset_class: str = "crypto") -> Decimal | N
         return Decimal(row.price) if row else None
 
 
-def _apply_slippage(price: Decimal, side: str, *, opening: bool) -> Decimal:
-    # delta_neutral is a synthetic (spot + perp pair) — no single-leg slippage
-    # model applies at close time; PnL is purely funding-accrual based.
-    if side == "delta_neutral":
-        return price
-    bps = SLIPPAGE_BPS / Decimal("10000")
-    if opening:
-        return price * (Decimal("1") + bps) if side == "long" else price * (Decimal("1") - bps)
-    return price * (Decimal("1") - bps) if side == "long" else price * (Decimal("1") + bps)
+def _apply_slippage(
+    price: Decimal,
+    side: str,
+    *,
+    opening: bool,
+    asset_class: str | None = None,
+    symbol: str | None = None,
+) -> Decimal:
+    """Adverse fill: taker fee + slippage from the market's FeeModel
+    (matrix_shared.trading). Without `asset_class` falls back to the legacy
+    flat SLIPPAGE_BPS — only the historical replayer should hit that path."""
+    return apply_slippage(price, side, opening=opening, asset_class=asset_class, symbol=symbol)
 
 
 def _unrealized_pnl(
@@ -557,7 +561,9 @@ async def _open_for_market(asset_class: str) -> int:
                 f"skip {p.id}: no fresh price for {p.symbol} ({p.asset_class})"
             )
             continue
-        entry = _apply_slippage(last_px, p.side, opening=True)
+        entry = _apply_slippage(
+            last_px, p.side, opening=True, asset_class=p.asset_class, symbol=p.symbol
+        )
 
         cfg = slot_configs.get(p.strategy_id)
         conf = max(Decimal("0.05"), min(Decimal("1.0"), p.confidence))
@@ -753,12 +759,23 @@ async def close_due_positions() -> int:
                 else:
                     continue
             else:
-                exit_px = _apply_slippage(last_px, pos.side, opening=False)
+                exit_px = _apply_slippage(
+                    last_px, pos.side, opening=False,
+                    asset_class=pos.asset_class, symbol=pos.symbol,
+                )
                 if pos.side == "long":
                     pnl_pct = (exit_px - pos.opened_price) / pos.opened_price
                 else:
                     pnl_pct = (pos.opened_price - exit_px) / pos.opened_price
                 pnl_usd = pos.notional_usd * pnl_pct
+                # Perp funding over the hold: longs pay a positive rate, shorts
+                # receive it. Uses the latest 8h rate as the hold-average proxy.
+                if pos.asset_class == "crypto":
+                    opened = pos.opened_at if pos.opened_at.tzinfo else pos.opened_at.replace(tzinfo=UTC)
+                    elapsed_h = Decimal(str((now - opened).total_seconds() / 3600.0))
+                    fr = await _latest_funding_rate(pos.symbol)
+                    pnl_usd += funding_pnl_usd(pos.side, pos.notional_usd, fr, elapsed_h)
+                    pnl_pct = pnl_usd / pos.notional_usd if pos.notional_usd else pnl_pct
                 capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
                 score = capped / SCORE_CAP_PCT
 

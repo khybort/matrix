@@ -13,7 +13,8 @@ depend on tick data / funding / order-book snapshots will get their own
 adapters in later commits.
 
 Conventions (must match live paper engine):
-    SLIPPAGE_BPS    = 2 (entry + exit, symmetric, see paper_trade.py)
+    execution cost = market FeeModel taker + slippage per side (matrix_shared.trading;
+                     crypto 7.5 bps/side), same as the live paper engine
     starting_capital = $10,000 reference (only used as P&L / drawdown scale)
     max_position_pct = 2%        (matches Wallet default cap)
 
@@ -38,7 +39,7 @@ from matrix_shared.models import MarketBar
 
 # ----------------------------------------------------------------- constants
 
-SLIPPAGE_BPS = Decimal("2")           # identical to paper_trade.py
+SLIPPAGE_BPS = Decimal("2")           # legacy flat allowance (grid replay `slippage_bps` arg only)
 DEFAULT_STARTING_CAPITAL = Decimal("10000")
 DEFAULT_MAX_POSITION_PCT = Decimal("0.02")
 ROLLING_WINDOW_BARS = 1440             # 24h of 1-minute bars
@@ -107,13 +108,15 @@ async def fetch_bars(
 # ----------------------------------------------------------------- helpers
 
 
-def _apply_slippage(price: Decimal, side: str, *, opening: bool) -> Decimal:
-    """Identical to paper_trade._apply_slippage. Long entries pay up, exits
-    sell down; shorts mirror."""
-    bps = SLIPPAGE_BPS / Decimal("10000")
-    if opening:
-        return price * (Decimal("1") + bps) if side == "long" else price * (Decimal("1") - bps)
-    return price * (Decimal("1") - bps) if side == "long" else price * (Decimal("1") + bps)
+def _apply_slippage(
+    price: Decimal, side: str, *, opening: bool, asset_class: str | None = "crypto",
+    symbol: str | None = None,
+) -> Decimal:
+    """Same cost model as the live paper engine (taker fee + slippage from the
+    market's FeeModel) so replay PnL is comparable to paper PnL."""
+    from matrix_shared.trading import apply_slippage
+
+    return apply_slippage(price, side, opening=opening, asset_class=asset_class, symbol=symbol)
 
 
 def _simulate_exit(

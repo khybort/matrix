@@ -166,8 +166,12 @@ async def score_due_evaluations(stale_after_s: int = 600) -> tuple[int, int]:
                 stale += 1
             continue
 
-        entry_adj = apply_slippage(ev.entry_price, ev.side, opening=True)
-        exit_adj = apply_slippage(mark, ev.side, opening=False)
+        entry_adj = apply_slippage(
+            ev.entry_price, ev.side, opening=True, asset_class=ev.asset_class, symbol=ev.symbol
+        )
+        exit_adj = apply_slippage(
+            mark, ev.side, opening=False, asset_class=ev.asset_class, symbol=ev.symbol
+        )
         if ev.side == "long":
             pnl_pct = (exit_adj - entry_adj) / entry_adj
         else:

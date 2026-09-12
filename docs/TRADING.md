@@ -43,6 +43,16 @@ Tests in `services/execution` MUST cover:
 
 ---
 
+## Paper-trade cost model
+
+Paper fills are charged the market's **taker fee + slippage per side** from
+`MarketAdapter.fees()` (`matrix_shared.trading`): crypto 5.5 + 2 bps (15 bps round
+trip, Bybit non-VIP taker), BIST 15 + 5, US 1 + 3. Directional perp positions also
+pay/receive **funding** over the hold (longs pay a positive rate). Labs genome
+scoring and the historical replayer use the same function, so lab fitness, replay
+PnL and paper PnL are on one scale. Never tune a strategy against a cheaper model
+than the venue charges — that is how the loop optimised noise before 2026-09-12.
+
 ## Broker selection (first market = crypto)
 
 **Default: Bybit** (testnet for Phase 1-4, mainnet for Phase 5+).
