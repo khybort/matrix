@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-09-12 — P0.1: cert threshold overrides refused on mainnet
+
+- `trading_safety`: `is_mainnet()` (BYBIT_TESTNET=false or ALPACA_PAPER=false),
+  `cert_overrides_active()`, `mainnet_refusal_reasons()`. On mainnet `MATRIX_CERT_*`
+  overrides are ignored when granting; grants made under overrides get
+  `granted_by … '+relaxed'`; `has_valid_certificate` on mainnet also re-checks the
+  cert's evidence snapshot against TRADING.md defaults (catches legacy rows, no migration).
+- `execution.safety.should_submit_live` gate 0 + `exchange_shadow._per_trade_allowed`
+  both refuse when mainnet + any override is set. TRADING.md hard limit #6.
+
 ## 2026-09-12 — Otonomi denetimi + planı (`docs/AUTONOMY_PLAN.md`)
 
 - Ajan/tool, memory, self-learning ve insan-bağımlı ops noktaları denetlendi; bulgular dosya:satır

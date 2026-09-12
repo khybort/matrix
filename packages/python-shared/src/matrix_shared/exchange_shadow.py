@@ -16,7 +16,7 @@ from loguru import logger
 from matrix_shared.bybit_v5 import BybitOrder, BybitV5Client
 from matrix_shared.db import shared_session_scope
 from matrix_shared.models import PaperPosition, Prediction, Wallet
-from matrix_shared.trading_safety import has_valid_certificate
+from matrix_shared.trading_safety import has_valid_certificate, mainnet_refusal_reasons
 
 _SHADOW_CTX_KEY = "bybit_shadow"
 _QTY_STEP = Decimal("0.001")
@@ -66,7 +66,7 @@ async def _per_trade_allowed(
     strategy_version: int,
     notional_usd: Decimal,
 ) -> tuple[bool, list[str]]:
-    reasons: list[str] = []
+    reasons: list[str] = list(mainnet_refusal_reasons())
     if os.environ.get("LIVE_EXECUTION_ENABLED", "false").strip().lower() != "true":
         reasons.append("LIVE_EXECUTION_ENABLED is not 'true'")
     if not await has_valid_certificate(strategy_id, asset_class, strategy_version):

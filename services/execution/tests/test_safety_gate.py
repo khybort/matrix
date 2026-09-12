@@ -184,3 +184,90 @@ async def test_allows_when_every_gate_is_green(wallet_id, grant_cert, monkeypatc
     )
     assert decision.allowed is True, decision.reasons
     assert decision.reasons == []
+
+
+# --- mainnet + relaxed cert thresholds -----------------------------------
+
+async def test_denies_on_mainnet_when_cert_overrides_are_set(wallet_id, grant_cert, monkeypatch):
+    """BYBIT_TESTNET=false + any MATRIX_CERT_* override → hard deny, even
+    with a valid cert and every other gate green (docs/TRADING.md: cert
+    thresholds cannot be softened for live capital)."""
+    sid, ac, ver = await grant_cert(validity_hours=24)
+    monkeypatch.setenv("LIVE_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("LIVE_CAPITAL_CAP_USD", "2000")
+    monkeypatch.setenv("BYBIT_TESTNET", "false")
+    monkeypatch.setenv("MATRIX_CERT_MIN_OUTCOMES", "20")
+    decision = await should_submit_live(
+        strategy_id=sid, asset_class=ac, strategy_version=ver,
+        intended_notional_usd=Decimal("100"),
+        wallet_id=wallet_id,
+    )
+    assert decision.allowed is False
+    assert any("MATRIX_CERT_MIN_OUTCOMES" in r for r in decision.reasons), decision.reasons
+
+
+async def test_relaxed_cert_rejected_on_mainnet_but_ok_on_testnet(wallet_id, grant_cert, monkeypatch):
+    """Cert granted under relaxed thresholds (granted_by '+relaxed') is fine
+    for testnet shadowing but invalid once the venue is mainnet."""
+    from matrix_shared.trading_safety import relaxed_granted_by
+    sid, ac, ver = await grant_cert(validity_hours=24)
+    async with shared_session_scope() as session:
+        from matrix_shared.models import PaperTradeCertificate
+        await session.execute(
+            update(PaperTradeCertificate)
+            .where(PaperTradeCertificate.strategy_id == sid)
+            .values(granted_by=relaxed_granted_by("auto-eligibility"))
+        )
+    for key in ("MATRIX_CERT_MIN_OBSERVATION_DAYS", "MATRIX_CERT_MIN_OUTCOMES",
+                "MATRIX_CERT_MIN_WIN_RATE", "MATRIX_CERT_MIN_TOTAL_PNL_USD",
+                "MATRIX_CERT_MAX_DRAWDOWN_PCT"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("LIVE_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("LIVE_CAPITAL_CAP_USD", "2000")
+
+    monkeypatch.setenv("BYBIT_TESTNET", "true")
+    ok = await should_submit_live(
+        strategy_id=sid, asset_class=ac, strategy_version=ver,
+        intended_notional_usd=Decimal("100"), wallet_id=wallet_id,
+    )
+    assert ok.allowed is True, ok.reasons
+
+    monkeypatch.setenv("BYBIT_TESTNET", "false")
+    denied = await should_submit_live(
+        strategy_id=sid, asset_class=ac, strategy_version=ver,
+        intended_notional_usd=Decimal("100"), wallet_id=wallet_id,
+    )
+    assert denied.allowed is False
+    assert any("certificate" in r for r in denied.reasons), denied.reasons
+
+
+async def test_legacy_cert_with_weak_evidence_rejected_on_mainnet(wallet_id, grant_cert, monkeypatch):
+    """Cert granted before the relaxed marker existed but whose evidence
+    snapshot is below TRADING.md defaults must not unlock mainnet."""
+    sid, ac, ver = await grant_cert(validity_hours=24)
+    async with shared_session_scope() as session:
+        from matrix_shared.models import PaperTradeCertificate
+        await session.execute(
+            update(PaperTradeCertificate)
+            .where(PaperTradeCertificate.strategy_id == sid)
+            .values(observation_days=3, n_outcomes=45, total_pnl_usd=Decimal("-5"))
+        )
+    for key in ("MATRIX_CERT_MIN_OBSERVATION_DAYS", "MATRIX_CERT_MIN_OUTCOMES",
+                "MATRIX_CERT_MIN_WIN_RATE", "MATRIX_CERT_MIN_TOTAL_PNL_USD",
+                "MATRIX_CERT_MAX_DRAWDOWN_PCT"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("LIVE_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("LIVE_CAPITAL_CAP_USD", "2000")
+    monkeypatch.setenv("BYBIT_TESTNET", "true")
+    ok = await should_submit_live(
+        strategy_id=sid, asset_class=ac, strategy_version=ver,
+        intended_notional_usd=Decimal("100"), wallet_id=wallet_id,
+    )
+    assert ok.allowed is True, ok.reasons
+    monkeypatch.setenv("BYBIT_TESTNET", "false")
+    denied = await should_submit_live(
+        strategy_id=sid, asset_class=ac, strategy_version=ver,
+        intended_notional_usd=Decimal("100"), wallet_id=wallet_id,
+    )
+    assert denied.allowed is False
+    assert any("certificate" in r for r in denied.reasons), denied.reasons

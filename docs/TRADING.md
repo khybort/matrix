@@ -34,6 +34,7 @@ These live in `services/execution` (or wherever order submission happens) and **
 3. **`LIVE_CAPITAL_CAP_USD`** — total capital deployed across the system cannot exceed this; new orders that would breach it are rejected
 4. **`LIVE_EXECUTION_ENABLED`** — global kill flag. Default `false`. Setting `true` requires manual edit of `.env.local` on the execution node.
 5. **Per-strategy lifecycle gate** — a strategy cannot graduate to live execution without `paper_trade_certificate` row in DB showing 60+ days of monitored runs.
+6. **Cert thresholds cannot be softened for mainnet** — `MATRIX_CERT_*` env overrides exist for testnet/shadow only. When any venue is mainnet (`BYBIT_TESTNET=false` or `ALPACA_PAPER=false`): the overrides are ignored at grant time, any *active* override refuses every live order outright, and a cert whose evidence snapshot is below the defaults (or that was granted under overrides, `granted_by` ends with `+relaxed`) is not valid. Enforced in `matrix_shared.trading_safety` + `execution.safety.should_submit_live` + `exchange_shadow`.
 
 Tests in `services/execution` MUST cover:
 - Order rejection when limits breached

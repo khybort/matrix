@@ -13,6 +13,7 @@ ABORT if `allowed=False`. There is no path that bypasses this function
 for live capital.
 
 Layers, in order of cheapness to evaluate:
+    0. Deployment posture (mainnet + MATRIX_CERT_* overrides → refuse)
     1. LIVE_EXECUTION_ENABLED env flag (default false; manual edit only)
     2. paper_trade_certificate gate (matrix_shared.has_valid_certificate)
     3. Wallet circuit_tripped_at (daily loss circuit breaker)
@@ -43,6 +44,7 @@ from matrix_shared import (
     has_valid_certificate,
     shared_session_scope,
 )
+from matrix_shared.trading_safety import mainnet_refusal_reasons
 from matrix_shared.models import PaperPosition, Prediction, Wallet
 from matrix_shared.models.slot_config import StrategySlotConfig
 
@@ -110,6 +112,12 @@ async def should_submit_live(
         "wallet_id": str(wallet_id),
         "ts": datetime.now(timezone.utc).isoformat(),
     }
+
+    # 0. Deployment posture: mainnet + softened cert thresholds is refused
+    #    outright (docs/TRADING.md: "Skip the certificate ... no").
+    posture = mainnet_refusal_reasons()
+    snapshot["mainnet_refusal"] = posture
+    reasons.extend(posture)
 
     # 1. Global on/off flag (operator-controlled, NEVER set by code)
     live_enabled = _env_live_enabled()

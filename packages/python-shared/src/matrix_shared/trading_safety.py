@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+from loguru import logger
 from sqlalchemy import select
 
 from matrix_shared.db import shared_session_scope
@@ -57,6 +58,11 @@ async def has_valid_certificate(
         return False
     if cert.validity_until is not None and cert.validity_until < datetime.now(timezone.utc):
         return False
+    if is_mainnet() and not cert_meets_production_thresholds(cert):
+        # Granted while MATRIX_CERT_* overrides were active, or its evidence
+        # snapshot is below docs/TRADING.md defaults — good enough for testnet
+        # shadowing, never for real capital (gate #5).
+        return False
     return True
 
 
@@ -69,23 +75,118 @@ DEFAULT_MIN_TOTAL_PNL_USD = Decimal("0.00")
 DEFAULT_MAX_DRAWDOWN_PCT = Decimal("0.15")
 
 # Optional .env overrides for cert grants (defaults above = docs/TRADING.md).
-# Raise again before mainnet; unset vars restore production thresholds.
+# They exist so a testnet/shadow deployment can exercise the live-order code
+# path early. They are IGNORED on mainnet (see is_mainnet), and any cert that
+# was granted while they were active is stamped RELAXED_MARKER and refused by
+# has_valid_certificate on mainnet. Unset the vars to restore production
+# thresholds; there is no env that turns the mainnet refusal off.
 _ENV_MIN_OBSERVATION_DAYS = "MATRIX_CERT_MIN_OBSERVATION_DAYS"
 _ENV_MIN_OUTCOMES = "MATRIX_CERT_MIN_OUTCOMES"
 _ENV_MIN_WIN_RATE = "MATRIX_CERT_MIN_WIN_RATE"
 _ENV_MIN_TOTAL_PNL_USD = "MATRIX_CERT_MIN_TOTAL_PNL_USD"
 _ENV_MAX_DRAWDOWN_PCT = "MATRIX_CERT_MAX_DRAWDOWN_PCT"
+CERT_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
+    _ENV_MIN_OBSERVATION_DAYS,
+    _ENV_MIN_OUTCOMES,
+    _ENV_MIN_WIN_RATE,
+    _ENV_MIN_TOTAL_PNL_USD,
+    _ENV_MAX_DRAWDOWN_PCT,
+)
+
+# granted_by suffix for certs issued under relaxed thresholds.
+RELAXED_MARKER = "+relaxed"
+
+
+def is_mainnet() -> bool:
+    """True when ANY wired venue points at real money.
+
+    Bybit: BYBIT_TESTNET defaults to true; only the literal 'false' is mainnet.
+    Alpaca: ALPACA_PAPER defaults to true; only the literal 'false' is live.
+    """
+    bybit_live = os.environ.get("BYBIT_TESTNET", "true").strip().lower() == "false"
+    alpaca_live = os.environ.get("ALPACA_PAPER", "true").strip().lower() == "false"
+    return bybit_live or alpaca_live
+
+
+def cert_overrides_active() -> list[str]:
+    """Names of MATRIX_CERT_* env vars currently set to a non-empty value."""
+    return [k for k in CERT_OVERRIDE_ENV_KEYS if os.environ.get(k, "").strip()]
+
+
+def mainnet_refusal_reasons() -> list[str]:
+    """Reasons a live order must be refused purely on deployment posture.
+
+    Empty on testnet/paper. On mainnet, any active MATRIX_CERT_* override is
+    a hard refusal — the certificate a strategy holds may have been granted
+    against softened thresholds, and TRADING.md forbids that for capital.
+    """
+    if not is_mainnet():
+        return []
+    active = cert_overrides_active()
+    if not active:
+        return []
+    return [
+        "mainnet venue configured while cert thresholds are overridden: "
+        + ", ".join(active)
+        + " — unset them (docs/TRADING.md forbids relaxed certs for live capital)"
+    ]
+
+
+def relaxed_granted_by(granted_by: str) -> str:
+    return granted_by if granted_by.endswith(RELAXED_MARKER) else granted_by + RELAXED_MARKER
+
+
+def cert_is_relaxed(cert) -> bool:
+    gb = getattr(cert, "granted_by", None) or ""
+    return gb.endswith(RELAXED_MARKER)
+
+
+def cert_meets_production_thresholds(cert) -> bool:
+    """Re-check a cert's evidence snapshot against the docs/TRADING.md
+    defaults, ignoring env. Legacy rows granted before RELAXED_MARKER existed
+    are caught here too, so no data migration is needed to make mainnet safe.
+    """
+    if cert_is_relaxed(cert):
+        return False
+    try:
+        if int(getattr(cert, "observation_days", 0) or 0) < DEFAULT_MIN_OBSERVATION_DAYS:
+            return False
+        if int(getattr(cert, "n_outcomes", 0) or 0) < DEFAULT_MIN_OUTCOMES:
+            return False
+        wr = getattr(cert, "win_rate", None)
+        if wr is None or Decimal(str(wr)) < DEFAULT_MIN_WIN_RATE:
+            return False
+        pnl = getattr(cert, "total_pnl_usd", None)
+        if pnl is None or Decimal(str(pnl)) < DEFAULT_MIN_TOTAL_PNL_USD:
+            return False
+        dd = getattr(cert, "max_drawdown_pct", None)
+        if dd is None or Decimal(str(dd)) > DEFAULT_MAX_DRAWDOWN_PCT:
+            return False
+    except (TypeError, ValueError, ArithmeticError):
+        return False
+    return True
 
 
 def cert_eligibility_thresholds() -> dict[str, int | Decimal]:
-    """Thresholds for maybe_grant_certificate / evaluate_eligibility."""
+    """Thresholds for maybe_grant_certificate / evaluate_eligibility.
+
+    Env overrides apply on testnet/paper only. On mainnet the docs/TRADING.md
+    defaults are returned regardless of env (logged once per call).
+    """
+    active = cert_overrides_active()
+    if active and is_mainnet():
+        logger.warning(
+            "mainnet venue configured; ignoring cert threshold overrides {}",
+            active,
+        )
+        active = []
 
     def _int(name: str, default: int) -> int:
-        raw = os.environ.get(name, "").strip()
+        raw = os.environ.get(name, "").strip() if name in active else ""
         return int(raw) if raw else default
 
     def _dec(name: str, default: Decimal) -> Decimal:
-        raw = os.environ.get(name, "").strip()
+        raw = os.environ.get(name, "").strip() if name in active else ""
         return Decimal(raw) if raw else default
 
     return {
@@ -254,6 +355,9 @@ async def maybe_grant_certificate(
             return (False, None, "already granted")
 
     # Env overrides (MATRIX_CERT_*) apply unless caller passes explicit kwargs.
+    # A grant that leaned on them is stamped RELAXED_MARKER so it can never
+    # unlock mainnet execution (has_valid_certificate refuses it there).
+    relaxed = bool(cert_overrides_active()) and not is_mainnet()
     kw: dict = dict(cert_eligibility_thresholds())
     if min_observation_days is not None:
         kw["min_observation_days"] = min_observation_days
@@ -293,7 +397,7 @@ async def maybe_grant_certificate(
             session.add(row)
         row.status = "granted"
         row.granted_at = now
-        row.granted_by = granted_by
+        row.granted_by = relaxed_granted_by(granted_by) if relaxed else granted_by
         row.validity_until = validity_until
         row.revoked_at = None
         row.revoked_reason = None
