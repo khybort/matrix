@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-09-12 — P0.2: strategy dispatcher binds `strategy_configs.params` + version
+
+- `strategy/params.py`: `build_kwargs` (alias `price_band_pct→band_pct`, `horizon_seconds→horizon_s`;
+  coerce JSON → Decimal/int by ctor default type; unknown keys logged+dropped) and `instantiate`
+  (stamps `strat.version` from the active config row).
+- `strategy/main.py`: `_active_configs()` replaces `_active_strategy_ids()`; every registered
+  strategy is built from its `(strategy_id, asset_class)` active row. Applied `param_tune` /
+  `lab_promotion` proposals now change live behaviour for all 11 deterministic strategies, and
+  emitted predictions carry the real version so reflection's per-version metrics stop reading n=0.
+- `grid` gains `horizon_s`; `oi_delta` gains `oi_threshold_pct`/`horizon_s`; `oi_breakout` gains
+  `oi_threshold_pct`/`horizon_s`/`tp_pct`/`sl_pct` (previously untunable).
+
 ## 2026-09-12 — P0.1: cert threshold overrides refused on mainnet
 
 - `trading_safety`: `is_mainnet()` (BYBIT_TESTNET=false or ALPACA_PAPER=false),

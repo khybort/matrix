@@ -32,56 +32,58 @@ from sqlalchemy import select
 from strategy.base import PredictionDraft
 from strategy.lessons import filter_drafts
 from strategy.modules import STRATEGIES_BY_MARKET
+from strategy.params import instantiate
 from strategy.persist import persist_drafts
 
 DEFAULT_INTERVAL_S = 30.0
 
-# strategy_configs DB gate — re-read every this many seconds so an operator
-# can disable a strategy at runtime without restarting the container.
+# strategy_configs DB gate + params — re-read every this many seconds so an
+# operator (or the reflection/labs apply path) can retire a strategy or change
+# its params at runtime without restarting the container.
 _CONFIG_TTL_S = 60.0
-_active_ids_cache: set[str] | None = None
-_active_ids_ts: float = 0.0
+_configs_cache: dict[tuple[str, str], tuple[int, dict]] | None = None
+_configs_ts: float = 0.0
 
 
-async def _active_strategy_ids() -> set[str]:
-    """Return the set of strategy_ids that have an active strategy_configs row.
+async def _active_configs() -> dict[tuple[str, str], tuple[int, dict]]:
+    """(strategy_id, asset_class) → (version, params) for every ACTIVE row.
 
-    Returns None-sentinel (all strategies pass) when the table has NO rows at
-    all — this handles the bootstrap state before any strategy is ever seeded.
-    The set is cached for _CONFIG_TTL_S to avoid a DB round-trip every tick.
+    Empty dict when the table has NO active rows at all — bootstrap state,
+    every registered strategy runs with module defaults at version 1.
     """
-    global _active_ids_cache, _active_ids_ts
+    global _configs_cache, _configs_ts
     now = time.monotonic()
-    if _active_ids_cache is not None and now - _active_ids_ts < _CONFIG_TTL_S:
-        return _active_ids_cache
+    if _configs_cache is not None and now - _configs_ts < _CONFIG_TTL_S:
+        return _configs_cache
 
     async with shared_session_scope() as session:
         rows = (await session.execute(
-            select(StrategyConfig.strategy_id)
+            select(StrategyConfig.strategy_id, StrategyConfig.asset_class,
+                   StrategyConfig.version, StrategyConfig.params)
             .where(StrategyConfig.status == "active")
-        )).scalars().all()
+            .order_by(StrategyConfig.version.desc())
+        )).all()
 
-    if not rows:
-        # No rows at all → bootstrap; let everything through so the first
-        # run seeds outcomes without requiring a DB migration step.
-        _active_ids_cache = set()
-        _active_ids_ts = now
-        return set()
-
-    _active_ids_cache = set(rows)
-    _active_ids_ts = now
-    return _active_ids_cache
+    cfgs: dict[tuple[str, str], tuple[int, dict]] = {}
+    for sid, ac, ver, params in rows:
+        cfgs.setdefault((sid, ac), (int(ver), dict(params or {})))
+    _configs_cache = cfgs
+    _configs_ts = now
+    return cfgs
 
 
 def _instantiate_for_market(
-    market: MarketAdapter, symbols: list[str] | None = None
+    market: MarketAdapter,
+    symbols: list[str] | None = None,
+    configs: dict[tuple[str, str], tuple[int, dict]] | None = None,
 ) -> list:
-    """Build a fresh list of strategy instances for `market` from the registry.
+    """Build strategy instances for `market`, bound to their active config.
 
-    `symbols`, when given, is passed to every strategy ctor so the whole market
-    shares one dynamically-resolved symbol set (the active universe) instead of
-    each module re-resolving it via the sync crypto_universe() — which returns
-    _DEFAULT_UNIVERSE inside the event loop and ignored the potential-scorer.
+    `symbols`, when given, is passed to every strategy ctor so the whole
+    market shares one dynamically-resolved symbol set (the active universe).
+    `configs` (from `_active_configs`) supplies version + tuned params; a
+    strategy with no active row is skipped unless `configs` is empty
+    (bootstrap mode).
 
     A KeyError here means a market was registered as a MarketAdapter but has
     no `modules/<market>/__init__.py` exporting STRATEGIES — surface loudly.
@@ -92,14 +94,30 @@ def _instantiate_for_market(
             f"(STRATEGIES_BY_MARKET keys: {sorted(STRATEGIES_BY_MARKET)})"
         )
         return []
-    classes = STRATEGIES_BY_MARKET[market.name]
-    if symbols is not None:
-        return [cls(symbols=symbols) for cls in classes]
-    return [cls() for cls in classes]
+    configs = configs or {}
+    out = []
+    for cls in STRATEGIES_BY_MARKET[market.name]:
+        cfg = configs.get((cls.id, market.asset_class))
+        if cfg is None:
+            if configs:
+                logger.debug(f"strategy {cls.id}/{market.asset_class}: no active config row; skip")
+                continue
+            out.append(instantiate(cls, symbols=symbols))
+            continue
+        version, params = cfg
+        try:
+            out.append(instantiate(cls, symbols=symbols, version=version, params=params))
+        except Exception as e:
+            logger.exception(
+                f"strategy {cls.id}/{market.asset_class} v{version}: params rejected "
+                f"({e}); falling back to defaults"
+            )
+            out.append(instantiate(cls, symbols=symbols, version=version))
+    return out
 
 
 async def _tick() -> int:
-    active_ids = await _active_strategy_ids()
+    configs = await _active_configs()
     # Resolve the crypto active universe once per tick (async — the sync path
     # returns _DEFAULT_UNIVERSE under a running loop), then feed it to every
     # crypto strategy so they analyze the same set ingestion streams + the agent
@@ -111,13 +129,7 @@ async def _tick() -> int:
             logger.debug(f"market {market.name} session closed; skip")
             continue
         market_symbols = crypto_symbols if market.name == "crypto" else None
-        for strat in _instantiate_for_market(market, market_symbols):
-            # Gate: skip strategies that have been explicitly retired in
-            # strategy_configs. An empty active_ids set means "bootstrap mode —
-            # no rows yet, let everything through."
-            if active_ids and strat.id not in active_ids:
-                logger.debug(f"strategy {strat.id}: no active config row; skip")
-                continue
+        for strat in _instantiate_for_market(market, market_symbols, configs):
             try:
                 ds = await strat.generate()
                 drafts.extend(ds)

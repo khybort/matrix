@@ -69,12 +69,14 @@ class Grid:
         band_pct: Decimal = DEFAULT_PRICE_BAND_PCT,
         n_grids: int = N_GRIDS,
         *,
+        horizon_s: int = HORIZON_S,
         tp_pct: Decimal | None = DEFAULT_TP_PCT,
         sl_pct: Decimal | None = DEFAULT_SL_PCT,
     ) -> None:
         self.symbols = list(symbols)
         self.band_pct = band_pct
         self.n_grids = n_grids
+        self.horizon_seconds = int(horizon_s)
         self.tp_pct = Decimal(str(tp_pct)) if tp_pct is not None else None
         self.sl_pct = Decimal(str(sl_pct)) if sl_pct is not None else None
 

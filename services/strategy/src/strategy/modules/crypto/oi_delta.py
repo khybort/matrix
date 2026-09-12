@@ -49,10 +49,14 @@ class OiDelta:
         self,
         symbols: Sequence[str] = DEFAULT_SYMBOLS,
         *,
+        oi_threshold_pct: Decimal = OI_JUMP_THRESHOLD,
+        horizon_s: int = HORIZON_S,
         tp_pct: Decimal | None = DEFAULT_TP_PCT,
         sl_pct: Decimal | None = DEFAULT_SL_PCT,
     ) -> None:
         self.symbols = list(symbols)
+        self.oi_threshold_pct = Decimal(str(oi_threshold_pct))
+        self.horizon_seconds = int(horizon_s)
         self.tp_pct = Decimal(str(tp_pct)) if tp_pct is not None else None
         self.sl_pct = Decimal(str(sl_pct)) if sl_pct is not None else None
 
@@ -89,7 +93,7 @@ class OiDelta:
                     continue
 
                 oi_delta = (cur.open_interest - prev.open_interest) / prev.open_interest
-                if oi_delta < OI_JUMP_THRESHOLD:
+                if oi_delta < self.oi_threshold_pct:
                     continue
 
                 # Price delta same window

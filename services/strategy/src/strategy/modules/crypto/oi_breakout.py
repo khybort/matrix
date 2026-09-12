@@ -53,8 +53,20 @@ class OiBreakout:
     market: str = "crypto"
     asset_class: str = "crypto"
 
-    def __init__(self, symbols: Sequence[str] = DEFAULT_SYMBOLS) -> None:
+    def __init__(
+        self,
+        symbols: Sequence[str] = DEFAULT_SYMBOLS,
+        *,
+        oi_threshold_pct: Decimal = OI_SURGE_THRESHOLD,
+        horizon_s: int = HORIZON_S,
+        tp_pct: Decimal | None = None,
+        sl_pct: Decimal | None = None,
+    ) -> None:
         self.symbols = list(symbols)
+        self.oi_threshold_pct = Decimal(str(oi_threshold_pct))
+        self.horizon_seconds = int(horizon_s)
+        self.tp_pct = Decimal(str(tp_pct)) if tp_pct is not None else None
+        self.sl_pct = Decimal(str(sl_pct)) if sl_pct is not None else None
 
     async def generate(self) -> list[PredictionDraft]:
         now = datetime.now(UTC)
@@ -85,7 +97,7 @@ class OiBreakout:
                     continue
 
                 oi_delta = (cur.open_interest - prev.open_interest) / prev.open_interest
-                if abs(oi_delta) < OI_SURGE_THRESHOLD:
+                if abs(oi_delta) < self.oi_threshold_pct:
                     continue
 
                 # Latest price for entry reference.
@@ -134,6 +146,8 @@ class OiBreakout:
                         side=side,
                         confidence=confidence,
                         horizon_seconds=self.horizon_seconds,
+                        tp_pct=self.tp_pct,
+                        sl_pct=self.sl_pct,
                         entry_price_ref=px_now,
                         generated_at=now,
                         thesis=(
@@ -144,7 +158,7 @@ class OiBreakout:
                             "oi_delta_pct": str(oi_delta),
                             "price_drift_pct": str(price_drift),
                             "lookback_s": LOOKBACK_S,
-                            "horizon_s": HORIZON_S,
+                            "horizon_s": self.horizon_seconds,
                             "confidence_ceiling": str(CONFIDENCE_CEILING),
                         },
                     )
