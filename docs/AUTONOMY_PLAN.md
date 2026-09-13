@@ -391,7 +391,10 @@ tek günde 1.198 trade / −$343 (şampiyon v2: 25 trade). Düzeltildi + aday ha
 Director görevi (#10, oi_delta mutasyon sarmalı) dev_agent'ta çalışıyor. LLM önerileri artık otomatik challenger (7 tanesi uygulandı).
 2026-09-13: backlog backpressure — strateji/agent prediction emisyonu şampiyon slot × 5 ile sınırlı; funding_reversion'ın
 9k/gün expired prediction'ı ve matrix_agent'ın boşa LLM çağrıları kesildi (`matrix_shared/backpressure.py`).
-Sıradaki: `agent_usage` persist (migration zinciri açılınca — 0038 WIP
+2026-09-13: LLM kullanım defteri (`matrix_shared/usage_ledger.py`, paylaşılan volume'da günlük JSONL) `agent_usage` boşluğunu
+migration'sız kapattı; Director brief'i günlük LLM harcamasını servis bazında yazar. bars-aggregator'ın dakikalık tam indeks taraması
+(6 dk/tick) sembol filtresiyle bitti; hot reload'da startup backfill artık atlanıyor.
+Sıradaki: `agent_usage` tablosu (defterden taşıma, 0038 sonrası) (migration zinciri açılınca — 0038 WIP
 commit'lendiğinde 0039+ eklenebilir), Telegram'dan `awaiting_review` dev task onayı.
 
 Bu 10'dan sonra sistem "çalışıyor gibi görünen" değil, **gerçekten kendini ölçen** hale gelir.
