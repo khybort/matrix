@@ -66,6 +66,8 @@ services:
 
   synthesis:
     <<: *cpu_light
+  director:
+    <<: *cpu_light
 
   dev_agent:
     <<: *cpu_light

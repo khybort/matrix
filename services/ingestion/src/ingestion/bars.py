@@ -249,13 +249,22 @@ async def rollup_1h_bars(since: datetime, until: datetime) -> int:
         return result.rowcount or 0
 
 
-async def backfill_all() -> int:
-    """Aggregate every bar from the earliest trade to NOW. One-shot."""
-    earliest = await _earliest_trade_ts()
+# Startup backfill window. Before 2026-09-13 this aggregated from the EARLIEST
+# trade (a 300M-row scan) and REST-fetched 168h for every symbol on each
+# restart, so the incremental loop — and with it retention — did not start
+# for hours after any code reload. Retention keeps 7d of trades; older bars
+# already exist from previous runs.
+STARTUP_BACKFILL_MAX_HOURS = float(os.environ.get("BARS_STARTUP_BACKFILL_MAX_HOURS", "48"))
+
+
+async def backfill_all(max_hours: float | None = None) -> int:
+    """Aggregate bars from max(earliest trade, now - max_hours) to NOW. One-shot."""
+    max_hours = STARTUP_BACKFILL_MAX_HOURS if max_hours is None else max_hours
+    until = datetime.now(timezone.utc)
+    earliest = until - timedelta(hours=max_hours) if max_hours > 0 else await _earliest_trade_ts()
     if earliest is None:
         logger.info("backfill: no trades, nothing to do")
         return 0
-    until = datetime.now(timezone.utc)
     logger.info(f"backfill: aggregating {earliest.isoformat()} → {until.isoformat()}")
     n = await aggregate_window(earliest, until)
     h = await rollup_1h_bars(earliest, until)
@@ -300,7 +309,9 @@ async def run(
     # values for any minutes the connector did cover.
     if rest_backfill_symbols:
         try:
-            await rest_backfill_missing(rest_backfill_symbols, rest_backfill_hours)
+            await rest_backfill_missing(
+                rest_backfill_symbols, min(rest_backfill_hours, STARTUP_BACKFILL_MAX_HOURS)
+            )
         except Exception as e:
             logger.exception(f"startup REST backfill failed: {e}")
 

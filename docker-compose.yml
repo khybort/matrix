@@ -345,7 +345,6 @@ services:
     restart: unless-stopped
     # Idle skeleton until Phase 5 broker code lands. Start explicitly:
     # docker compose --profile phase5 up -d execution
-    profiles: ["phase5"]
     logging: *default_logging
 
   # Rule-based strategy generator pool. Each module emits PredictionDraft rows
@@ -464,13 +463,31 @@ services:
       <<: *python-env
     command: ["synthesis.main", "--interval", "3600", "--hours", "6"]
     restart: unless-stopped
-    # Hourly theme synthesis writes Concept nodes consumed by matrix_agent's
-    # feature extraction and the bulletin compose step. Both consumers are
-    # either gated (bulletin → Phase 6) or rule-dominated (matrix_agent
-    # feature space mostly uses graph mention counts, not narrative themes),
-    # so this is idle LLM burn for the survivor strategy set. Re-enable with
-    # `docker compose --profile phase6 up -d synthesis` when bulletin returns.
-    profiles: ["phase6"]
+    # Always on (operator 2026-09-13: "agents always run"): hourly theme
+    # synthesis feeds Concept nodes into matrix_agent's graph features.
+    logging: *default_logging
+
+  # Director — the one agent that looks at the whole system (docs/AUTONOMY_PLAN.md P3).
+  # Hourly: deterministic digest → Sonnet tool loop (file dev tasks, retire a
+  # persistent loser, revoke a losing cert) → operator brief (Telegram if configured).
+  # Cannot trade, grant certs, touch caps or wallets. Rules-only tick when LLM is down.
+  director:
+    build:
+      <<: *python-build
+      target: runtime
+      args:
+        SERVICE: director
+    image: matrix-director:local
+    container_name: matrix-director
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *python-env
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
+    command: ["director.main", "--interval", "3600"]
+    restart: unless-stopped
     logging: *default_logging
 
   dev_agent:

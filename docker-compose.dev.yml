@@ -154,6 +154,18 @@ services:
       - ./services/graph/src:/workspace/services/graph/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
 
+  director:
+    <<: *matrix-dev-watch
+    command:
+      - "python -m director.main --interval 3600"
+      - "/workspace/services/director/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/director/src:/workspace/services/director/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+      - *cursor-agent-auth-volume
+      - *cursor-config-auth-volume
+
   synthesis:
     <<: *matrix-dev-watch
     command:

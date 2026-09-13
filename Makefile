@@ -371,6 +371,18 @@ bist-seed-universe: ## Alias for bist-seed (dynamic discover, no embedded list)
 cert-scan: ## Scan active strategies; auto-grant paper_trade_certificate where eligible
 	$(DC) $(DC_BASE) exec reflection uv run python -m reflection.main --scan-grants
 
+.PHONY: director-once
+director-once: ## Run one Director tick now (digest + LLM review + brief)
+	$(DC) $(DC_BASE) exec director uv run python -m director.main --once
+
+.PHONY: director-digest
+director-digest: ## Print the deterministic system digest (no LLM)
+	$(DC) $(DC_BASE) exec director uv run python -m director.main --digest-only
+
+.PHONY: director-tail
+director-tail: ## Follow Director briefs/actions
+	$(DC) $(DC_BASE) logs -f --tail=100 director
+
 .PHONY: notify-tail
 notify-tail: ## Follow the Telegram notify daemon logs (dry-run if token unset)
 	$(DC) $(DC_BASE) logs -f --tail=100 notify
@@ -486,7 +498,7 @@ cursor-login-docker: ## One-time Cursor CLI login (matrix-agent volume → graph
 
 .PHONY: lock-llm-services
 lock-llm-services: ## Refresh uv.lock for services using matrix-shared LLM (after dep changes)
-	@for svc in synthesis graph reflection brain agent backtest dev_agent; do \
+	@for svc in synthesis graph reflection brain agent backtest dev_agent director; do \
 	  echo "==> $$svc"; \
 	  docker compose run --rm --no-deps --entrypoint "" \
 	    -v "$$(pwd)/packages/python-shared:/workspace/packages/python-shared" \

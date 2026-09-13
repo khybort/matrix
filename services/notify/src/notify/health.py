@@ -111,7 +111,7 @@ async def collect_health(prev: HealthFlags, now: datetime | None = None) -> Heal
                 "       count(*) FILTER (WHERE context->>'method' LIKE 'llm%') AS n_llm "
                 "FROM predictions "
                 "WHERE strategy_id = 'matrix_agent' "
-                "  AND context ? 'method' "
+                "  AND context->>'method' IS NOT NULL "
                 "  AND created_at >= now() - (:m || ' minutes')::interval"
             ), {"m": str(LLM_WINDOW_MIN)})).one()
             s.agent_predictions_in_window = int(row.n or 0)

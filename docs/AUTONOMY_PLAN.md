@@ -320,6 +320,12 @@ Emir gönderen tek kod yolu bu.
     tier eşlemesi (`MATRIX_MODEL_<HAIKU|SONNET|OPUS>`), rate-limit/latency'e göre otomatik fallback
     sırası: subscription → openrouter-free → rule-only. Operatör isteği 2026-09-12.
 
+12. ✅ Director (P3.1, ilk sürüm): `services/director` — saatlik deterministik digest → Sonnet tool
+    loop (`file_dev_task`, `retire_strategy`, `revoke_certificate`; grant/cap/wallet/live yok) →
+    operatör brief'i (Telegram varsa). LLM yokken rules-only tick. Operatör 2026-09-13: "süreci
+    main agent yönetsin; ajanlar hep çalışsın" → `synthesis` ve `execution` profile kapıları kaldırıldı,
+    LLM backend Cursor → Claude subscription (token bekleniyor).
+
 Açık kalan P0 maddeleri: P0.7 (`exchange_shadow` tam gate — mainnet refuse eklendi, capital/slot cap
 henüz değil), P0.8 (circuit breaker trip'te pozisyon kapatma + manuel reset).
 

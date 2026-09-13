@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-09-13 — Director service (P3.1) + agents always on + LLM → subscription
+
+- New `services/director` (default service, hourly): `digest.py` builds a deterministic system
+  digest (health ages, wallets, per-strategy 24h/7d PnL, challengers, efficacy verdicts, proposals,
+  dev_agent queue, lessons, certs) and renders an operator brief; `agent.py` runs one Sonnet tool
+  loop over the Director belt — read tools + `file_dev_task` (write, deduped, ≤2/tick),
+  `retire_strategy` (write), `revoke_certificate` (risk-gated, safe direction only). No tool can
+  grant certs, change caps, enable live or touch wallets. Without an LLM the tick is rules-only
+  (stalled paper engine / stalled bars / recurring dev failure → dev task). Brief → logs + Telegram.
+  `make director-once|director-digest|director-tail`.
+- Operator: "agents always run" → `synthesis` (phase6) and `execution` (phase5) profile gates removed;
+  both run by default now. `bulletin` stays phase6 (product, not an agent).
+- LLM backend switched Cursor → Claude subscription (`make llm-subscription`, `.env`). Cursor was
+  unauthenticated in containers anyway. **`CLAUDE_CODE_OAUTH_TOKEN` must be set** (`claude setup-token`)
+  for any LLM path; until then every agent runs its deterministic fallback.
+- `ingestion/bars.py`: startup backfill bounded to `BARS_STARTUP_BACKFILL_MAX_HOURS` (48h) for both
+  the REST kline fill and trade aggregation. It previously scanned all 300M trades on every restart,
+  which is why bars lagged 30+ min after each hot reload and retention never started.
+- Fix: `predictions.context` / `mutation_proposals.metrics_window` are `json`, not `jsonb` — the
+  `?` operator used by notify.health (LLM detector) and the digest failed silently; replaced with
+  `->> IS NOT NULL`.
+
 ## 2026-09-13 — dev_agent test isolation + incident note
 
 - **Incident:** `services/dev_agent/tests/conftest.py` TRUNCATEs every dev_agent table per test and
