@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import UTC, datetime
 import os
 import signal
 import sys
@@ -70,6 +71,24 @@ async def run(interval_s: float) -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _handle_signal)
+
+    # A restart is not a reason to review: with hot reload every shared-code
+    # save restarted this daemon and it ran an LLM review each time (4 briefs
+    # in 30 min on 2026-09-13). Resume the hourly cadence from the last brief.
+    try:
+        from matrix_shared.usage_ledger import last_record_ts
+        last = last_record_ts(service="director", session="director")
+        if last is not None:
+            elapsed = (datetime.now(UTC) - last).total_seconds()
+            if elapsed < interval_s:
+                wait = interval_s - elapsed
+                logger.info(f"director: last review {elapsed/60:.0f} min ago; first tick in {wait/60:.0f} min")
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=wait)
+                except TimeoutError:
+                    pass
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"director: cadence probe failed ({e}); ticking now")
 
     while not stop.is_set():
         try:

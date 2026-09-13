@@ -114,3 +114,23 @@ def summary(day: datetime | None = None, *, days: int = 1) -> dict[str, Any]:
             b["p95_s"] = round(ds[min(len(ds) - 1, int(len(ds) * 0.95))], 1)
     return {"days": days, "calls": calls, "cost_usd": round(total_cost, 4),
             "by_service": dict(sorted(by.items(), key=lambda kv: -kv[1]["cost_usd"]))}
+
+
+def last_record_ts(*, service: str | None = None, session: str | None = None) -> datetime | None:
+    """Timestamp of the newest ledger row matching service/session (today or
+    yesterday), or None. Lets a restarted daemon see when it last ran."""
+    now = datetime.now(UTC)
+    best: datetime | None = None
+    for i in range(2):
+        for r in _iter_rows(now - timedelta(days=i)):
+            if service is not None and r.get("service") != service:
+                continue
+            if session is not None and r.get("session") != session:
+                continue
+            try:
+                ts = datetime.fromisoformat(str(r.get("ts")))
+            except (TypeError, ValueError):
+                continue
+            if best is None or ts > best:
+                best = ts
+    return best

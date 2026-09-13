@@ -35,3 +35,14 @@ def test_service_name_from_compose_workdir(monkeypatch, tmp_path):
     d.mkdir(parents=True)
     monkeypatch.chdir(d)
     assert UL.service_name() == "reflection"
+
+
+def test_last_record_ts_filters_by_service_and_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("MATRIX_USAGE_DIR", str(tmp_path))
+    monkeypatch.setenv("MATRIX_SERVICE", "director")
+    UL.record(session="director", backend="subscription", model="haiku", turns=3, cost_usd=0.05, is_error=False)
+    monkeypatch.setenv("MATRIX_SERVICE", "agent")
+    UL.record(session="single_shot", backend="subscription", model="haiku", turns=1, cost_usd=0.01, is_error=False)
+    ts = UL.last_record_ts(service="director", session="director")
+    assert ts is not None and (datetime.now(UTC) - ts).total_seconds() < 60
+    assert UL.last_record_ts(service="brain") is None

@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Director restart'ta hemen review yapmaz
+- Hot reload her paylaşılan kod kaydında Director'ı yeniden başlatıyor ve her seferinde LLM review koşuyordu (30 dk'da 4 brief). Başlangıçta kullanım defterinden son review zamanına bakılır (`usage_ledger.last_record_ts`), saatlik kadans oradan devam eder.
+
 ## 2026-09-13 — Reflection metriklerine çıkış-nedeni dağılımı
 - `StrategyMetrics.by_reason` (hit_tp/hit_sl/hit_horizon → n, avg_pnl_bps, total): 24h şampiyon verisinde `hit_horizon` ≈ −6…−31 bps ile baskın ve `hit_sl:hit_tp` ≈ 2-3:1 — kayıp ≈ maliyet, TP ufuk içinde erişilemiyor, stop gürültü bandında. Bu geometri sinyali LLM tek-atış prompt'una, reflection agent `recent_outcomes` özetine (`by_exit_reason`) ve system prompt'a (nasıl okunacağı) eklendi; proposal `metrics_window` da taşır.
 
