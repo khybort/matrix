@@ -163,6 +163,16 @@ async def _tick() -> int:
     # Data-driven filter: drop candidates that match an active 'avoid' lesson.
     # Keeps strategy modules symbol-agnostic; lessons are produced by the
     # lessons feeder and can be added/removed without code changes.
+    # Regime tag (per market) so lessons/efficacy can be keyed by regime.
+    try:
+        from matrix_shared.regime import current_regime
+
+        regimes = {ac: (await current_regime(ac)).key for ac in {d.asset_class for d in drafts}}
+        for d in drafts:
+            d.context = {**(d.context or {}), "regime": regimes.get(d.asset_class, "unknown")}
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"regime tag skipped: {e}")
+
     drafts = await filter_drafts(drafts)
     return await persist_drafts(drafts)
 

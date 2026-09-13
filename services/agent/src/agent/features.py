@@ -53,8 +53,12 @@ class SymbolFeatures:
     graph_related_companies: list[str] = field(default_factory=list)
     graph_co_mentioned_assets: list[str] = field(default_factory=list)
 
+    # Market regime key "<vol>/<trend>/<funding>" (matrix_shared.regime) — the
+    # same label is written to predictions.context so lessons can be regime-keyed.
+    regime: str = "unknown"
 
-async def extract_symbol_features(symbol: str) -> SymbolFeatures:
+
+async def extract_symbol_features(symbol: str, asset_class: str = "crypto") -> SymbolFeatures:
     f = SymbolFeatures(symbol=symbol)
     now = datetime.now(UTC)
 
@@ -182,6 +186,13 @@ async def extract_symbol_features(symbol: str) -> SymbolFeatures:
         f.graph_co_mentioned_assets = [a for a, _ in ctx.co_mentioned_assets]
     except Exception:
         # graph queries should never break feature extraction; fall back silently
+        pass
+
+    try:
+        from matrix_shared.regime import current_regime
+
+        f.regime = (await current_regime(asset_class)).key
+    except Exception:  # noqa: BLE001 — advisory only
         pass
 
     return f

@@ -119,3 +119,16 @@ def test_threshold_lt():
 def test_unknown_pattern_kind_never_matches():
     lesson = _lesson("future_kind_we_dont_understand", {"any": "thing"})
     assert not matches(lesson, _Features(), side="long")
+
+
+def test_regime_kind_matches_wildcards_and_side():
+    @dataclass
+    class _RF:
+        symbol: str = "BTCUSDT"
+        regime: str = "high/down/pos"
+
+    lesson = _lesson("regime", {"regime": "*/down/*", "side": "long"})
+    assert matches(lesson, _RF(), "long") is True
+    assert matches(lesson, _RF(), "short") is False
+    assert matches(_lesson("regime", {"regime": "low/*/*"}), _RF(), "long") is False
+    assert matches(lesson, _RF(regime="unknown"), "long") is False

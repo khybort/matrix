@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-09-13 — P2.3 regime memory
+
+- `matrix_shared/regime.py`: `classify(closes_1h, funding)` → `Regime(vol|trend|funding)`; `current_regime(asset_class)`
+  from the market's reference symbol (`MATRIX_REGIME_REF_*`, crypto BTCUSDT) 1h bars + latest funding,
+  cached 5 min; `regime_matches("high/*/*", key)` wildcard filter.
+- Every prediction now carries `context.regime` (agent via `SymbolFeatures.regime`, deterministic
+  strategies via the dispatcher); the LLM prompt shows it; `agent_lessons` synthesizes
+  `pattern_kind='regime'` lessons per (regime, side) beside symbol lessons; `matches()` and the
+  strategy draft filter honour them. Director brief prints the current regime per market.
+
 ## 2026-09-13 — P2.4 overlay chain completed + P2.6 operator directives
 
 - `matrix_shared/graph_overlay.py` (service-agnostic AGE writers): `backtest/paper_trade._close_position`

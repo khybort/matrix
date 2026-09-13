@@ -250,6 +250,7 @@ def _feature_dump(f: SymbolFeatures) -> dict[str, Any]:
         "oi_delta_pct_5m": str(f.oi_delta_pct_5m) if f.oi_delta_pct_5m else None,
         "n_news_1h": f.n_news_1h,
         "news_titles_sample": f.news_titles_sample,
+        "regime": getattr(f, "regime", "unknown"),
         "graph": {
             "mention_count": f.graph_mention_count,
             "recency_weight": str(f.graph_recency_weight),
@@ -281,6 +282,7 @@ def _llm_prompt(
         f"Funding rate: {f.funding_rate}",
         f"OI={f.open_interest} ΔOI_5m={f.oi_delta_pct_5m}",
         f"News last 1h: n={f.n_news_1h}",
+        f"Market regime (vol/trend/funding): {getattr(f, 'regime', 'unknown')}",
     ]
     if f.news_titles_sample:
         parts.append("Recent titles:")

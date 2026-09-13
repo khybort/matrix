@@ -31,13 +31,14 @@ class SystemDigest:
     certs: list[dict[str, Any]] = field(default_factory=list)
     wallets: list[dict[str, Any]] = field(default_factory=list)
     by_method: list[dict[str, Any]] = field(default_factory=list)  # matrix_agent PnL by decision method
+    regime: dict[str, Any] = field(default_factory=dict)  # asset_class → regime key
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "now": self.now.isoformat(), "health": self.health, "pnl": self.pnl,
             "challengers": self.challengers, "efficacy": self.efficacy, "proposals": self.proposals,
             "dev": self.dev, "lessons": self.lessons, "certs": self.certs, "wallets": self.wallets,
-            "by_method": self.by_method,
+            "by_method": self.by_method, "regime": self.regime,
         }
 
 
@@ -155,6 +156,15 @@ async def collect_digest(now: datetime | None = None) -> SystemDigest:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"digest: local-tier probe failed: {e}")
     try:
+        from matrix_shared.regime import current_regime
+
+        for ac in ("crypto", "bist", "us"):
+            r = await current_regime(ac)
+            if r.key != "unknown/unknown/unknown":
+                d.regime[ac] = r.as_dict()
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"digest: regime probe failed ({e})")
+    try:
         u = shutil.disk_usage("/")
         d.health["disk_free_pct"] = round(u.free / u.total * 100, 1)
     except OSError:
@@ -174,6 +184,8 @@ def render_brief(d: SystemDigest) -> str:
             h.get("disk_free_pct", "?"), h.get("local_db_gb", "?"),
         )
     )
+    if d.regime:
+        lines.append("regime: " + ", ".join(f"{ac} {r['key']} (24h {r.get('ret_24h')})" for ac, r in d.regime.items()))
     for w in d.wallets:
         flag = " ⚠️circuit" if w.get("circuit_tripped") else ""
         lines.append(f"wallet {w['asset_class']}/{w['name']}: equity {w['equity']} net {w['net_pnl']}{flag}")

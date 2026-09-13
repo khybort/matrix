@@ -212,7 +212,7 @@ async def _tick(symbols: list[str]) -> int:
     # Parallel feature extraction — only for symbols without a recent signal
     async def _safe_features(sym: str, ac: str):
         try:
-            return sym, ac, await extract_symbol_features(sym)
+            return sym, ac, await extract_symbol_features(sym, ac)
         except Exception as e:
             logger.exception(f"feature extraction failed for {sym} ({ac}): {e}")
             return sym, ac, None

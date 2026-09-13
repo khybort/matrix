@@ -16,12 +16,9 @@ For each `pattern_kind`:
      bucket key) if one exists — keeps the table from accumulating
      redundant rows.
 
-Only `symbol_specific` is implemented in v0 because it needs no
-feature-extraction at lesson-write time — the prediction row already
-carries symbol + side directly. `feature_value_band` patterns will land
-once predictions.context (already JSON) is reliably populated by the
-live agent's decide() path; until then this synthesizer would be
-guessing on stale features.
+Pattern kinds: `symbol_specific` (symbol × side) and `regime` (market regime
+× side, from predictions.context.regime — matrix_shared.regime). Operator
+directives share the table but are never rewritten here.
 """
 
 from __future__ import annotations
@@ -147,6 +144,40 @@ async def _symbol_side_buckets(
     return out
 
 
+async def _regime_side_buckets(
+    strategy_id: str, *, asset_class: str, since: datetime, until: datetime,
+) -> list[_PatternStat]:
+    """Aggregate by (regime, side) using predictions.context.regime. Answers
+    "does this strategy lose when the market is high-vol and falling?" —
+    something symbol buckets cannot see."""
+    from sqlalchemy import text as _text
+    async with shared_session_scope() as session:
+        rows = (await session.execute(_text(
+            "SELECT p.context->>'regime' AS regime, p.side, count(o.id) AS n, "
+            "       sum(CASE WHEN o.pnl_usd > 0 THEN 1 ELSE 0 END) AS wins, sum(o.pnl_usd) AS total_pnl "
+            "FROM predictions p JOIN outcomes o ON o.prediction_id = p.id "
+            "WHERE p.strategy_id = :sid AND p.asset_class = :ac "
+            "  AND o.observed_at >= :since AND o.observed_at <= :until "
+            "  AND p.side IN ('long','short') AND p.context->>'regime' IS NOT NULL "
+            "  AND p.context->>'regime' <> 'unknown' AND o.reason <> 'orphan_flat_close' "
+            "GROUP BY 1, 2"
+        ), {"sid": strategy_id, "ac": asset_class, "since": since, "until": until})).all()
+    out: list[_PatternStat] = []
+    for regime, side, n, wins, total in rows:
+        n = int(n or 0)
+        if n == 0:
+            continue
+        wins = int(wins or 0)
+        total = Decimal(total or 0)
+        wr = (Decimal(wins) / Decimal(n)).quantize(Decimal("0.000001"))
+        out.append(_PatternStat(
+            bucket_key=f"{regime}/{side}", bucket_filter={"regime": regime, "side": side},
+            description=f"{side} in regime {regime} (rolling 7d)",
+            n=n, wins=wins, total_pnl=total, win_rate=wr, avg_pnl=(total / Decimal(n)).quantize(Decimal("0.000001")),
+        ))
+    return out
+
+
 async def synthesize(
     strategy_id: str = DEFAULT_STRATEGY_ID,
     *,
@@ -185,56 +216,47 @@ async def synthesize(
         return 0
     version = int(cfg.version)
 
-    stats = await _symbol_side_buckets(
-        strategy_id, asset_class=asset_class, since=since, until=now
-    )
     written = 0
-
-    for s in stats:
-        if s.n < MIN_N_PER_BUCKET:
-            continue
-        verdict = _verdict_for(s.win_rate)
-        if verdict is None:
-            # Neutral — supersede any active lesson for this bucket so we
-            # don't leave stale advice live when the pattern washes out.
-            existing = await _find_active(strategy_id, asset_class, "symbol_specific", s.bucket_filter)
-            if existing is not None and not str(existing.pattern_description or "").startswith("OPERATOR:"):
-                await _supersede_if_active(
-                    strategy_id, asset_class, "symbol_specific", s.bucket_filter, now
-                )
-            continue
-
-        # Has an active lesson for this exact bucket already? If its
-        # win_rate matches within 5pp, keep it. Otherwise supersede + write
-        # a fresh one.
-        existing = await _find_active(
-            strategy_id, asset_class, "symbol_specific", s.bucket_filter
-        )
-        if existing is not None and str(existing.pattern_description or "").startswith("OPERATOR:"):
-            continue  # operator directives are not statistical; never overwrite them
-        if existing is not None and existing.win_rate is not None:
-            if abs(Decimal(existing.win_rate) - s.win_rate) < Decimal("0.05"):
-                # Close enough — keep it, but record that fresh outcomes still
-                # confirm the pattern so the TTL sweep doesn't expire it.
-                await _touch_confirmed(existing.id, s.n, now)
+    buckets: list[tuple[str, list[_PatternStat]]] = [
+        ("symbol_specific", await _symbol_side_buckets(strategy_id, asset_class=asset_class, since=since, until=now)),
+        ("regime", await _regime_side_buckets(strategy_id, asset_class=asset_class, since=since, until=now)),
+    ]
+    for kind, stats in buckets:
+        for s in stats:
+            if s.n < MIN_N_PER_BUCKET:
                 continue
-        new_id = await _insert_lesson(
-            strategy_id=strategy_id,
-            asset_class=asset_class,
-            version=version,
-            kind="symbol_specific",
-            stat=s,
-            verdict=verdict,
-            observed_from=since,
-            observed_until=now,
-        )
-        if existing is not None:
-            await _mark_superseded(existing.id, new_id, now)
-        written += 1
-        logger.info(
-            f"lesson {new_id} [{asset_class}] ({verdict}): {s.description} "
-            f"n={s.n} win={float(s.win_rate)*100:.1f}% pnl=${float(s.total_pnl):.2f}"
-        )
+            verdict = _verdict_for(s.win_rate)
+            if verdict is None:
+                # Neutral — supersede any active lesson for this bucket so we
+                # don't leave stale advice live when the pattern washes out.
+                existing = await _find_active(strategy_id, asset_class, kind, s.bucket_filter)
+                if existing is not None and not str(existing.pattern_description or "").startswith("OPERATOR:"):
+                    await _supersede_if_active(strategy_id, asset_class, kind, s.bucket_filter, now)
+                continue
+
+            # Has an active lesson for this exact bucket already? If its
+            # win_rate matches within 5pp, keep it. Otherwise supersede + write
+            # a fresh one.
+            existing = await _find_active(strategy_id, asset_class, kind, s.bucket_filter)
+            if existing is not None and str(existing.pattern_description or "").startswith("OPERATOR:"):
+                continue  # operator directives are not statistical; never overwrite them
+            if existing is not None and existing.win_rate is not None:
+                if abs(Decimal(existing.win_rate) - s.win_rate) < Decimal("0.05"):
+                    # Close enough — keep it, but record that fresh outcomes still
+                    # confirm the pattern so the TTL sweep doesn't expire it.
+                    await _touch_confirmed(existing.id, s.n, now)
+                    continue
+            new_id = await _insert_lesson(
+                strategy_id=strategy_id, asset_class=asset_class, version=version, kind=kind,
+                stat=s, verdict=verdict, observed_from=since, observed_until=now,
+            )
+            if existing is not None:
+                await _mark_superseded(existing.id, new_id, now)
+            written += 1
+            logger.info(
+                f"lesson {new_id} [{asset_class}/{kind}] ({verdict}): {s.description} "
+                f"n={s.n} win={float(s.win_rate)*100:.1f}% pnl=${float(s.total_pnl):.2f}"
+            )
     return written
 
 

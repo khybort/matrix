@@ -348,7 +348,13 @@ Emir gönderen tek kod yolu bu.
     decision veto, strategy filter ve reflection tool'ları anında uygular; exploration koridoru ve
     çelişki-retire mekanizması direktiflere dokunmaz.
 
-Sıradaki: P2.3 regime memory, P2.5 embedding/benzer-setup, P4.3 dev_agent codebase_ctx.
+18. ✅ P2.3 Regime memory: `matrix_shared/regime.py` — referans sembolün 1h barlarından
+    `vol/trend/funding` anahtarı (5 dk cache). Her prediction `context.regime` taşır (agent +
+    strategy dispatcher), LLM prompt'unda görünür, lessons synthesizer `regime × side` bucket'ları
+    üretir (`pattern_kind='regime'`, joker `*/down/*`), decision veto ve draft filtresi uygular,
+    Director brief'inde "regime" satırı var. Canlı: crypto `low/flat/neutral`.
+
+Sıradaki: P2.5 embedding/benzer-setup, P4.3 dev_agent codebase_ctx, P1.4 labs eval dedup + fitness varyansı.
 
 Bu 10'dan sonra sistem "çalışıyor gibi görünen" değil, **gerçekten kendini ölçen** hale gelir.
 Director (P3) ancak ölçüm altyapısı varken anlamlı; ondan önce yazılırsa gürültüyü orkestre eder.

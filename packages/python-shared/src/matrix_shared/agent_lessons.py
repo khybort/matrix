@@ -17,6 +17,10 @@ Pattern filter schema (JSON in agent_lessons.pattern_filter):
   feature_threshold:
     {"feature": "funding_rate", "op": ">=", "value": 0.0001}
     one-sided gate
+
+  regime:
+    {"regime": "high/down/pos", "side": "long"}   ('*' wildcards per axis)
+    matches when the market regime key (features.regime) fits AND side matches
 """
 
 from __future__ import annotations
@@ -117,6 +121,14 @@ def matches(lesson: AgentLesson, features: Any, side: str | None) -> bool:
     if kind == "symbol_specific":
         symbol = getattr(features, "symbol", None)
         return _symbol_matches(filt, symbol, side)
+    if kind == "regime":
+        # {"regime": "high/down/*", "side": "long"} — matches the current market
+        # regime (features.regime, from matrix_shared.regime) and decided side.
+        from matrix_shared.regime import regime_matches
+
+        if filt.get("side") and side and filt["side"] != side:
+            return False
+        return regime_matches(filt.get("regime"), getattr(features, "regime", None))
     # Unknown kind → never matches; lesson would be from a future schema.
     return False
 

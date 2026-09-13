@@ -102,6 +102,11 @@ def _draft_matches(draft: PredictionDraft, lesson: dict) -> bool:
         if key in pf:
             if getattr(draft, key, None) != pf[key]:
                 return False
+    if "regime" in pf:
+        from matrix_shared.regime import regime_matches
+
+        if not regime_matches(pf["regime"], (draft.context or {}).get("regime")):
+            return False
     return True
 
 
