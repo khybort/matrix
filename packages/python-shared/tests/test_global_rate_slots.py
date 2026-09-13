@@ -12,6 +12,9 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_global_slot_serialises_across_limiters(monkeypatch):
+    # Own advisory namespace: the live LLM services hold locks in the real one
+    # on the same shared DB, which made this test flake by interleaving.
+    monkeypatch.setattr(R, "_ADVISORY_NS", 0x5445_5354 + (id(monkeypatch) & 0xFFFF))
     monkeypatch.setattr(R, "GLOBAL_SLOTS", 1)
     monkeypatch.setattr(R, "GLOBAL_WAIT_S", 5.0)
     a, b = R.AgentRateLimiter(3), R.AgentRateLimiter(3)  # two "processes"
