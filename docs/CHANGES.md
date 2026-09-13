@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-09-13 — dev_agent test isolation + incident note
+
+- **Incident:** `services/dev_agent/tests/conftest.py` TRUNCATEs every dev_agent table per test and
+  pointed at the live local `matrix` DB; running the suite on 2026-09-13 wiped `dev_tasks`,
+  `dev_task_runs`, `dev_task_events`, `dev_agent_lessons`, and the live worker briefly picked up a
+  test-inserted task (cancelled). Data restored from the 2026-09-12 15:35 UTC backup
+  (`pg_restore --data-only`, sequences reset); test worktrees/branches `task-42..45` removed.
+- **Fix:** conftest now redirects to `<db>_devagent_test` (created on demand) unless the DSN already
+  names a `*_test` database. The live DB is never truncated by tests again.
+
 ## 2026-09-12 — P4: dev_agent closes its loop (test → commit → merge) + guards
 
 - `dev_agent/integrate.py`: after a successful run — pytest for every touched service

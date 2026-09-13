@@ -304,21 +304,24 @@ Emir gönderen tek kod yolu bu.
 
 ---
 
-## 9. İlk 10 iş (sıralı, direktif)
+## 9. İlk 10 iş (sıralı, direktif) — durum 2026-09-13
 
-1. `.env` cert override kaldır + kod-seviyesi refuse (P0.1)
-2. Dispatcher params + version damgası (P0.2)
-3. Proposal asset_class + fantom config temizliği (P0.3)
-4. notify default + 5 alarm (P0.4)
-5. Retention + backup sidecar (P0.5)
-6. Maliyet modeli gerçekçi (P0.6)
-7. `mutation_efficacy` + auto-rollback (P1.1)
-8. Champion/challenger shadow (P1.2)
-9. Lesson TTL + exploration koridoru + efficacy (P2.1)
-10. dev_agent test→merge (P4.1)
-11. OpenRouter backend: `MATRIX_LLM_BACKEND=openrouter`, ücretsiz modeller (`:free` suffix) için
+1. ✅ `.env` cert override'ları mainnet'te kod seviyesinde reddediliyor (P0.1, commit 29bf30a)
+2. ✅ Dispatcher params + version damgası (P0.2, cdd0c64)
+3. ✅ Proposal asset_class + fantom config temizliği (P0.3, 6a2d5f4)
+4. ✅ notify default + 7 liveness alarmı (P0.4, 78a93bc)
+5. ✅ Retention + backup sidecar (P0.5, a28dcd2) — trades kademeli siliniyor; disk için `make db-compact`
+6. ✅ Maliyet modeli gerçekçi (P0.6, 78fc977)
+7. ✅ `mutation_efficacy` + auto-rollback (P1.1, 186af60)
+8. ✅ Champion/challenger shadow (P1.2, 97520a2)
+9. ✅ Lesson TTL + exploration koridoru + efficacy (P2.1, 1bcbbfb)
+10. ✅ dev_agent test→commit→merge + guard'lar + efficacy→dev task (P4.1/2/4/5/6, 485239f)
+11. ⏳ OpenRouter backend: `MATRIX_LLM_BACKEND=openrouter`, ücretsiz modeller (`:free` suffix) için
     tier eşlemesi (`MATRIX_MODEL_<HAIKU|SONNET|OPUS>`), rate-limit/latency'e göre otomatik fallback
     sırası: subscription → openrouter-free → rule-only. Operatör isteği 2026-09-12.
+
+Açık kalan P0 maddeleri: P0.7 (`exchange_shadow` tam gate — mainnet refuse eklendi, capital/slot cap
+henüz değil), P0.8 (circuit breaker trip'te pozisyon kapatma + manuel reset).
 
 Bu 10'dan sonra sistem "çalışıyor gibi görünen" değil, **gerçekten kendini ölçen** hale gelir.
 Director (P3) ancak ölçüm altyapısı varken anlamlı; ondan önce yazılırsa gürültüyü orkestre eder.

@@ -24,10 +24,42 @@ import pytest_asyncio
 
 # Default points at the docker compose postgres exposed on localhost:5432.
 # Override with DEV_AGENT_TEST_DSN env var.
-TEST_DSN = os.environ.get(
+_BASE_DSN = os.environ.get(
     "DEV_AGENT_TEST_DSN",
     "postgres://matrix:matrix_dev_only@localhost:5432/matrix",
 )
+
+
+def _isolated_test_dsn(dsn: str) -> str:
+    """This suite TRUNCATEs every dev_agent table per test. Running that
+    against the live `matrix` database wiped the real dev_tasks history once
+    (2026-09-13). Unless the DSN already names a *_test database, redirect to
+    `<db>_devagent_test` on the same server, creating it if missing — the
+    minimal schema below is created on demand anyway."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(dsn)
+    dbname = parts.path.lstrip("/")
+    if dbname.endswith("_test"):
+        return dsn
+    test_db = f"{dbname}_devagent_test"
+    admin_dsn = urlunsplit(parts._replace(path="/postgres"))
+    import asyncio as _asyncio
+
+    async def _ensure() -> None:
+        conn = await asyncpg.connect(admin_dsn)
+        try:
+            exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname=$1", test_db)
+            if not exists:
+                await conn.execute(f'CREATE DATABASE "{test_db}"')
+        finally:
+            await conn.close()
+
+    _asyncio.run(_ensure())
+    return urlunsplit(parts._replace(path=f"/{test_db}"))
+
+
+TEST_DSN = _isolated_test_dsn(_BASE_DSN)
 
 
 _MINIMAL_SCHEMA_SQL = """
