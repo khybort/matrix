@@ -36,6 +36,7 @@ BARS_STALE_S = int(os.environ.get("MATRIX_HEALTH_BARS_STALE_S", "1500"))
 DEV_TASK_HEARTBEAT_STALE_S = int(os.environ.get("MATRIX_HEALTH_DEV_HEARTBEAT_STALE_S", "600"))
 DISK_FREE_MIN_PCT = float(os.environ.get("MATRIX_HEALTH_DISK_FREE_MIN_PCT", "15"))
 LLM_WINDOW_MIN = int(os.environ.get("MATRIX_HEALTH_LLM_WINDOW_MIN", "60"))
+LLM_DAILY_BUDGET_USD = float(os.environ.get("MATRIX_LLM_DAILY_BUDGET_USD", "25"))
 REALERT_S = int(os.environ.get("MATRIX_HEALTH_REALERT_S", "3600"))
 
 
@@ -53,6 +54,9 @@ class HealthSample:
     llm_configured: bool = False
     agent_predictions_in_window: int = 0
     agent_llm_predictions_in_window: int = 0
+    # LLM spend today (matrix_shared.usage_ledger; None when the ledger is unreadable)
+    llm_cost_today_usd: float | None = None
+    llm_calls_today: int = 0
     # dev_agent
     dev_failed_since_prev: list[tuple[int, str]] = field(default_factory=list)
     # (task_id, first description line, review_notes) newly awaiting an operator
@@ -174,6 +178,16 @@ async def collect_health(prev: HealthFlags, now: datetime | None = None) -> Heal
     except Exception as e:  # noqa: BLE001
         logger.warning(f"health: local-tier probe failed: {e}")
 
+    # --- LLM spend today (shared usage ledger) --------------------------------
+    try:
+        from matrix_shared.usage_ledger import summary as _usage_summary
+        u = _usage_summary(days=1)
+        if u["calls"]:
+            s.llm_cost_today_usd = float(u["cost_usd"])
+            s.llm_calls_today = int(u["calls"])
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"health: usage ledger unavailable ({e})")
+
     # --- disk ----------------------------------------------------------------
     try:
         usage = shutil.disk_usage(os.environ.get("MATRIX_HEALTH_DISK_PATH", "/"))
@@ -239,6 +253,13 @@ def detect_health_alerts(
             f"⚡ LLM path inactive: {s.agent_predictions_in_window} matrix_agent predictions "
             f"in the last {LLM_WINDOW_MIN}m, none via LLM. Backend auth expired or breaker "
             "open — decisions are rule-only.",
+        )
+    if s.llm_cost_today_usd is not None and s.llm_cost_today_usd > LLM_DAILY_BUDGET_USD:
+        conditions["llm_budget"] = (
+            ALERT_WARNING,
+            f"⚡ LLM spend today ${s.llm_cost_today_usd:.2f} over {s.llm_calls_today} calls exceeds the "
+            f"${LLM_DAILY_BUDGET_USD:.0f}/day budget (MATRIX_LLM_DAILY_BUDGET_USD). Subscription is flat-rate, "
+            "but this much volume eats the rate budget of the 15s decision loop.",
         )
     if s.dev_stuck_running:
         ids = ", ".join(str(i) for i in s.dev_stuck_running[:5])

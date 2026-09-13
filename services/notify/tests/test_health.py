@@ -125,3 +125,14 @@ def test_awaiting_review_tasks_are_point_events_with_commands():
     # next tick: nothing new → silent
     alerts2, _ = detect_health_alerts(flags, _healthy())
     assert alerts2 == []
+
+
+def test_llm_budget_alert_is_stateful_and_recovers(monkeypatch):
+    from notify import health as H
+    monkeypatch.setattr(H, "LLM_DAILY_BUDGET_USD", 25.0)
+    alerts, flags = detect_health_alerts(HealthFlags(), _healthy(llm_cost_today_usd=31.5, llm_calls_today=900))
+    assert [lvl for lvl, _ in alerts] == [ALERT_WARNING] and "$31.50" in alerts[0][1]
+    again, flags = detect_health_alerts(flags, _healthy(llm_cost_today_usd=32.0, llm_calls_today=910, now=NOW + timedelta(minutes=5)))
+    assert again == []  # re-alert throttled
+    recovered, _ = detect_health_alerts(flags, _healthy(llm_cost_today_usd=None))
+    assert any("Recovered: llm budget" in t for _, t in recovered)

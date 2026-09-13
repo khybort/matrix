@@ -175,6 +175,8 @@ services:
     volumes:
       - ./services/notify/src:/workspace/services/notify/src
       - ./packages/python-shared/src:/workspace/packages/python-shared/src
+      # read-only view of the LLM usage ledger (matrix_shared.usage_ledger)
+      - matrix_claude_config:/root/.claude:ro
 
   synthesis:
     <<: *matrix-dev-watch

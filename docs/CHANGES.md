@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — notify: günlük LLM bütçe alarmı
+- `health.py` kullanım defterinden bugünkü harcamayı okur; `MATRIX_LLM_DAILY_BUDGET_USD` (vars. 25) aşılırsa ⚡ alarm (stateful, düzelince "Recovered"). notify dev overlay'ine `matrix_claude_config` volume'u salt-okunur eklendi.
+
 ## 2026-09-13 — bars-aggregator her dakika 284M satırlık indeksi tarıyordu
 - `_AGGREGATE_SQL` yalnızca `trade_ts` ile filtreliyordu; tek indeks `(symbol, trade_ts)` → her tick tüm indeksi yürüyordu (planner maliyeti 7.1M, ~6 dk; bugünkü "bars stale"/"ingestion stale" alarmlarının kaynağı). Tick artık `symbol = ANY(universe)` ekler (maliyet 18); 1h rollup penceresi 8 gün → 3 saat (`BARS_ROLLUP_TICK_HOURS`), tam rollup startup backfill'de.
 
