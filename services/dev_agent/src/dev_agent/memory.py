@@ -12,6 +12,12 @@ from typing import Any
 
 import asyncpg
 
+_STOPWORDS = frozenset("""
+this that with from into when then than also have does should would could must make sure
+into onto over under about after before while where which whose their there these those
+task tasks file files code change changes update updates please need needs using used
+""".split())
+
 AUTO_ACTIVATE_REPEATS = int(os.environ.get("DEV_AGENT_LESSON_AUTO_ACTIVATE_REPEATS", "2"))
 
 
@@ -71,22 +77,39 @@ async def list_draft_lessons(pool: asyncpg.Pool, *, limit: int = 100) -> list[di
 async def search_lessons_text(
     pool: asyncpg.Pool, *, query: str, top_k: int = 5, paths: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Phase 0 retrieval: simple ILIKE on topic+summary, prioritized by
-    relevant_paths overlap. Phase 0+ replaces this with pgvector.
+    """Phase 0 retrieval: any-token ILIKE over topic+summary+relevant_paths,
+    ranked by tokens hit, then path overlap, then hit_count. The old query
+    matched the WHOLE task description as one substring, so no lesson ever
+    surfaced for a real multi-sentence task. Phase 0+ replaces this with pgvector.
     """
     paths = paths or []
+    tokens = [t.strip(".,;:()[]{}'\"`").lower() for t in query.replace("/", " ").replace("_", " ").split()]
+    tokens = [t for t in tokens if len(t) >= 4 and t not in _STOPWORDS][:16]
+    if not tokens:
+        tokens = [query.lower()]
+    patterns = [f"%{t}%" for t in tokens]
     rows = await pool.fetch(
         """
         SELECT id, topic, summary, anti_pattern, correct_approach, relevant_paths,
                hit_count,
-               (CASE WHEN relevant_paths && $2::text[] THEN 1 ELSE 0 END) AS path_boost
+               (CASE WHEN relevant_paths && $2::text[] THEN 1
+                     WHEN EXISTS (SELECT 1 FROM unnest(relevant_paths) rp, unnest($2::text[]) tp
+                                  WHERE tp LIKE rp || '%' OR rp LIKE tp || '%') THEN 1
+                     ELSE 0 END) AS path_boost,
+               (SELECT count(*) FROM unnest($1::text[]) AS pat
+                 WHERE topic ILIKE pat OR summary ILIKE pat
+                    OR array_to_string(relevant_paths, ' ') ILIKE pat) AS token_hits
         FROM dev_agent_lessons
         WHERE status='active'
-          AND (topic ILIKE '%' || $1 || '%' OR summary ILIKE '%' || $1 || '%')
-        ORDER BY path_boost DESC, hit_count DESC, created_at DESC
+          AND (topic ILIKE ANY($1::text[]) OR summary ILIKE ANY($1::text[])
+               OR array_to_string(relevant_paths, ' ') ILIKE ANY($1::text[])
+               OR relevant_paths && $2::text[]
+               OR EXISTS (SELECT 1 FROM unnest(relevant_paths) rp, unnest($2::text[]) tp
+                          WHERE tp LIKE rp || '%' OR rp LIKE tp || '%'))
+        ORDER BY path_boost DESC, token_hits DESC, hit_count DESC, created_at DESC
         LIMIT $3
         """,
-        query, paths, top_k,
+        patterns, paths, top_k,
     )
     if rows:
         ids = [r["id"] for r in rows]

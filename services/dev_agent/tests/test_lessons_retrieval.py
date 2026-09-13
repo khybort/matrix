@@ -73,3 +73,29 @@ async def test_search_text_skips_drafts(pg_pool):
     )
     hits = await search_lessons_text(pg_pool, query="zzz", top_k=5)
     assert hits == []
+
+
+async def test_search_text_matches_any_token_of_a_long_task_description(pg_pool):
+    lid = await write_lesson_draft(
+        pg_pool, source="failure", topic="json-not-jsonb",
+        summary="predictions.context is json; the ? operator silently fails",
+        anti_pattern="context ? 'regime'", correct_approach="use context->>'regime' IS NOT NULL",
+        relevant_paths=["services/reflection/"], origin_task_id=None,
+    )
+    await approve_lesson(pg_pool, lesson_id=lid, by="user")
+    hits = await search_lessons_text(
+        pg_pool, query="Add a regime filter on predictions.context for the reflection metrics window", top_k=5)
+    assert [h["id"] for h in hits] == [lid]
+
+
+async def test_search_text_surfaces_path_scoped_lessons_without_token_overlap(pg_pool):
+    lid = await write_lesson_draft(
+        pg_pool, source="user_correction", topic="paper-engine-staging",
+        summary="unrelated wording", anti_pattern=None,
+        correct_approach="snapshot before editing", relevant_paths=["services/backtest/src/backtest/"],
+        origin_task_id=None,
+    )
+    await approve_lesson(pg_pool, lesson_id=lid, by="user")
+    hits = await search_lessons_text(pg_pool, query="tighten slippage", top_k=5,
+                                     paths=["services/backtest/src/backtest/paper_trade.py"])
+    assert lid in [h["id"] for h in hits]

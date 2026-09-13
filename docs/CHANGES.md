@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-09-13 — Sistem öz-hafızası: docs/ENGINEERING_LESSONS.md + dev_agent lesson retrieval düzeltmesi
+- Yeni `docs/ENGINEERING_LESSONS.md`: bir kez ödenmiş tuzaklar (test harness, izole test DB, json≠jsonb, AGE alias, staging, hot reload, istatistik kararları). CLAUDE.md ve dev_agent BASE_LAYER prompt'u ona işaret eder; kural: yeni ders aynı commit'te eklenir.
+- `dev_agent.memory.search_lessons_text`: tüm görev açıklamasını tek substring olarak arıyordu (hiç eşleşmiyordu) → token bazlı any-match + `relevant_paths` prefix boost. `dev_agent_lessons` tablosuna 10 aktif ders tohumlandı.
+
 ## 2026-09-13 — İstatistiksel titizlik: cert CI alt sınırı + otomatik iptal, slot n≥30/Wilson, orphan dışlama, reflection LLM kapısı (P1.3/P1.5/P1.6/P1.7)
 - `trading_safety.evaluate_eligibility`: yeni `min_ci_lower_usd` (varsayılan 0; `MATRIX_CERT_MIN_CI_LOWER_USD`) — trade başına ortalama PnL'in %95 CI alt sınırı pozitif değilse sertifika yok; `orphan_flat_close` outcome'ları kanıt sayılmaz. `revoke_breached_certificates()` drawdown cap'i aşan GRANTED sertifikaları `revoked` yapar (reflection cert pass'inde grant'tan önce koşar).
 - Slot scorer: son 30 pozisyon, `MIN_N_FOR_SLOT_CHANGE` (`MATRIX_SLOT_MIN_N`, vars. 30) altında slot değişmez (ardışık-kayıp auto-cut hariç); win rate Wilson alt sınırı.

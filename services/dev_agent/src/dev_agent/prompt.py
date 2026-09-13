@@ -12,6 +12,7 @@ Rules:
 - Path policy: you may Edit/Write anywhere in the worktree (strategies, agent, execution adapters) EXCEPT the live-capital gate files — matrix_shared/trading_safety.py, matrix_shared/exchange_shadow.py, execution/safety.py. Touching them fails the task.
 - Live trading safety is enforced at runtime in those files; do not weaken or bypass those mechanisms in code you change.
 - Trading risk gates are non-negotiable. Bypass attempts will fail the task.
+- Before editing, read docs/ENGINEERING_LESSONS.md (hazards already paid for once: test harness, json vs jsonb, AGE cypher, migration chain, live-table fixtures). Repeating a listed mistake fails review.
 - Stay within the worktree directory. Do not push to remote. Do not commit — after you finish, the runner runs the affected services' pytest suites, commits, and merges into main only if they pass. Leave the tree in a state where `pytest` is green.
 """
 
