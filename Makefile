@@ -487,7 +487,7 @@ dev-agent-resume: ## Global kill switch OFF
 
 .PHONY: dev-agent-clean
 dev-agent-clean: ## Remove worktrees of terminal tasks older than DAYS (default 7); merged ones are removed automatically
-	$(DC) $(DC_DEV) exec dev-agent uv run python -m dev_agent.clean $(or $(DAYS),7)
+	$(DC) $(DC_DEV) exec dev_agent uv run --no-sync python -m dev_agent.clean $(or $(DAYS),7)
 
 .PHONY: dev-agent-index
 dev-agent-index: ## Rebuild dev_codebase_nodes index (POST /codebase/reindex)
