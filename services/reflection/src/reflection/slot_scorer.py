@@ -8,6 +8,8 @@ MutationProposal (audit trail — live slots already updated in the same tick).
 
 from __future__ import annotations
 
+import math
+import os
 from datetime import UTC, datetime
 
 from loguru import logger
@@ -22,14 +24,29 @@ from matrix_shared.models.slot_config import StrategySlotConfig
 # fresh evidence (post-TP/SL fix) reweights faster — the slot scorer can spot
 # improvement within hours instead of waiting for 30 trades to roll over.
 CONSECUTIVE_LOSS_AUTO_CUT = 8
-LAST_N_POSITIONS = 10
+# 2026-09-13 (docs/AUTONOMY_PLAN.md P1.5): a 10-trade win rate has ±16pp standard
+# error — the 0.30/0.50/0.70 tiers were pure noise. Score over the last 30 and
+# refuse to move slots on fewer than MIN_N_FOR_SLOT_CHANGE closed positions
+# (the consecutive-loss auto-cut still fires on its own evidence).
+LAST_N_POSITIONS = 30
+MIN_N_FOR_SLOT_CHANGE = int(os.environ.get("MATRIX_SLOT_MIN_N", "30"))
+
+
+def wilson_lower(wins: int, n: int, z: float = 1.96) -> float:
+    """Lower bound of the Wilson score interval for a win rate."""
+    if n <= 0:
+        return 0.0
+    p = wins / n
+    denom = 1 + z * z / n
+    centre = p + z * z / (2 * n)
+    margin = z * math.sqrt((p * (1 - p) + z * z / (4 * n)) / n)
+    return max(0.0, (centre - margin) / denom)
 
 
 def _perf_score(win_rate: float, avg_pnl_pct: float, total_pnl_usd: float) -> float:
     pct_clamped = max(-1.0, min(1.0, avg_pnl_pct / 0.02))
-    # $3-4 over 10 trades is a healthy positive bias (rescaled from 30-trade
-    # window: $10/30 ≈ $3.3/10); $-3.3 floors the term.
-    pnl_clamped = max(-1.0, min(1.0, total_pnl_usd / 3.3))
+    # $10 over 30 trades is a healthy positive bias; $-10 floors the term.
+    pnl_clamped = max(-1.0, min(1.0, total_pnl_usd / 10.0))
     return 0.4 * win_rate + 0.3 * pct_clamped + 0.3 * pnl_clamped
 
 
@@ -96,7 +113,9 @@ async def score_strategy_slots() -> int:
                 continue
 
             wins = sum(1 for r in rows if (r.pnl_usd or 0) > 0)
-            win_rate = wins / len(rows)
+            # Conservative win rate: Wilson lower bound, so thin samples score
+            # low instead of lucky.
+            win_rate = wilson_lower(wins, len(rows))
             avg_pnl_pct = (
                 sum(
                     float(r.pnl_usd or 0) / float(r.notional_usd or 1)
@@ -124,6 +143,11 @@ async def score_strategy_slots() -> int:
 
             if consec >= CONSECUTIVE_LOSS_AUTO_CUT:
                 new_slots = 1
+            elif len(rows) < MIN_N_FOR_SLOT_CHANGE:
+                # Not enough evidence to move capital either way.
+                config.perf_score = score
+                config.last_evaluated_at = datetime.now(UTC)
+                continue
                 if config.consecutive_losses < CONSECUTIVE_LOSS_AUTO_CUT:
                     logger.warning(
                         f"slot auto-cut: {config.strategy_id}/{config.asset_class} "

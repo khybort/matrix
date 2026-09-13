@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+
+import reflection.slot_scorer as _ss
 import pytest_asyncio
 from sqlalchemy import delete, select
 
@@ -65,6 +67,12 @@ def test_slots_for_score_tiers():
 
 STRAT = f"TEST_scorer_{uuid.uuid4().hex[:6]}"
 ASSET = "crypto"
+
+
+@pytest.fixture(autouse=True)
+def _small_evidence_gate(monkeypatch):
+    """Legacy fixtures seed a handful of positions; the production gate is 30."""
+    monkeypatch.setattr(_ss, "MIN_N_FOR_SLOT_CHANGE", 1)
 
 
 @pytest_asyncio.fixture
@@ -179,3 +187,10 @@ async def test_high_performance_increases_slots(scorer_wallet):
         cfg = await session.get(StrategySlotConfig, (STRAT, ASSET, scorer_wallet))
     assert cfg.allocated_slots > 5, "high perf should increase slots"
     assert cfg.perf_score > 0.7
+
+
+def test_wilson_lower_is_conservative_for_small_n():
+    from reflection.slot_scorer import wilson_lower
+    assert wilson_lower(7, 10) < 0.7 and wilson_lower(7, 10) > 0.35
+    assert wilson_lower(70, 100) > wilson_lower(7, 10)
+    assert wilson_lower(0, 0) == 0.0 and wilson_lower(0, 10) == 0.0

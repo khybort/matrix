@@ -50,6 +50,7 @@ async def metrics_window(
             .where(Prediction.strategy_id == strategy_id)
             .where(Prediction.strategy_version == version)
             .where(Outcome.observed_at >= since)
+            .where(Outcome.reason != "orphan_flat_close")
         )
         if asset_class is not None:
             agg_stmt = agg_stmt.where(Prediction.asset_class == asset_class)
@@ -72,6 +73,7 @@ async def metrics_window(
             .where(Prediction.strategy_id == strategy_id)
             .where(Prediction.strategy_version == version)
             .where(Outcome.observed_at >= since)
+            .where(Outcome.reason != "orphan_flat_close")
             .group_by(Prediction.symbol)
         )
         if asset_class is not None:

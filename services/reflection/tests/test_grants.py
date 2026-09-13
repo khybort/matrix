@@ -27,6 +27,7 @@ _LOOSE = dict(
     min_win_rate=Decimal("0.0"),
     min_total_pnl_usd=Decimal("-100"),
     max_drawdown_pct=Decimal("1.0"),
+    min_ci_lower_usd=Decimal("-100"),
 )
 
 
@@ -123,3 +124,33 @@ async def test_skips_when_not_eligible(seed_outcomes, cert_cleanup):
     assert "n_outcomes" in " ".join(verdict.reasons)
     row = await _fetch(sid, ac, ver)
     assert row is None
+
+
+async def test_ci_lower_bound_blocks_lucky_positive_totals(seed_outcomes, cert_cleanup):
+    """Positive total but wide dispersion → CI lower bound < 0 → not eligible."""
+    from matrix_shared import evaluate_eligibility
+    sid = f"grant_ci_{uuid.uuid4().hex[:6]}"
+    cert_cleanup.append((sid, "crypto", 1))
+    await seed_outcomes(sid, "crypto", 1, n=10, win_rate=0.6, pnl_per_trade_usd=1.0)  # +6/-4 → mean 0.2, se≈0.33
+    v = await evaluate_eligibility(sid, "crypto", 1, min_observation_days=0, min_outcomes=5,
+                                   min_win_rate=Decimal("0"), max_drawdown_pct=Decimal("1"),
+                                   min_total_pnl_usd=Decimal("0"))
+    assert v.eligible is False
+    assert any(r.startswith("ci_lower_usd") for r in v.reasons), v.reasons
+    assert Decimal(v.metrics["ci_lower_usd"]) < 0
+
+
+async def test_revoke_breached_certificates(seed_outcomes, cert_cleanup):
+    from matrix_shared import maybe_grant_certificate
+    from matrix_shared.trading_safety import revoke_breached_certificates
+    sid = f"grant_rv_{uuid.uuid4().hex[:6]}"
+    cert_cleanup.append((sid, "crypto", 1))
+    await seed_outcomes(sid, "crypto", 1, n=10, win_rate=0.6)
+    ok, _, _ = await maybe_grant_certificate(sid, "crypto", 1, **_LOOSE)
+    assert ok
+    # a crash: 20 losing trades of $300 → drawdown ≈ 60% of the $10k reference
+    await seed_outcomes(sid, "crypto", 1, n=20, win_rate=0.0, pnl_per_trade_usd=300.0)
+    revoked = await revoke_breached_certificates(max_drawdown_pct=Decimal("0.15"))
+    assert f"{sid}/crypto/v1" in revoked
+    row = await _fetch(sid, "crypto", 1)
+    assert row.status == "revoked" and row.revoked_reason.startswith("auto:")

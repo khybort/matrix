@@ -121,6 +121,7 @@ async def _symbol_side_buckets(
             .where(Prediction.asset_class == asset_class)
             .where(Outcome.observed_at >= since)
             .where(Outcome.observed_at <= until)
+            .where(Outcome.reason != "orphan_flat_close")
             .where(Prediction.side.in_(("long", "short")))
             .group_by(Prediction.symbol, Prediction.side)
         )

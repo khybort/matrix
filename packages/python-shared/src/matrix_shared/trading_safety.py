@@ -73,6 +73,9 @@ DEFAULT_MIN_OUTCOMES = 200
 DEFAULT_MIN_WIN_RATE = Decimal("0.40")
 DEFAULT_MIN_TOTAL_PNL_USD = Decimal("0.00")
 DEFAULT_MAX_DRAWDOWN_PCT = Decimal("0.15")
+# Lower bound of the 95% CI on mean pnl/outcome must clear this (docs/AUTONOMY_PLAN.md
+# P1.6): a positive total built on a few lucky trades is not "positive expected value".
+DEFAULT_MIN_CI_LOWER_USD = Decimal("0.00")
 
 # Optional .env overrides for cert grants (defaults above = docs/TRADING.md).
 # They exist so a testnet/shadow deployment can exercise the live-order code
@@ -85,12 +88,14 @@ _ENV_MIN_OUTCOMES = "MATRIX_CERT_MIN_OUTCOMES"
 _ENV_MIN_WIN_RATE = "MATRIX_CERT_MIN_WIN_RATE"
 _ENV_MIN_TOTAL_PNL_USD = "MATRIX_CERT_MIN_TOTAL_PNL_USD"
 _ENV_MAX_DRAWDOWN_PCT = "MATRIX_CERT_MAX_DRAWDOWN_PCT"
+_ENV_MIN_CI_LOWER_USD = "MATRIX_CERT_MIN_CI_LOWER_USD"
 CERT_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
     _ENV_MIN_OBSERVATION_DAYS,
     _ENV_MIN_OUTCOMES,
     _ENV_MIN_WIN_RATE,
     _ENV_MIN_TOTAL_PNL_USD,
     _ENV_MAX_DRAWDOWN_PCT,
+    _ENV_MIN_CI_LOWER_USD,
 )
 
 # granted_by suffix for certs issued under relaxed thresholds.
@@ -195,6 +200,7 @@ def cert_eligibility_thresholds() -> dict[str, int | Decimal]:
         "min_win_rate": _dec(_ENV_MIN_WIN_RATE, DEFAULT_MIN_WIN_RATE),
         "min_total_pnl_usd": _dec(_ENV_MIN_TOTAL_PNL_USD, DEFAULT_MIN_TOTAL_PNL_USD),
         "max_drawdown_pct": _dec(_ENV_MAX_DRAWDOWN_PCT, DEFAULT_MAX_DRAWDOWN_PCT),
+        "min_ci_lower_usd": _dec(_ENV_MIN_CI_LOWER_USD, DEFAULT_MIN_CI_LOWER_USD),
     }
 
 # Drawdown denominator. Cumulative-PnL peak alone breaks down in early Phase
@@ -221,6 +227,7 @@ async def evaluate_eligibility(
     min_win_rate: Decimal = DEFAULT_MIN_WIN_RATE,
     min_total_pnl_usd: Decimal = DEFAULT_MIN_TOTAL_PNL_USD,
     max_drawdown_pct: Decimal = DEFAULT_MAX_DRAWDOWN_PCT,
+    min_ci_lower_usd: Decimal = DEFAULT_MIN_CI_LOWER_USD,
 ) -> EligibilityVerdict:
     """Compute paper-trade metrics for a strategy/version and return verdict.
 
@@ -242,6 +249,7 @@ async def evaluate_eligibility(
             .where(Prediction.strategy_id == strategy_id)
             .where(Prediction.asset_class == asset_class)
             .where(Prediction.strategy_version == version)
+            .where(Outcome.reason != "orphan_flat_close")  # flat-closes are not evidence
             .order_by(Outcome.observed_at.asc())
         )
         rows = list((await session.execute(stmt)).all())
@@ -278,6 +286,14 @@ async def evaluate_eligibility(
             worst_dd = dd
     dd_pct = worst_dd / _DRAWDOWN_REFERENCE_USD
 
+    # 95% CI lower bound on mean pnl per outcome (normal approx; n >= 2).
+    if n >= 2:
+        var = sum((Decimal(r.pnl_usd) - avg_pnl) ** 2 for r in rows) / Decimal(n - 1)
+        se = (var / Decimal(n)).sqrt() if var > 0 else Decimal("0")
+        ci_lower = avg_pnl - Decimal("1.96") * se
+    else:
+        ci_lower = avg_pnl
+
     reasons: list[str] = []
     if observation_days < min_observation_days:
         reasons.append(f"observation_days={observation_days} < {min_observation_days}")
@@ -289,6 +305,8 @@ async def evaluate_eligibility(
         reasons.append(f"total_pnl_usd={total_pnl:.4f} < {min_total_pnl_usd}")
     if dd_pct > max_drawdown_pct:
         reasons.append(f"max_drawdown_pct={dd_pct:.4f} > {max_drawdown_pct}")
+    if ci_lower < min_ci_lower_usd:
+        reasons.append(f"ci_lower_usd={ci_lower:.4f} < {min_ci_lower_usd} (mean not significantly positive)")
 
     return EligibilityVerdict(
         eligible=len(reasons) == 0,
@@ -300,6 +318,7 @@ async def evaluate_eligibility(
             "avg_pnl_usd": str(avg_pnl.quantize(Decimal("0.000001"))),
             "total_pnl_usd": str(total_pnl.quantize(Decimal("0.000001"))),
             "max_drawdown_pct": str(dd_pct.quantize(Decimal("0.000001"))),
+            "ci_lower_usd": str(ci_lower.quantize(Decimal("0.000001"))),
         },
     )
 
@@ -322,6 +341,7 @@ async def maybe_grant_certificate(
     min_win_rate: Decimal | None = None,
     min_total_pnl_usd: Decimal | None = None,
     max_drawdown_pct: Decimal | None = None,
+    min_ci_lower_usd: Decimal | None = None,
 ) -> tuple[bool, EligibilityVerdict | None, str]:
     """Idempotent auto-grant. Returns (granted, verdict, reason).
 
@@ -369,6 +389,8 @@ async def maybe_grant_certificate(
         kw["min_total_pnl_usd"] = min_total_pnl_usd
     if max_drawdown_pct is not None:
         kw["max_drawdown_pct"] = max_drawdown_pct
+    if min_ci_lower_usd is not None:
+        kw["min_ci_lower_usd"] = min_ci_lower_usd
     verdict = await evaluate_eligibility(strategy_id, asset_class, version, **kw)
     if not verdict.eligible:
         return (False, verdict, "not eligible")
@@ -409,3 +431,40 @@ async def maybe_grant_certificate(
         row.max_drawdown_pct = Decimal(str(m["max_drawdown_pct"]))
 
     return (True, verdict, "granted")
+
+
+async def revoke_breached_certificates(*, max_drawdown_pct: Decimal | None = None) -> list[str]:
+    """Revoke GRANTED certs whose strategy version has since breached the
+    drawdown cap or turned to a negative CI (docs/AUTONOMY_PLAN.md P1.6).
+    Re-grant is automatic once metrics recover (7-day validity cycle). Returns
+    "strategy/asset_class/vN" for each revocation."""
+    thresholds = cert_eligibility_thresholds()
+    dd_cap = max_drawdown_pct if max_drawdown_pct is not None else thresholds["max_drawdown_pct"]
+    revoked: list[str] = []
+    async with shared_session_scope() as session:
+        certs = list((await session.execute(
+            select(PaperTradeCertificate).where(PaperTradeCertificate.status == "granted")
+        )).scalars())
+        for c in certs:
+            session.expunge(c)
+    for c in certs:
+        verdict = await evaluate_eligibility(
+            c.strategy_id, c.asset_class, c.version,
+            min_observation_days=0, min_outcomes=0, min_win_rate=Decimal("0"),
+            min_total_pnl_usd=Decimal("-1e12"), max_drawdown_pct=dd_cap,
+            min_ci_lower_usd=Decimal("-1e12"),
+        )
+        breached = [r for r in verdict.reasons if r.startswith("max_drawdown_pct")]
+        if not breached:
+            continue
+        async with shared_session_scope() as session:
+            row = await session.get(PaperTradeCertificate, c.id)
+            if row is None or row.status != "granted":
+                continue
+            row.status = "revoked"
+            row.revoked_at = datetime.now(timezone.utc)
+            row.revoked_reason = "auto: " + "; ".join(breached)[:300]
+        key = f"{c.strategy_id}/{c.asset_class}/v{c.version}"
+        revoked.append(key)
+        logger.warning(f"certificate REVOKED {key}: {breached[0]}")
+    return revoked

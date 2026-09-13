@@ -174,8 +174,10 @@ _FORBIDDEN_LIST = ", ".join(sorted(FORBIDDEN_RISK_FIELDS))
 # Claude Code CLI's internal prompt cache a chance to hit.
 SYSTEM_PROMPT = (
     "You are Matrix Reflection — propose ONE conservative parameter "
-    "mutation that could improve a strategy's average score over the "
-    "next window.\n"
+    "mutation that could improve a strategy's realised total_pnl_usd (after "
+    "fees and slippage) over the next window. Win rate and score are "
+    "diagnostics, not the objective; a change that raises win rate but "
+    "shrinks total PnL is a bad proposal.\n"
     "Use the read-only tools to ground your proposal in actual outcomes, "
     "active lessons, and peer-strategy configs (don't speculate).\n"
     f"NEVER propose changes to risk caps: {_FORBIDDEN_LIST}. "

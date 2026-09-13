@@ -374,6 +374,7 @@ Emir gönderen tek kod yolu bu.
     volume'una saatlik senkronlanıyor (`scripts/claude_creds_sync.sh`, launchd). Container'dan
     tek-atış `OK`, Director ilk LLM tick'ini attı.
 
+2026-09-13: P1.3/P1.5/P1.6/P1.7 ✅ (cert CI alt sınırı + auto-revoke, slot n≥30 Wilson, orphan dışlama, reflection LLM kapısı).
 Sıradaki: P2.5 embedding/benzer-setup, `agent_usage` persist (migration zinciri açılınca — 0038 WIP
 commit'lendiğinde 0039+ eklenebilir), Telegram'dan `awaiting_review` dev task onayı.
 

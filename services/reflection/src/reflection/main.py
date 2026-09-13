@@ -27,7 +27,7 @@ from sqlalchemy import select
 
 from reflection.efficacy import evaluate_applied_proposals, evaluate_challengers, recently_reverted
 from reflection.metrics import metrics_window
-from reflection.mutate import llm_propose, rule_propose, rule_propose_param_tune
+from reflection.mutate import _underperforming, llm_propose, rule_propose, rule_propose_param_tune
 
 DEFAULT_INTERVAL_S = 600.0
 DEFAULT_WINDOW_HOURS = 24.0
@@ -56,6 +56,13 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
         )
 
         draft = None
+        # Only strategies that are actually underperforming get mutated — the
+        # LLM path used to run for every active config on every tick, so a
+        # profitable strategy was re-tuned as eagerly as a losing one and the
+        # PnL-aligned rule path was pre-empted whenever the model answered.
+        if not _underperforming(m, min_outcomes=min_outcomes, score_trigger=Decimal(str(score_trigger))):
+            logger.info(f"{cfg.strategy_id}/{cfg.asset_class}: healthy or thin sample; no mutation")
+            continue
         if use_llm:
             # Agent tool-loop first: grounds the proposal in recent outcomes,
             # active lessons, and peer-strategy configs. Falls back to the
@@ -152,6 +159,14 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
     # NOT crash the tick.
     try:
         from matrix_shared import maybe_grant_certificate
+        from matrix_shared.trading_safety import revoke_breached_certificates
+        # Revoke first: a granted cert whose version has since breached the
+        # drawdown cap must not survive to the next execution tick.
+        try:
+            for key in await revoke_breached_certificates():
+                logger.warning(f"auto-revoked cert (drawdown breach): {key}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"cert revoke pass failed: {e}")
         for cfg in active_configs:
             try:
                 ok, _, reason = await maybe_grant_certificate(
