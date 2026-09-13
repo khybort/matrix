@@ -388,24 +388,35 @@ async def run(
     # (matrix_shared.retention; MATRIX_RETENTION_* env tunes windows/budget).
     retention_interval_s = float(os.environ.get("MATRIX_RETENTION_INTERVAL_S", "300"))
     retention_enabled = os.environ.get("MATRIX_RETENTION_ENABLED", "true").strip().lower() != "false"
-    last_prune = 0.0
+
+    async def _retention_loop() -> None:
+        # Runs beside the bar tick, not inside it: a single cold 50k-row DELETE
+        # batch on the 90 GB trades table took > 45 s of DataFileRead and held
+        # the tick hostage, which is what the "bars stale" alerts were.
+        from matrix_shared.retention import prune_once
+        while not stop.is_set():
+            try:
+                await prune_once()
+            except Exception as e:  # noqa: BLE001
+                logger.exception(f"retention prune failed: {e}")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=retention_interval_s)
+            except TimeoutError:
+                pass
+
+    retention_task = asyncio.create_task(_retention_loop()) if retention_enabled else None
 
     while not stop.is_set():
         try:
             await tick(lookback_minutes)
         except Exception as e:
             logger.exception(f"tick failed: {e}")
-        if retention_enabled and time.monotonic() - last_prune >= retention_interval_s:
-            last_prune = time.monotonic()
-            try:
-                from matrix_shared.retention import prune_once
-                await prune_once()
-            except Exception as e:
-                logger.exception(f"retention prune failed: {e}")
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval_s)
         except TimeoutError:
             pass
+    if retention_task is not None:
+        retention_task.cancel()
 
 
 def main() -> None:

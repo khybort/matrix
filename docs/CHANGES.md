@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Retention prune bar tick'ini bloklamıyor
+- bars-aggregator prune'u tick döngüsünün içinde çalıştırıyordu; 90 GB `market_trades` üzerinde tek 50k satırlık soğuk DELETE batch'i 45 s+ DataFileRead sürüp bar üretimini durduruyordu ("bars stale"). Prune artık ayrı asyncio task (`MATRIX_RETENTION_INTERVAL_S`), batch 50k → 10k (`MATRIX_RETENTION_BATCH`) ki 45 s bütçe gerçekten uygulansın.
+
 ## 2026-09-13 — Claude kimlik senkron launchd işi hiç çalışmamış (Operation not permitted)
 - launchd `~/Documents` altındaki script'i çalıştıramıyor (macOS TCC; log: `bash: ./scripts/claude_creds_sync.sh: Operation not permitted`, exit 126). `make claude-creds-install` artık script'i `~/.matrix/bin/`e kopyalar, plist oradan çalıştırır; periyot 60 → 30 dk. Token bitimine ~2.5 saat kala fark edildi; iş yüklendi ve doğrulandı (exit 0).
 

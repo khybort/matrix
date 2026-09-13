@@ -64,7 +64,9 @@ POLICIES: tuple[Policy, ...] = (
     Policy("wallet_snapshots", "snapshot_ts", 30, "shared", partition_col="wallet_id"),
 )
 
-DEFAULT_BATCH = int(os.environ.get("MATRIX_RETENTION_BATCH", "50000"))
+# 10k, not 50k: the budget is only checked between batches and one cold 50k
+# `DELETE ... WHERE ctid IN (...)` on market_trades ran > 45 s of DataFileRead.
+DEFAULT_BATCH = int(os.environ.get("MATRIX_RETENTION_BATCH", "10000"))
 DEFAULT_BUDGET_S = float(os.environ.get("MATRIX_RETENTION_BUDGET_S", "45"))
 
 
