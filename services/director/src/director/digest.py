@@ -33,13 +33,14 @@ class SystemDigest:
     by_method: list[dict[str, Any]] = field(default_factory=list)  # matrix_agent PnL by decision method
     regime: dict[str, Any] = field(default_factory=dict)  # asset_class → regime key
     ranker: list[dict[str, Any]] = field(default_factory=list)  # traded vs untraded (virtual) pnl% per market
+    llm: dict[str, Any] = field(default_factory=dict)  # today's LLM usage by service (usage_ledger)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "now": self.now.isoformat(), "health": self.health, "pnl": self.pnl,
             "challengers": self.challengers, "efficacy": self.efficacy, "proposals": self.proposals,
             "dev": self.dev, "lessons": self.lessons, "certs": self.certs, "wallets": self.wallets,
-            "by_method": self.by_method, "regime": self.regime, "ranker": self.ranker,
+            "by_method": self.by_method, "regime": self.regime, "ranker": self.ranker, "llm": self.llm,
         }
 
 
@@ -187,6 +188,13 @@ async def collect_digest(now: datetime | None = None) -> SystemDigest:
     except Exception as e:  # noqa: BLE001 — digest must never fail the tick
         logger.warning(f"digest: dev_tasks probe failed: {e}")
 
+    # LLM spend / turns today, per service, from the shared usage ledger.
+    try:
+        from matrix_shared.usage_ledger import summary as _usage_summary
+        d.llm = _usage_summary(days=1)
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"digest: usage ledger unavailable ({e})")
+
     return d
 
 
@@ -219,6 +227,9 @@ def render_brief(d: SystemDigest) -> str:
         lines.append("challengers: " + ", ".join(
             f"{c['strategy_id']}/{c['asset_class']} v{c['version']} (n={c['n_outcomes']})" for c in d.challengers))
     e = d.efficacy
+    if d.llm.get("calls"):
+        top = ", ".join(f"{svc} ${v['cost_usd']:.2f}/{v['calls']}" for svc, v in list(d.llm["by_service"].items())[:4])
+        lines.append(f"llm today: ${d.llm['cost_usd']:.2f} over {d.llm['calls']} calls ({top})")
     lines.append(f"efficacy 7d: {e.get('verdicts_7d', {})} rollbacks={e.get('rollbacks_7d', 0)} "
                  f"cutovers={e.get('cutovers_7d', 0)} retired={e.get('challengers_retired_7d', 0)}")
     dv = d.dev
