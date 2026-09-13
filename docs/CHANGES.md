@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — LLM tek-atış timeout 45 → 60 s
+- Defter: agent tek-atış p50 23 s / p95 38 s (subscription CLI). 45 s'de %21 timeout → 60 s (`MATRIX_LLM_CALL_TIMEOUT_S`). Defterdeki `timeouts`/`p95_s` bir sonraki ayar için ölçüt.
+
 ## 2026-09-13 — Paper engine retired versiyonların prediction'larını açmaz
 - Aday sorgusu `strategy_configs` ile join'lenir; status `retired` (veya active/shadow dışı) olan versiyonun kuyruktaki prediction'ları atlanır (452 açık momentum_xs v1 prediction'ı retired v1 için slot dolduruyor ve skor topluyordu). Config satırı olmayan prediction'lar etkilenmez. Regresyon testi.
 

@@ -133,7 +133,10 @@ def _backend_options_env(backend: str) -> dict[str, str]:
 # Per-attempt wall-clock cap. A down/misconfigured backend (e.g. bad Bedrock
 # creds) can otherwise make the spawned CLI hang on SDK retries for minutes,
 # stalling the 15s decision loop. Bounded so failover is fast.
-_CALL_TIMEOUT_S = float(os.environ.get("MATRIX_LLM_CALL_TIMEOUT_S", "45"))
+# 60 s, not 45: the usage ledger (2026-09-13) shows agent single-shots at
+# p50 23 s / p95 38 s through the subscription CLI, so a 45 s cut-off threw
+# away ~21% of completed-anyway calls. Tune with MATRIX_LLM_CALL_TIMEOUT_S.
+_CALL_TIMEOUT_S = float(os.environ.get("MATRIX_LLM_CALL_TIMEOUT_S", "60"))
 
 _FAILOVER_GRACE_S = float(os.environ.get("MATRIX_BEDROCK_FAILOVER_GRACE_S", "600"))
 _PROBE_BASE_S = float(os.environ.get("MATRIX_BEDROCK_PROBE_BASE_S", "30"))
