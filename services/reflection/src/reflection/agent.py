@@ -87,13 +87,17 @@ def _build_registry(strategy_id: str, asset_class: str | None = None) -> ToolReg
             return _text(items)
         # Compress: top 15 / bottom 15 + per-symbol aggregates.
         by_symbol: dict[str, dict] = {}
+        by_reason: dict[str, dict] = {}
         for it in items:
             sym = str(it.get("symbol", ""))
             agg = by_symbol.setdefault(sym, {"n": 0, "wins": 0, "pnl": 0.0})
             agg["n"] += 1
+            r = by_reason.setdefault(str(it.get("reason", "?")), {"n": 0, "pnl": 0.0})
+            r["n"] += 1
             try:
                 pnl = float(it.get("pnl_usd") or 0)
                 agg["pnl"] += pnl
+                r["pnl"] += pnl
                 if pnl > 0:
                     agg["wins"] += 1
             except (TypeError, ValueError):
@@ -103,6 +107,7 @@ def _build_registry(strategy_id: str, asset_class: str | None = None) -> ToolReg
             "tail": items[-15:],
             "total": len(items),
             "by_symbol": by_symbol,
+            "by_exit_reason": by_reason,
         })
 
     @tool(
@@ -177,7 +182,11 @@ SYSTEM_PROMPT = (
     "mutation that could improve a strategy's realised total_pnl_usd (after "
     "fees and slippage) over the next window. Win rate and score are "
     "diagnostics, not the objective; a change that raises win rate but "
-    "shrinks total PnL is a bad proposal.\n"
+    "shrinks total PnL is a bad proposal. Read the exit-reason mix first: "
+    "hit_horizon dominating at about -7 bps means the take-profit is not "
+    "reachable within the horizon (extend horizon or lower tp); hit_sl far "
+    "more frequent than hit_tp relative to the tp/sl ratio means the stop sits "
+    "inside the noise band (widen sl or demand a stronger signal).\n"
     "Use the read-only tools to ground your proposal in actual outcomes, "
     "active lessons, and peer-strategy configs (don't speculate).\n"
     f"NEVER propose changes to risk caps: {_FORBIDDEN_LIST}. "

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -21,6 +21,11 @@ class StrategyMetrics:
     total_pnl_usd: Decimal
     by_symbol: dict[str, dict[str, str]]  # symbol → {n, avg_score, ...}
     asset_class: str | None = None  # None = unscoped (legacy callers)
+    # exit reason → {n, avg_pnl_bps, total_pnl_usd}. The geometry signal the
+    # tuner needs: hit_horizon dominating at ≈ −cost means TP is out of reach
+    # for the horizon; hit_sl:hit_tp well above the TP/SL ratio means the stop
+    # is inside the noise band (2026-09-13: SL:TP 2-3:1 across all champions).
+    by_reason: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 async def metrics_window(
@@ -86,6 +91,26 @@ async def metrics_window(
                 "total_pnl_usd": str(Decimal(sym_total) if sym_total is not None else 0),
             }
 
+        # By exit reason
+        reason_stmt = (
+            select(Outcome.reason, func.count(Outcome.id), func.avg(Outcome.pnl_pct), func.sum(Outcome.pnl_usd))
+            .join(Prediction, Prediction.id == Outcome.prediction_id)
+            .where(Prediction.strategy_id == strategy_id)
+            .where(Prediction.strategy_version == version)
+            .where(Outcome.observed_at >= since)
+            .where(Outcome.reason != "orphan_flat_close")
+            .group_by(Outcome.reason)
+        )
+        if asset_class is not None:
+            reason_stmt = reason_stmt.where(Prediction.asset_class == asset_class)
+        by_reason: dict[str, dict[str, str]] = {}
+        for reason, count, avg_pct, r_total in (await session.execute(reason_stmt)).all():
+            by_reason[str(reason)] = {
+                "n": str(count),
+                "avg_pnl_bps": str((Decimal(avg_pct) * 10000).quantize(Decimal("0.1")) if avg_pct is not None else 0),
+                "total_pnl_usd": str(Decimal(r_total) if r_total is not None else 0),
+            }
+
     return StrategyMetrics(
         strategy_id=strategy_id,
         version=version,
@@ -95,4 +120,5 @@ async def metrics_window(
         total_pnl_usd=total,
         by_symbol=by_symbol,
         asset_class=asset_class,
+        by_reason=by_reason,
     )

@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Reflection metriklerine çıkış-nedeni dağılımı
+- `StrategyMetrics.by_reason` (hit_tp/hit_sl/hit_horizon → n, avg_pnl_bps, total): 24h şampiyon verisinde `hit_horizon` ≈ −6…−31 bps ile baskın ve `hit_sl:hit_tp` ≈ 2-3:1 — kayıp ≈ maliyet, TP ufuk içinde erişilemiyor, stop gürültü bandında. Bu geometri sinyali LLM tek-atış prompt'una, reflection agent `recent_outcomes` özetine (`by_exit_reason`) ve system prompt'a (nasıl okunacağı) eklendi; proposal `metrics_window` da taşır.
+
 ## 2026-09-13 — labs challenger testi slot satırlarını da temizler
 - `test_challenger` `apply_proposal`'ın her cüzdana açtığı `strategy_slot_configs` satırlarını silmiyordu (canlıda 12 `chal_*` kalıntı). Teardown eklendi.
 

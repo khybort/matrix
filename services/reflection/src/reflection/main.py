@@ -225,6 +225,7 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
                 "win_rate": str(m.win_rate),
                 "total_pnl_usd": str(m.total_pnl_usd),
                 "by_symbol": m.by_symbol,
+                "by_reason": m.by_reason,
                 "window_hours": window_hours,
                 "asset_class": cfg.asset_class,
             }
