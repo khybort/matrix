@@ -74,8 +74,9 @@ async def ensure_shadow_wallets() -> int:
     """Create a `shadow` wallet (same caps as the default) for every market
     that has a default wallet. Idempotent; called at engine start."""
     created = 0
+    markets = {m.asset_class for m in all_markets()}
     async with shared_session_scope() as session:
-        wallets = list((await session.execute(select(Wallet))).scalars())
+        wallets = list((await session.execute(select(Wallet).where(Wallet.asset_class.in_(markets)))).scalars())
         by_class: dict[str, list[Wallet]] = {}
         for w in wallets:
             by_class.setdefault(w.asset_class, []).append(w)
@@ -363,12 +364,19 @@ async def snapshot_wallet() -> None:
     """Write a WalletSnapshot for every market's wallet; handle circuit breaker
     per wallet (one market tripping its daily-loss circuit must not freeze
     the others)."""
+    markets = {m.asset_class for m in all_markets()}
     async with shared_session_scope() as session:
         wallets = list(
-            (await session.execute(select(Wallet))).scalars()
+            (await session.execute(select(Wallet).where(Wallet.asset_class.in_(markets)))).scalars()
         )
     for w in wallets:
-        await _snapshot_one(w.id)
+        try:
+            await _snapshot_one(w.id)
+        except IntegrityError as e:
+            # Wallet vanished between the listing and the insert (test wallets
+            # on a synthetic asset class live for seconds) — never let one
+            # wallet's snapshot abort the whole tick for the real markets.
+            logger.warning(f"snapshot skipped for wallet {w.id}: {str(e).splitlines()[0][:120]}")
 
 
 async def _snapshot_one(wallet_id: uuid.UUID) -> None:

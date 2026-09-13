@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Paper engine snapshot yalnızca kayıtlı marketlerin cüzdanları için
+- `snapshot_wallet`/`ensure_shadow_wallets` `all_markets()` dışındaki asset class'ları (testlerin sentetik `test` cüzdanları) atlar; kaybolan bir cüzdan için `wallet_snapshots` FK hatası artık tick'i düşürmez (20:16'da bir tick bu yüzden iptal olmuştu).
+
 ## 2026-09-13 — LLM tek-atış timeout 45 → 60 s
 - Defter: agent tek-atış p50 23 s / p95 38 s (subscription CLI). 45 s'de %21 timeout → 60 s (`MATRIX_LLM_CALL_TIMEOUT_S`). Defterdeki `timeouts`/`p95_s` bir sonraki ayar için ölçüt.
 
