@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Challenger karşılaştırma taban çizgisi sıfırlandı (veri düzeltmesi)
+- Shadow-cüzdan düzeltmesinden (74eb6ff, 19:03 UTC) önce başlamış iki challenger'ın (`matrix_agent` v8, `oi_delta` v9) `promoted_at`'i şimdiye çekildi; önceki örnekleri şampiyon cüzdanında slot cap'siz oluşmuştu, kıyas geçersizdi. Diğer challenger'lar düzeltmeden sonra doğdu.
+
 ## 2026-09-13 — Slot scorer shadow cüzdan satırlarını puanlamıyor
 - Paper engine shadow pass'i şampiyonun slot config'lerini kullandığı için shadow cüzdanındaki 16 slot satırı yalnızca gürültü `slot_adjustment` önerisi üretiyordu; scorer artık `shadow` cüzdanını atlar. Test eklendi.
 
