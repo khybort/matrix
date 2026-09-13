@@ -132,16 +132,16 @@ async def score_strategy_slots() -> int:
 
             if consec >= CONSECUTIVE_LOSS_AUTO_CUT:
                 new_slots = 1
-            elif len(rows) < MIN_N_FOR_SLOT_CHANGE:
-                # Not enough evidence to move capital either way.
-                config.perf_score = score
-                config.last_evaluated_at = datetime.now(UTC)
-                continue
                 if config.consecutive_losses < CONSECUTIVE_LOSS_AUTO_CUT:
                     logger.warning(
                         f"slot auto-cut: {config.strategy_id}/{config.asset_class} "
                         f"consecutive_losses={consec} → slots {old_slots}→1"
                     )
+            elif len(rows) < MIN_N_FOR_SLOT_CHANGE:
+                # Not enough evidence to move capital either way.
+                config.perf_score = score
+                config.last_evaluated_at = datetime.now(UTC)
+                continue
             else:
                 new_slots = _slots_for_score(score, base_share)
 
