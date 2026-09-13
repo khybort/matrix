@@ -65,7 +65,11 @@ async def beat_heartbeat(pool: asyncpg.Pool, task_id: int) -> None:
 
 
 async def reap_stuck_running(pool: asyncpg.Pool, max_silence_seconds: int = 120) -> int:
-    """Tasks whose heartbeat hasn't updated in N seconds are marked failed.
+    """Tasks whose heartbeat hasn't updated in N seconds are marked failed
+    with reason `stale_heartbeat` — NOT `worker_crash`: the label used to be
+    indistinguishable from a real crash inside the run, and on 2026-09-13 the
+    Director read six reaper-stamped rows as "the lessons feeder crashes" and
+    filed a dev task for a bug that did not exist.
 
     Returns the number of tasks reaped.
     """
@@ -73,7 +77,7 @@ async def reap_stuck_running(pool: asyncpg.Pool, max_silence_seconds: int = 120)
         """
         UPDATE dev_tasks
         SET status = 'failed',
-            failure_reason = 'worker_crash',
+            failure_reason = 'stale_heartbeat',
             finished_at = NOW()
         WHERE status = 'running'
           AND heartbeat_at < NOW() - make_interval(secs => $1)

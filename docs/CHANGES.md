@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — dev_agent reaper etiketi `worker_crash` → `stale_heartbeat`
+- Reaper'ın damgası gerçek çökmeden ayrılamıyordu; Director bunu bug diye okuyup görev açtı (#13). Artık `stale_heartbeat`. README/test güncellendi.
+
 ## 2026-09-13 — Director yanlış öncülle görev açtı; reaper artefaktları temizlendi
 - Director tick'i (LOCAL tier'a geçtikten sonra) #4–#9 `worker_crash` satırlarını "lessons-feeder çöküyor" diye okuyup görev #13 açtı. O satırlar 14:05 test-DB olayı sonrası reaper damgasıydı → #13 iptal, #4–#9 `discarded` + not. Eski dev-agent worktree/branch'leri (task-2..9, ahead=0) silindi.
 

@@ -113,13 +113,13 @@ Hard rules — none of them can be turned off via config:
   cost); **daily cap** $50 pauses picking for the rest of the UTC day. Env vars:
   `DEV_AGENT_TASK_COST_CAP_USD`, `DEV_AGENT_DAILY_COST_CAP_USD`.
 - **Heartbeat reaper** runs every worker iteration; tasks silent > 120s are
-  marked `failed/worker_crash`. Tasks whose worktree can't be created fail
+  marked `failed/stale_heartbeat` (the reaper label — distinguishable from a real crash inside the run). Tasks whose worktree can't be created fail
   (`worktree_failed`) instead of running against the live repo.
 - **All new lessons** enter as `draft` and only influence future tasks after
   explicit `/dev-task lesson-approve <id>`.
 - **Tool loop guard**: 5 consecutive identical tool calls fails the task.
 - **Heartbeat reaper**: tasks whose heartbeat hasn't updated in 2 minutes are
-  marked `failed` (reason `worker_crash`).
+  marked `failed` (reason `stale_heartbeat`).
 
 ## Architecture
 

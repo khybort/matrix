@@ -21,7 +21,7 @@ async def test_reaps_task_with_stale_heartbeat(pg_pool):
         "SELECT status, failure_reason FROM dev_tasks WHERE id=$1", task_id,
     )
     assert row["status"] == "failed"
-    assert row["failure_reason"] == "worker_crash"
+    assert row["failure_reason"] == "stale_heartbeat"
 
 
 async def test_does_not_reap_fresh_heartbeat(pg_pool):
