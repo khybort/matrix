@@ -20,6 +20,16 @@ from matrix_shared.agent_lessons import (
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def _fresh_engines():
+    """Engines cached by an earlier test's event loop break here with
+    "attached to a different loop" (docs/ENGINEERING_LESSONS.md)."""
+    from matrix_shared.db import reset_engines
+    reset_engines()
+    yield
+    reset_engines()
+
+
 class _F:
     def __init__(self, symbol):
         self.symbol = symbol

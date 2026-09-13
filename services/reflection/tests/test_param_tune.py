@@ -308,6 +308,108 @@ def test_cash_and_carry_has_no_tp_sl_knobs():
     )
 
 
+# ---------------------------------------------------------------------------
+# Mutation spiral guards (2026-09-13)
+# ---------------------------------------------------------------------------
+
+
+def test_param_tune_oi_delta_below_30_returns_none():
+    """oi_delta must not fire on n<30 — thin sample causes mutation spiral.
+
+    Engineering lesson: 10-trade win_rate has ±16pp noise; n≥30 required.
+    The spiral v3/v4/v5 all had n≤13; this gate blocks that path.
+    """
+    for n in (10, 12, 13, 15, 29):
+        m = _metrics(
+            strategy_id="oi_delta",
+            n_outcomes=n,
+            win_rate=Decimal("0.20"),
+            total_pnl_usd=Decimal("-0.218"),
+        )
+        draft = rule_propose_param_tune("oi_delta", _oi_delta_params(), m)
+        assert draft is None, (
+            f"oi_delta param_tune must not fire at n={n} (below PARAM_TUNE_MIN_N=30)"
+        )
+
+
+def test_param_tune_oi_delta_fires_at_30():
+    """oi_delta should produce a proposal when n==30 and losing."""
+    m = _metrics(
+        strategy_id="oi_delta",
+        n_outcomes=30,
+        win_rate=Decimal("0.20"),
+        total_pnl_usd=Decimal("-0.218"),
+    )
+    draft = rule_propose_param_tune("oi_delta", _oi_delta_params(), m)
+    assert draft is not None, "oi_delta should fire at n=30"
+    assert draft.proposal_type == "param_tune"
+
+
+def test_param_tune_skip_knobs_selects_different_knob():
+    """skip_knobs forces the rotation to skip the nominated knob.
+
+    oi_delta sorted knobs: ['horizon_s', 'oi_threshold_pct', 'sl_pct', 'tp_pct'].
+    At n=32, without skip: 32 % 4 = 0 → 'horizon_s'.
+    With skip_knobs={'horizon_s'}: available=['oi_threshold_pct','sl_pct','tp_pct'],
+    32 % 3 = 2 → 'tp_pct'.
+    """
+    m = _metrics(
+        strategy_id="oi_delta",
+        n_outcomes=32,
+        win_rate=Decimal("0.20"),
+        total_pnl_usd=Decimal("-0.218"),
+    )
+    draft_no_skip = rule_propose_param_tune("oi_delta", _oi_delta_params(), m)
+    assert draft_no_skip is not None
+    # horizon_s is the default knob at n=32
+    assert draft_no_skip.after_params.get("horizon_s") != _oi_delta_params().get("horizon_s"), (
+        "expected horizon_s to be tuned at n=32 without skip"
+    )
+
+    draft_skip = rule_propose_param_tune(
+        "oi_delta", _oi_delta_params(), m, skip_knobs=frozenset({"horizon_s"})
+    )
+    assert draft_skip is not None
+    # horizon_s must be unchanged; a different knob must move
+    assert draft_skip.after_params.get("horizon_s") == _oi_delta_params().get("horizon_s"), (
+        "horizon_s should be skipped when in skip_knobs"
+    )
+    # Confirm some other knob changed
+    changed = {k for k in _oi_delta_params() if draft_skip.after_params.get(k) != _oi_delta_params()[k]}
+    assert changed, "at least one non-horizon_s knob should change when horizon_s is skipped"
+    assert "horizon_s" not in changed, "horizon_s must not change when skip_knobs contains it"
+
+
+def test_param_tune_skip_knobs_all_falls_back_to_full_rotation():
+    """When every knob is in skip_knobs, fall back to the full sorted list."""
+    all_knobs = frozenset({"horizon_s", "oi_threshold_pct", "sl_pct", "tp_pct"})
+    m = _metrics(
+        strategy_id="oi_delta",
+        n_outcomes=32,
+        win_rate=Decimal("0.20"),
+        total_pnl_usd=Decimal("-0.218"),
+    )
+    draft = rule_propose_param_tune(
+        "oi_delta", _oi_delta_params(), m, skip_knobs=all_knobs
+    )
+    assert draft is not None, "should still produce a proposal when all knobs are in skip_knobs"
+
+
+def test_param_tune_grid_requires_30_outcomes():
+    """grid is in PARAM_TUNE_MIN_N with min=30 — same noise lesson as oi_delta.
+
+    Confirms that n<30 for grid also returns None.
+    """
+    m = _metrics(
+        strategy_id="grid",
+        n_outcomes=10,
+        win_rate=Decimal("0.20"),
+        total_pnl_usd=Decimal("-5.0"),
+    )
+    draft = rule_propose_param_tune("grid", _grid_params(), m)
+    assert draft is None, "grid requires n>=30 (PARAM_TUNE_MIN_N)"
+
+
 def test_tp_sl_knob_ranges_sane():
     """For every strategy with tp/sl knobs, step > 0, min < max, defaults > 0."""
     from reflection.mutate import PARAM_TUNERS

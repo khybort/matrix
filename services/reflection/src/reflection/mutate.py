@@ -159,6 +159,18 @@ LLM_MODEL = MODEL_SONNET
 NEG_AVG_SCORE_TRIGGER = Decimal("-0.05")
 MIN_N_OUTCOMES = 10
 
+# Per-strategy minimum n_outcomes before param_tune fires.
+# A 10-trade win rate carries ±16pp noise (engineering lesson 2026-09-13);
+# n≥30 is the minimum before a knob change is statistically meaningful.
+# Strategies not listed here fall back to MIN_N_OUTCOMES.
+PARAM_TUNE_MIN_N: dict[str, int] = {
+    "oi_delta":          30,
+    "oi_breakout":       30,
+    "grid":              30,
+    "dca":               30,
+    "funding_reversion": 30,
+}
+
 # How aggressive each mutation step is
 WEIGHT_PERTURB = Decimal("0.05")  # shift toward alpha features
 THRESHOLD_PERTURB = Decimal("0.03")  # loosen threshold when losing (CHANGES.md)
@@ -296,6 +308,7 @@ def rule_propose_param_tune(
     *,
     min_outcomes: int = MIN_N_OUTCOMES,
     score_trigger: Decimal = NEG_AVG_SCORE_TRIGGER,
+    skip_knobs: frozenset[str] = frozenset(),
 ) -> MutationDraft | None:
     """For deterministic strategies (grid/dca/oi_delta), perturb numeric params
     when win-rate / avg_score signals underperformance.
@@ -311,21 +324,29 @@ def rule_propose_param_tune(
 
     The knob to tune is selected deterministically by rotating over
     sorted param names using (n_outcomes mod n_knobs) so consecutive
-    proposals explore different parts of the search space.
+    proposals explore different parts of the search space.  Knobs in
+    `skip_knobs` are excluded from the rotation; this lets callers avoid
+    re-proposing the same adjustment that was recently tried and failed.
     """
     if strategy_id not in PARAM_TUNERS:
         return None
-    if not _underperforming(m, min_outcomes=min_outcomes, score_trigger=score_trigger):
+    # Use per-strategy minimum if defined — thin-signal strategies need more
+    # samples before a knob change carries statistical weight.
+    effective_min = PARAM_TUNE_MIN_N.get(strategy_id, min_outcomes)
+    if not _underperforming(m, min_outcomes=effective_min, score_trigger=score_trigger):
         return None
 
     tuner = PARAM_TUNERS[strategy_id]
     if not tuner:
         return None
 
-    # Pick one knob deterministically based on outcome count.
+    # Pick one knob deterministically, skipping recently-tried knobs.
     param_names = sorted(tuner.keys())
-    idx = m.n_outcomes % len(param_names)
-    knob = param_names[idx]
+    available = [k for k in param_names if k not in skip_knobs]
+    if not available:
+        available = param_names  # all tried recently — rotate through normally
+    idx = m.n_outcomes % len(available)
+    knob = available[idx]
     step, lo, hi = tuner[knob]
 
     # Read current value — skip if missing (params not seeded yet).

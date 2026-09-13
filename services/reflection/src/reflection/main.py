@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import signal
 import sys
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from loguru import logger
@@ -27,10 +29,25 @@ from sqlalchemy import select
 
 from reflection.efficacy import evaluate_applied_proposals, evaluate_challengers, recently_reverted
 from reflection.metrics import metrics_window
-from reflection.mutate import _underperforming, llm_propose, rule_propose, rule_propose_param_tune
+from reflection.mutate import (
+    PARAM_TUNERS,
+    _underperforming,
+    llm_propose,
+    rule_propose,
+    rule_propose_param_tune,
+)
 
 DEFAULT_INTERVAL_S = 600.0
 DEFAULT_WINDOW_HOURS = 24.0
+
+# Minimum hours between consecutive param_tune proposals for the same strategy.
+# Prevents the mutation spiral: rapid consecutive tunings on thin samples before
+# efficacy has had time to evaluate the previous change.
+PARAM_TUNE_COOLDOWN_HOURS = float(os.environ.get("MATRIX_PARAM_TUNE_COOLDOWN_HOURS", "24"))
+
+# How far back to look for recently-tried knobs to pass as skip_knobs.
+# A knob tried in this window is skipped in favour of an unexplored one.
+PARAM_TUNE_SKIP_KNOBS_DAYS = float(os.environ.get("MATRIX_PARAM_TUNE_SKIP_KNOBS_DAYS", "3"))
 
 
 async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_trigger: float) -> int:
@@ -84,12 +101,60 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
         if draft is None:
             # For deterministic strategies (grid/dca/oi_delta), try the
             # param_tune heuristic. matrix_agent uses the weight tuner above.
+            # Guard: enforce a cooldown between consecutive param_tune proposals
+            # for the same strategy to break the mutation spiral (rapid re-tuning
+            # on thin samples before efficacy can judge the previous change).
+            skip_knobs: frozenset[str] = frozenset()
+            if cfg.strategy_id in PARAM_TUNERS:
+                now = datetime.now(UTC)
+                cooldown_cutoff = now - timedelta(hours=PARAM_TUNE_COOLDOWN_HOURS)
+                async with shared_session_scope() as session:
+                    recent_tunes = list((await session.execute(
+                        select(MutationProposal)
+                        .where(MutationProposal.strategy_id == cfg.strategy_id)
+                        .where(MutationProposal.asset_class == cfg.asset_class)
+                        .where(MutationProposal.proposal_type == "param_tune")
+                        .where(MutationProposal.created_at >= cooldown_cutoff)
+                        .order_by(MutationProposal.created_at.desc())
+                        .limit(5)
+                    )).scalars())
+                if recent_tunes:
+                    logger.info(
+                        f"{cfg.strategy_id}/{cfg.asset_class}: param_tune cooldown "
+                        f"({len(recent_tunes)} tune(s) in last "
+                        f"{PARAM_TUNE_COOLDOWN_HOURS:.0f}h); skipping"
+                    )
+                    continue
+                # No cooldown active — collect recently-tried knobs so the
+                # rotation avoids proposing the same knob that just failed.
+                skip_cutoff = now - timedelta(days=PARAM_TUNE_SKIP_KNOBS_DAYS)
+                async with shared_session_scope() as session:
+                    past_tunes = list((await session.execute(
+                        select(MutationProposal.before_params, MutationProposal.after_params)
+                        .where(MutationProposal.strategy_id == cfg.strategy_id)
+                        .where(MutationProposal.asset_class == cfg.asset_class)
+                        .where(MutationProposal.proposal_type == "param_tune")
+                        .where(MutationProposal.status.in_(["applied", "reverted"]))
+                        .where(MutationProposal.created_at >= skip_cutoff)
+                        .order_by(MutationProposal.created_at.desc())
+                        .limit(10)
+                    )).all())
+                tried: set[str] = set()
+                for before, after in past_tunes:
+                    before = before or {}
+                    after = after or {}
+                    tried.update(
+                        k for k in after
+                        if str(after.get(k)) != str(before.get(k))
+                    )
+                skip_knobs = frozenset(tried)
             draft = rule_propose_param_tune(
                 cfg.strategy_id,
                 cfg.params,
                 m,
                 min_outcomes=min_outcomes,
                 score_trigger=Decimal(str(score_trigger)),
+                skip_knobs=skip_knobs,
             )
         if draft is None:
             logger.info(f"{cfg.strategy_id}: no proposal (criteria not met or no change)")

@@ -55,7 +55,7 @@ async def test_grants_when_eligible(seed_outcomes, cert_cleanup):
     assert row.status == "granted"
     assert row.validity_until is not None
     assert row.validity_until > datetime.now(timezone.utc)
-    assert row.granted_by == "auto-eligibility"
+    assert row.granted_by.startswith("auto-eligibility")  # "+relaxed" suffix depends on MATRIX_CERT_* env
     assert row.n_outcomes == 10
 
 
