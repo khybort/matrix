@@ -365,13 +365,22 @@ async def run(
         logger.info(f"startup: newest 1m bar is {age:.0f}s old (< {STARTUP_SKIP_IF_FRESH_S:.0f}s); skipping backfill")
         rest_backfill_symbols = []
         skip_trade_backfill = True
+        window_h = 0.0
     else:
         skip_trade_backfill = False
+        # Size the backfill to the actual gap (+15 min slack), not a flat 48h:
+        # a 48h REST fetch for every symbol plus a 48h aggregation took minutes,
+        # and while every shared-code reload restarts this daemon the loop
+        # never reached steady state ("bars stale" all afternoon).
+        if age is None:
+            window_h = STARTUP_BACKFILL_MAX_HOURS
+        else:
+            window_h = min(STARTUP_BACKFILL_MAX_HOURS, max(0.5, age / 3600.0 + 0.25))
+        logger.info(f"startup: newest 1m bar is {'unknown' if age is None else f'{age:.0f}s old'}; "
+                    f"backfilling {window_h:.2f}h")
     if rest_backfill_symbols:
         try:
-            await rest_backfill_missing(
-                rest_backfill_symbols, min(rest_backfill_hours, STARTUP_BACKFILL_MAX_HOURS)
-            )
+            await rest_backfill_missing(rest_backfill_symbols, min(rest_backfill_hours, window_h))
         except Exception as e:
             logger.exception(f"startup REST backfill failed: {e}")
 
@@ -379,7 +388,7 @@ async def run(
     # loop settles into incremental mode. Idempotent; safe to repeat.
     if not skip_trade_backfill:
         try:
-            await backfill_all()
+            await backfill_all(max_hours=window_h)
         except Exception as e:
             logger.exception(f"startup trade backfill failed: {e}")
 

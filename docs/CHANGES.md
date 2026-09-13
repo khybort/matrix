@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — bars-aggregator startup backfill boşluk kadar
+- Her yeniden başlatmada 48 saatlik REST + aggregation yerine en yeni bar'ın yaşı + 15 dk (min 30 dk, maks 48 s) kadar backfill. Paylaşılan kod her kaydedildiğinde tüm servisler restart oluyor; 48 saatlik başlangıç işi bu yüzden hiç bitmiyor ve bar'lar bayatlıyordu.
+
 ## 2026-09-13 — LLM defteri süre ve timeout kaydeder
 - Tek-atış çağrılarda 45 s timeout'lar deftere hiç düşmüyordu; 2 saatte agent 74 timeout / 274 başarı (%21), synthesis 11/11. `duration_s` ve `reason=timeout|<Exception>` satırları eklendi; `summary()` servis başına `timeouts`, `p50_s`, `p95_s` verir. `agent.usage` log satırına `dur_s`.
 
