@@ -34,6 +34,23 @@ growth. After the first drain of a huge table: `make db-compact TABLE=market_tra
 (locks the table for the duration — run off-hours). `make retention-drain`
 forces the whole backlog through now instead of the 5-minute trickle.
 
+## Autonomy operations (2026-09-13)
+
+The system runs and improves itself; these are the few operator touchpoints
+that remain (docs/AUTONOMY_PLAN.md):
+
+| Command | When |
+|---|---|
+| `make director-tail` / `make director-once` / `make director-digest` | Read the hourly Director brief, force a review, or dump the digest |
+| `make method-ab [DAYS=7]` | Realised PnL by decision method (rule / llm / llm+rule / conflict) |
+| `make circuit-reset ASSET=crypto [WALLET=default]` or Telegram `/circuit_reset crypto` | Re-arm a tripped daily-loss circuit while `LIVE_EXECUTION_ENABLED=true` (paper mode re-arms itself at the UTC day roll) |
+| Telegram free text: "stop trading DOGE" | Brain stores an operator directive (`remember_directive`); every agent honours it immediately |
+| `make llm-subscription` / `make llm-openrouter` / `make llm-status` | LLM backend. Subscription needs `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`); OpenRouter needs `OPENROUTER_API_KEY`. Plans fall back subscription → openrouter → rule-only |
+| `make openrouter-models` | Current free OpenRouter models (tool-calling first) when a default vanishes |
+| `make retention-drain` / `make db-compact TABLE=market_trades` | Force the retention backlog through / return disk to the OS (locks the table) |
+| `make backup-now` | Extra backup before risky work (sidecar dumps daily) |
+| `make dev-agent-queue` / `/dev-task accept <id>` | Only for tasks left `awaiting_review` (dirty tree or merge conflict); tests+merge are automatic otherwise |
+
 ## Failure modes & recovery
 
 ### 1. "No space left on device" → Postgres panic

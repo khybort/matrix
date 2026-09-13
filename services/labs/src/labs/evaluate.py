@@ -12,7 +12,7 @@ from decimal import Decimal
 
 from agent.features import extract_symbol_features
 from loguru import logger
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 
 from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.models import LabEvaluation, LabExperiment, MarketBar, MarketTrade
@@ -31,9 +31,27 @@ MARK_WINDOW_S = 60
 MARK_WINDOW_S_BARS = 60 * 30
 
 
+FITNESS_K = Decimal(__import__("os").environ.get("MATRIX_LAB_FITNESS_K", "1.0"))
+FITNESS_FULL_N = 25
+
+
+def compute_fitness(*, n: int, mean: Decimal, std: Decimal) -> Decimal:
+    """Variance-penalised fitness: (mean − k·std/√n) × √(min(n,25)/25).
+
+    Pure so the selection rule is unit-testable. `std` is the sample std of
+    per-evaluation capped scores in [-1, 1]; with n < 2 no penalty applies.
+    """
+    if n <= 0:
+        return Decimal("0")
+    penalty = (FITNESS_K * std / Decimal(n).sqrt()) if n > 1 and std > 0 else Decimal("0")
+    sample_factor = Decimal(str(min(n, FITNESS_FULL_N) / FITNESS_FULL_N)).sqrt()
+    return ((mean - penalty) * sample_factor).quantize(Decimal("0.000001"))
+
+
 async def emit_signals(symbols: list[str], asset_class: str = "crypto") -> int:
     """For each active experiment × symbol (filtered by asset_class), emit
-    at most one fresh evaluation per pair.
+    at most one fresh evaluation per pair — and none while that pair still
+    has an OPEN evaluation.
 
     Crypto only for now — BIST features (microstructure) aren't extracted
     yet, so calling this with asset_class='bist' is a no-op until the bar
@@ -59,6 +77,18 @@ async def emit_signals(symbols: list[str], asset_class: str = "crypto") -> int:
     # Pre-extract features once per symbol (cheap one-shot SQL each)
     feature_cache = {sym: await extract_symbol_features(sym) for sym in symbols}
 
+    # Dedup: one OPEN evaluation per (experiment, symbol). Without this the
+    # 20s tick stacked up to horizon/20s near-identical overlapping evals per
+    # pair, so n_evaluations counted autocorrelated copies, not samples
+    # (docs/AUTONOMY_PLAN.md §5 bug #6).
+    async with shared_session_scope() as session:
+        open_rows = (await session.execute(
+            select(LabEvaluation.experiment_id, LabEvaluation.symbol)
+            .where(LabEvaluation.status == "open")
+            .where(LabEvaluation.asset_class == asset_class)
+        )).all()
+    open_pairs = {(eid, sym) for eid, sym in open_rows}
+
     opened = 0
     now = datetime.now(UTC)
     for exp in experiments:
@@ -69,6 +99,8 @@ async def emit_signals(symbols: list[str], asset_class: str = "crypto") -> int:
             continue
 
         for sym in symbols:
+            if (exp.id, sym) in open_pairs:
+                continue
             f = feature_cache[sym]
             if f.last_price is None:
                 continue
@@ -194,14 +226,19 @@ async def score_due_evaluations(stale_after_s: int = 600) -> tuple[int, int]:
                 if pnl_pct > 0:
                     exp_db.n_wins += 1
                 exp_db.total_score = exp_db.total_score + score
-                # fitness: slippage-adjusted avg score × sample-size factor.
-                # Win counting uses pnl_pct>0 (USD-equivalent) not score>0.
+                # Fitness = lower confidence bound of the mean score
+                # (mean − k·std/√n), × sample-size factor. A mean alone let a
+                # lucky genome with huge variance win best-of-20 selection.
+                std_row = (await session.execute(
+                    select(func.stddev_samp(LabEvaluation.score))
+                    .where(LabEvaluation.experiment_id == ev.experiment_id)
+                    .where(LabEvaluation.status == "scored")
+                )).scalar()
                 avg = exp_db.total_score / Decimal(exp_db.n_evaluations)
-                from decimal import Decimal as D
-                sample_factor = (
-                    D(str(min(exp_db.n_evaluations, 25) / 25.0)) ** D("0.5")
+                exp_db.fitness_score = compute_fitness(
+                    n=exp_db.n_evaluations, mean=avg,
+                    std=Decimal(std_row) if std_row is not None else Decimal("0"),
                 )
-                exp_db.fitness_score = avg * sample_factor
         scored += 1
 
     return scored, stale

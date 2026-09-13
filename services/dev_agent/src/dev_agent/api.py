@@ -39,6 +39,17 @@ def build_app(pool: asyncpg.Pool) -> FastAPI:
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.post("/codebase/reindex")
+    async def codebase_reindex() -> dict[str, int]:
+        """Re-walk the repo into dev_codebase_nodes now (`make dev-agent-index`)."""
+        from pathlib import Path
+
+        from dev_agent.codebase import index_codebase
+        from dev_agent.config import load_config
+
+        n = await index_codebase(pool, Path(load_config().repo_root))
+        return {"indexed": n}
+
     @app.post("/tasks", status_code=201)
     async def create_task(payload: TaskCreate) -> dict[str, Any]:
         snapshot_json = (

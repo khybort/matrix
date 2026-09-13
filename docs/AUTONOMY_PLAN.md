@@ -354,7 +354,13 @@ Emir gönderen tek kod yolu bu.
     üretir (`pattern_kind='regime'`, joker `*/down/*`), decision veto ve draft filtresi uygular,
     Director brief'inde "regime" satırı var. Canlı: crypto `low/flat/neutral`.
 
-Sıradaki: P2.5 embedding/benzer-setup, P4.3 dev_agent codebase_ctx, P1.4 labs eval dedup + fitness varyansı.
+19. ✅ P1.4 Labs: (experiment, symbol) başına tek açık eval (dedup); fitness = (mean − k·std/√n) ×
+    √(min(n,25)/25) — varyans cezalı, `MATRIX_LAB_FITNESS_K`.
+20. ✅ P4.3 dev_agent: `codebase_ctx` gerçekten prompt'a giriyor (any-token retrieval), indeks saatlik
+    yenileniyor, `POST /codebase/reindex` (`make dev-agent-index`) var.
+
+Sıradaki: P2.5 embedding/benzer-setup (embedding sağlayıcısı gerekir), P1.8 counterfactual (reddedilen
+prediction'lar için virtual outcome), P3.3 process-arası rate limiter + `agent_usage` tablosu.
 
 Bu 10'dan sonra sistem "çalışıyor gibi görünen" değil, **gerçekten kendini ölçen** hale gelir.
 Director (P3) ancak ölçüm altyapısı varken anlamlı; ondan önce yazılırsa gürültüyü orkestre eder.

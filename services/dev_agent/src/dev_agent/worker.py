@@ -105,6 +105,15 @@ async def process_one_task(
         top_k=5,
         paths=list(task["touches_files"] or []),
     )
+    try:
+        from dev_agent.codebase import search_codebase_context
+        codebase_ctx = await search_codebase_context(
+            pool, query=task["description"], paths=list(task["touches_files"] or []), top_k=12,
+        )
+    except Exception as e:  # noqa: BLE001 — context is a nicety, never a blocker
+        from loguru import logger
+        logger.warning(f"codebase context lookup failed: {e}")
+        codebase_ctx = ""
 
     snapshot = task.get("conversation_snapshot") if isinstance(task, dict) else task["conversation_snapshot"]
     if isinstance(snapshot, str):
@@ -114,7 +123,7 @@ async def process_one_task(
     system_prompt = build_system_prompt(
         task_description=task["description"],
         lessons=lessons,
-        codebase_ctx="",
+        codebase_ctx=codebase_ctx,
         auto_commit=task["auto_commit"],
         auto_pr=task["auto_pr"],
         run_tests=task["run_tests"],

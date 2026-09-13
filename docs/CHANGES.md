@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-09-13 — P1.4 labs sampling/fitness + P4.3 dev_agent codebase context
+
+- `labs/evaluate.emit_signals`: no new evaluation while the (experiment, symbol) pair still has an
+  OPEN one — `n_evaluations` now counts independent samples. `compute_fitness(n, mean, std)` =
+  (mean − k·std/√n) × √(min(n,25)/25): a high-variance lucky genome no longer wins best-of-20.
+- dev_agent: `search_codebase_context` result is finally passed into the system prompt (was `""`),
+  the index refreshes hourly in the worker loop (`DEV_AGENT_INDEX_EVERY_S`), and `POST /codebase/reindex`
+  exists so `make dev-agent-index` works.
+- OPS_HARDENING.md gains an "Autonomy operations" table of the remaining operator touchpoints.
+
 ## 2026-09-13 — P2.3 regime memory
 
 - `matrix_shared/regime.py`: `classify(closes_1h, funding)` → `Regime(vol|trend|funding)`; `current_regime(asset_class)`

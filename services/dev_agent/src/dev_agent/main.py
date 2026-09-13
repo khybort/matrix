@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,6 +19,7 @@ from dev_agent.runtime import daily_spend_usd, is_paused, reap_stuck_running
 from dev_agent.worker import process_one_task
 
 REAP_SILENCE_S = 120
+INDEX_EVERY_S = float(os.environ.get("DEV_AGENT_INDEX_EVERY_S", "3600"))
 _daily_cap_logged = False
 
 
@@ -30,8 +33,19 @@ async def _worker_loop(pool, repo_root: Path, worktree_root: Path, daily_cap_usd
         logger.warning("claude_agent_sdk not installed — worker will idle")
         query_fn = None
 
+    last_index = 0.0
     while True:
         try:
+            # Keep the codebase index fresh so tasks get real file context
+            # (was indexed by nothing and passed as "" — docs/AUTONOMY_PLAN.md §3.9).
+            if time.monotonic() - last_index >= INDEX_EVERY_S:
+                last_index = time.monotonic()
+                try:
+                    from dev_agent.codebase import index_codebase
+                    n = await index_codebase(pool, repo_root)
+                    logger.info(f"codebase index refreshed: {n} nodes")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"codebase index failed: {e}")
             reaped = await reap_stuck_running(pool, max_silence_seconds=REAP_SILENCE_S)
             if reaped:
                 logger.warning(f"reaped {reaped} stuck running task(s) (heartbeat > {REAP_SILENCE_S}s)")
