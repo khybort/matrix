@@ -18,7 +18,7 @@ os.environ.setdefault("LOCAL_DATABASE_URL", TEST_LOCAL_DSN)
 os.environ.setdefault("SHARED_DATABASE_URL", TEST_SHARED_DSN)
 
 from matrix_shared import local_session_scope, shared_session_scope
-from matrix_shared.models import MarketTrade, PaperPosition, Prediction
+from matrix_shared.models import MarketTrade, PaperPosition, Prediction, StrategyConfig
 from matrix_shared.models.slot_config import StrategySlotConfig
 
 from backtest.paper_trade import _open_for_market
@@ -82,3 +82,17 @@ async def test_champion_pass_ignores_shadow_predictions(shadow_setup):
     await _seed(strat, shadow=True)
     await _open_for_market(ASSET)
     assert await _open_count(strat, champion_id) == 0 and await _open_count(strat, shadow_id) == 0
+
+
+async def test_predictions_of_retired_versions_are_never_opened(shadow_setup):
+    strat, champion_id, shadow_id = shadow_setup
+    async with shared_session_scope() as session:
+        session.add(StrategyConfig(strategy_id=strat, asset_class=ASSET, version=3, status="retired",
+                                   params={}, rationale="t"))
+    try:
+        await _seed(strat, shadow=False)            # strategy_version=3 → retired
+        await _open_for_market(ASSET)
+        assert await _open_count(strat, champion_id) == 0
+    finally:
+        async with shared_session_scope() as session:
+            await session.execute(delete(StrategyConfig).where(StrategyConfig.strategy_id == strat))

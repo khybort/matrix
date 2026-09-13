@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from loguru import logger
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 
 from matrix_shared import local_session_scope, shared_session_scope
@@ -30,6 +30,7 @@ from matrix_shared.graph_overlay import link_outcome_node
 from matrix_shared.markets import all_markets
 from matrix_shared.trading import apply_slippage, funding_pnl_usd, virtual_pnl_pct
 from matrix_shared.models import (
+    StrategyConfig,
     MarketBar,
     MarketTrade,
     Outcome,
@@ -611,6 +612,15 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
         pred_stmt = (
             select(Prediction)
             .outerjoin(PaperPosition, PaperPosition.prediction_id == Prediction.id)
+            # A retired version's queued predictions must not be traded: after
+            # a cutover/retire the old version kept filling slots and scoring
+            # outcomes (452 open momentum_xs v1 predictions on 2026-09-13).
+            .outerjoin(StrategyConfig, and_(
+                StrategyConfig.strategy_id == Prediction.strategy_id,
+                StrategyConfig.asset_class == Prediction.asset_class,
+                StrategyConfig.version == Prediction.strategy_version,
+            ))
+            .where(or_(StrategyConfig.status.is_(None), StrategyConfig.status.in_(("active", "shadow"))))
             .where(PaperPosition.id.is_(None))
             .where(Prediction.status == "open")
             .where(Prediction.asset_class == asset_class)
