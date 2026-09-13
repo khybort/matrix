@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Claude kimlik senkron launchd işi hiç çalışmamış (Operation not permitted)
+- launchd `~/Documents` altındaki script'i çalıştıramıyor (macOS TCC; log: `bash: ./scripts/claude_creds_sync.sh: Operation not permitted`, exit 126). `make claude-creds-install` artık script'i `~/.matrix/bin/`e kopyalar, plist oradan çalıştırır; periyot 60 → 30 dk. Token bitimine ~2.5 saat kala fark edildi; iş yüklendi ve doğrulandı (exit 0).
+
 ## 2026-09-13 — notify: günlük LLM bütçe alarmı
 - `health.py` kullanım defterinden bugünkü harcamayı okur; `MATRIX_LLM_DAILY_BUDGET_USD` (vars. 25) aşılırsa ⚡ alarm (stateful, düzelince "Recovered"). notify dev overlay'ine `matrix_claude_config` volume'u salt-okunur eklendi.
 

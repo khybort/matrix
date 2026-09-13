@@ -7,9 +7,9 @@
   <array>
     <string>/bin/bash</string>
     <string>-lc</string>
-    <string>cd "$HOME/Documents/personal/matrix" && ./scripts/claude_creds_sync.sh</string>
+    <string>"$HOME/.matrix/bin/claude_creds_sync.sh"</string>
   </array>
-  <key>StartInterval</key><integer>3600</integer>
+  <key>StartInterval</key><integer>1800</integer>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>/tmp/matrix-claude-creds.log</string>
   <key>StandardErrorPath</key><string>/tmp/matrix-claude-creds.log</string>

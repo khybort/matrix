@@ -77,6 +77,9 @@
   1.4k boşa LLM çağrısı. Kural: üretim, tüketim kapasitesine (slot × k) bağlı olsun; `matrix_shared.backpressure.room()`.
 
 ## LLM / kimlik
+- **2026-09-13 — launchd + ~/Documents = çalışmaz.** macOS TCC yüzünden launchd ajanı `~/Documents` altındaki script'i
+  çalıştıramaz (exit 126, 'Operation not permitted'), log'a bakılmazsa sessizce ölü kalır. Periyodik host işlerini
+  `~/.matrix/bin/`e kopyala, plist'i oraya işaret ettir, kurulumdan sonra `launchctl list` exit kodunu doğrula.
 - `claude setup-token` uzun ömürlü token'ları bu hesapta 401 verdi → host keychain oturumu (refresh token'sız) saatlik
   volume senkronu (`scripts/claude_creds_sync.sh`). Token'ları asla loga/rapora yazma.
 - `from __future__ import annotations` modülün ilk statement'ı olmalı (docstring hariç).

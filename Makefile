@@ -317,6 +317,7 @@ stats: ## Quick state summary (counts per major table)
 		UNION ALL SELECT 'lab_evaluations', COUNT(*) FROM lab_evaluations \
 		UNION ALL SELECT 'mutation_proposals', COUNT(*) FROM mutation_proposals \
 		UNION ALL SELECT 'bist_symbols', COUNT(*) FROM bist_symbols \
+		UNION ALL SELECT 'us_symbols', COUNT(*) FROM us_symbols \
 		UNION ALL SELECT 'market_bars', COUNT(*) FROM market_bars \
 		ORDER BY k;"
 
@@ -347,6 +348,31 @@ bist-stats: ## BIST-specific counts (symbols, bars by interval, predictions)
 		UNION ALL SELECT 'bars.1d', COUNT(*) FROM market_bars WHERE asset_class='bist' AND interval='1d' \
 		UNION ALL SELECT 'predictions.bist', COUNT(*) FROM predictions WHERE asset_class='bist' \
 		UNION ALL SELECT 'paper_positions.bist', COUNT(*) FROM paper_positions WHERE asset_class='bist' \
+		ORDER BY k;"
+
+.PHONY: us-seed
+us-seed: ## Discover US symbols (S&P500 + Nasdaq-100; first boot: activates all)
+	$(DC) $(DC_DEV) exec ingestion-market uv run matrix-us-symbols --bootstrap-active
+
+.PHONY: us-discover
+us-discover: ## Refresh US symbol metadata (new listings only; active flags unchanged)
+	$(DC) $(DC_DEV) exec ingestion-market uv run matrix-us-symbols
+
+.PHONY: us-poll
+us-poll: ## Run one US bar poll cycle and exit
+	$(DC) $(DC_DEV) exec ingestion-market uv run matrix-us-bars --once
+
+.PHONY: us-bars-backfill
+us-bars-backfill: ## Backfill US 1m bars (last 5d via yfinance; works off-session)
+	$(DC) $(DC_DEV) exec ingestion-market uv run matrix-us-bars --once --interval 1m --period 5d
+
+.PHONY: us-stats
+us-stats: ## US-specific counts (symbols, bars by interval, predictions)
+	@$(PSQL) -c "SELECT 'us_symbols.active' AS k, COUNT(*) FROM us_symbols WHERE active \
+		UNION ALL SELECT 'bars.1m', COUNT(*) FROM market_bars WHERE asset_class='us' AND interval='1m' \
+		UNION ALL SELECT 'bars.1d', COUNT(*) FROM market_bars WHERE asset_class='us' AND interval='1d' \
+		UNION ALL SELECT 'predictions.us', COUNT(*) FROM predictions WHERE asset_class='us' \
+		UNION ALL SELECT 'paper_positions.us', COUNT(*) FROM paper_positions WHERE asset_class='us' \
 		ORDER BY k;"
 
 ##@ Service shells
@@ -520,7 +546,8 @@ claude-creds-sync: ## Copy the host Claude Code OAuth session (access token only
 
 .PHONY: claude-creds-install
 claude-creds-install: ## Install the hourly launchd job that keeps container Claude auth fresh
-	@cp infra/launchd/com.matrix.claude-creds.plist ~/Library/LaunchAgents/ && launchctl unload ~/Library/LaunchAgents/com.matrix.claude-creds.plist 2>/dev/null; launchctl load ~/Library/LaunchAgents/com.matrix.claude-creds.plist && echo "✓ com.matrix.claude-creds loaded (hourly)"
+	@mkdir -p ~/.matrix/bin && cp scripts/claude_creds_sync.sh ~/.matrix/bin/claude_creds_sync.sh && chmod +x ~/.matrix/bin/claude_creds_sync.sh
+	@cp infra/launchd/com.matrix.claude-creds.plist ~/Library/LaunchAgents/ && launchctl unload ~/Library/LaunchAgents/com.matrix.claude-creds.plist 2>/dev/null; launchctl load ~/Library/LaunchAgents/com.matrix.claude-creds.plist && echo "✓ com.matrix.claude-creds loaded (every 30 min; script copied to ~/.matrix/bin — launchd cannot execute from ~/Documents)"
 
 .PHONY: llm-openrouter
 llm-openrouter: ## Make OpenRouter (free models) the primary LLM backend; subscription stays as fallback
@@ -563,6 +590,48 @@ trade-status: ## Show Bybit network + live execution gate from .env
 .PHONY: llm-status
 llm-status: ## Show current LLM backend + default tier (from .env)
 	@./scripts/llm_backend.sh status
+
+##@ Reliability
+
+LAUNCH_AGENTS := $(HOME)/Library/LaunchAgents
+WATCHDOG_PLISTS := com.matrix.watchdog com.matrix.caffeinate
+# ~/Documents is TCC-protected; launchd cannot exec scripts there. Copy the
+# self-contained watchdog to an unprotected support dir and run it from there.
+WATCHDOG_DIR := $(HOME)/Library/Application Support/matrix
+WATCHDOG_SCRIPT := $(WATCHDOG_DIR)/stall_watchdog.sh
+
+.PHONY: watchdog-install
+watchdog-install: ## Install launchd stall-watchdog + caffeinate (prevents suspend-freeze hangs)
+	@mkdir -p "$(LAUNCH_AGENTS)" "$(HOME)/Library/Logs" "$(WATCHDOG_DIR)"
+	@cp scripts/stall_watchdog.sh "$(WATCHDOG_SCRIPT)"
+	@chmod +x "$(WATCHDOG_SCRIPT)"
+	@for name in $(WATCHDOG_PLISTS); do \
+		sed -e "s|__SCRIPT__|$(WATCHDOG_SCRIPT)|g" -e "s|__HOME__|$(HOME)|g" \
+			"infra/launchd/$$name.plist" > "$(LAUNCH_AGENTS)/$$name.plist"; \
+		launchctl unload "$(LAUNCH_AGENTS)/$$name.plist" 2>/dev/null || true; \
+		launchctl load "$(LAUNCH_AGENTS)/$$name.plist"; \
+		echo "loaded $$name"; \
+	done
+	@echo "watchdog: runs every 5min; log at $(HOME)/Library/Logs/matrix-watchdog.log"
+
+.PHONY: watchdog-uninstall
+watchdog-uninstall: ## Remove launchd stall-watchdog + caffeinate
+	@for name in $(WATCHDOG_PLISTS); do \
+		launchctl unload "$(LAUNCH_AGENTS)/$$name.plist" 2>/dev/null || true; \
+		rm -f "$(LAUNCH_AGENTS)/$$name.plist"; \
+		echo "removed $$name"; \
+	done
+	@rm -f "$(WATCHDOG_SCRIPT)"
+
+.PHONY: watchdog-status
+watchdog-status: ## Show watchdog state + recent actions
+	@launchctl list | grep -E "com\.matrix\.(watchdog|caffeinate)" || echo "not installed"
+	@echo "--- last watchdog actions ---"
+	@tail -n 15 "$(HOME)/Library/Logs/matrix-watchdog.log" 2>/dev/null || echo "(no log yet)"
+
+.PHONY: watchdog-run
+watchdog-run: ## Run the stall watchdog once now (restarts hung services)
+	@./scripts/stall_watchdog.sh
 
 ##@ Cleanup
 
