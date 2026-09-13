@@ -49,6 +49,9 @@ that remain (docs/AUTONOMY_PLAN.md):
 | `make openrouter-models` | Current free OpenRouter models (tool-calling first) when a default vanishes |
 | `make retention-drain` / `make db-compact TABLE=market_trades` | Force the retention backlog through / return disk to the OS (locks the table) |
 | `make backup-now` | Extra backup before risky work (sidecar dumps daily) |
+| `launchctl list \| grep matrix.claude` (last column must be 0), `tail /tmp/matrix-claude-creds.log` | The credentials sync runs from `~/.matrix/bin` every 30 min; launchd cannot execute scripts under `~/Documents` (exit 126) — re-run `make claude-creds-install` after moving the repo |
+| `MATRIX_BACKLOG_SLOTS_MULT` / `MATRIX_BACKLOG_MIN` (env) | Prediction emission cap per strategy = champion slots × mult (default 5, floor 3); logs `backpressure:` lines when trimming. Lower it if LLM volume must drop, raise it if the paper engine starves for candidates |
+| `~/.claude/matrix_usage/YYYY-MM-DD.jsonl` (in the `matrix_claude_config` volume), `MATRIX_LLM_DAILY_BUDGET_USD` (default 25) | Per-call LLM usage ledger read by the Director brief and by notify's daily budget alert |
 | `make reset-capital ASSET=crypto [WALLET=default] [AMOUNT=+346.76]` | Correct a paper wallet's capital without touching predictions/outcomes/lessons (no AMOUNT → back to starting capital). Pending operator action: the shadow-leak refund of +346.76 on default/crypto |
 | `make dev-agent-queue` / Telegram `/dev_tasks`, `/dev_accept <id>`, `/dev_discard <id>`, `/dev_revise <id> <notes>` | Only for tasks left `awaiting_review` (dirty tree or merge conflict); tests+merge are automatic otherwise. Accept performs the real merge (same dirty-tree guard) and only then marks the task merged; notify pushes a 🧩 alert with the commands when a task lands in review |
 
