@@ -92,6 +92,12 @@ def _db_active_universe() -> list[str]:
         return asyncio.run(_async_db_active_universe())
     except Exception:
         return []
+    finally:
+        # The engine created inside that throwaway loop is unusable from the
+        # process's real loop — drop the cache so the service rebuilds it.
+        from matrix_shared.db import reset_engines
+
+        reset_engines()
 
 
 def crypto_universe() -> list[str]:

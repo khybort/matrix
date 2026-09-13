@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-09-13 — Test hygiene: every suite green; engine cache reset after sync bridge
+
+- `matrix_shared.db.reset_engines()` + call from `crypto_universe()`'s sync bridge: the
+  `asyncio.run()` at strategy-module import cached an asyncpg engine bound to a throwaway loop,
+  which later surfaced as "attached to a different loop" (strategy cash_and_carry test; same hazard
+  for any process that imports a strategy module before starting its real loop).
+- dev_agent tests: isolated `<db>_devagent_test` gets AGE + pgvector (in `ag_catalog`, like the live
+  DB) and the `dev_codebase_nodes` table; cursor-runner test drives a fake `cursor` binary
+  (`MATRIX_CURSOR_BIN`) instead of patching a function the runner never called; codebase search now
+  matches ANY token (ranked by hits) instead of the ordered `%a%b%c%` pattern that never matched.
+- labs: `test_safe_apply_takes_lab_promotion_at_strategy_threshold` no longer inserts/applies a
+  proposal against the LIVE `matrix_agent` config (uuid strategy + monkeypatched threshold).
+- shared: crypto_universe "no DB" test simulates the DB path instead of assuming none exists;
+  strategy lesson tests disable the exploration corridor (deterministic drops).
+
 ## 2026-09-13 — P0.7 single live gate + P0.8 circuit trip flattens positions
 
 - `matrix_shared/live_gate.py` is now THE composite gate (posture, flag, cert, circuit, per-trade

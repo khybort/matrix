@@ -155,7 +155,9 @@ async def search_codebase_context(
     if not tokens:
         tokens = ["main"]
 
-    pattern = "%" + "%".join(tokens[:3]) + "%"
+    # Any-token match, ranked by how many tokens hit (the old ordered
+    # "%a%b%c%" pattern almost never matched a multi-word task description).
+    patterns = [f"%{t}%" for t in tokens[:8]]
     rows = await pool.fetch(
         """
         SELECT path, kind, language, loc, summary,
@@ -164,16 +166,17 @@ async def search_codebase_context(
                        SELECT 1 FROM unnest($2::text[]) AS hint(prefix)
                        WHERE dev_codebase_nodes.path LIKE hint.prefix || '%'
                      ) THEN 1
-                     ELSE 0 END) AS path_boost
+                     ELSE 0 END) AS path_boost,
+               (SELECT count(*) FROM unnest($1::text[]) AS pat
+                 WHERE dev_codebase_nodes.path ILIKE pat
+                    OR COALESCE(dev_codebase_nodes.summary, '') ILIKE pat) AS hits
         FROM dev_codebase_nodes
         WHERE kind = 'file'
-          AND (path ILIKE $1 OR COALESCE(summary, '') ILIKE $1)
-        ORDER BY path_boost DESC, loc DESC NULLS LAST, path
+          AND (path ILIKE ANY($1::text[]) OR COALESCE(summary, '') ILIKE ANY($1::text[]))
+        ORDER BY path_boost DESC, hits DESC, loc DESC NULLS LAST, path
         LIMIT $3
         """,
-        pattern,
-        paths,
-        top_k,
+        patterns, paths, top_k,
     )
     if not rows:
         return ""

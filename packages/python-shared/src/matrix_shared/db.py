@@ -71,6 +71,29 @@ def _shared_sessionmaker() -> async_sessionmaker[AsyncSession]:
     )
 
 
+def reset_engines() -> None:
+    """Forget cached engines/sessionmakers so the next call builds fresh ones.
+
+    Needed after any `asyncio.run(...)` bridge (e.g. the sync
+    `crypto_universe()` at module import): asyncpg connections are bound to
+    the loop that created them, and a pool cached from a closed loop raises
+    "attached to a different loop" for the service's real loop later.
+    """
+    for fn in (_local_sessionmaker, _shared_sessionmaker):
+        fn.cache_clear()
+    for fn in (get_local_engine, get_shared_engine):
+        try:
+            engine = fn.__wrapped__() if fn.cache_info().currsize else None  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            engine = None
+        fn.cache_clear()
+        if engine is not None:
+            try:
+                engine.sync_engine.dispose()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 # Legacy single-tier accessors (default to local). New code should be
 # explicit via the tiered functions below.
 def get_engine() -> AsyncEngine:

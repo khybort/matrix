@@ -54,6 +54,19 @@ def _isolated_test_dsn(dsn: str) -> str:
                 await conn.execute(f'CREATE DATABASE "{test_db}"')
         finally:
             await conn.close()
+        # matrix_shared.db sets search_path to include ag_catalog on connect;
+        # a fresh database needs the AGE extension for that schema to exist.
+        db_conn = await asyncpg.connect(urlunsplit(parts._replace(path=f"/{test_db}")))
+        try:
+            await db_conn.execute("CREATE EXTENSION IF NOT EXISTS age")
+            # The live DB has pgvector living in ag_catalog (init SQL sets the
+            # search_path before creating it) and the minimal schema below
+            # references `ag_catalog.vector`; mirror that here.
+            await db_conn.execute("CREATE EXTENSION IF NOT EXISTS vector SCHEMA ag_catalog")
+        except Exception:  # noqa: BLE001 — extensions are optional for these tests
+            await db_conn.execute("CREATE SCHEMA IF NOT EXISTS ag_catalog")
+        finally:
+            await db_conn.close()
 
     _asyncio.run(_ensure())
     return urlunsplit(parts._replace(path=f"/{test_db}"))
@@ -167,6 +180,18 @@ ALTER TABLE dev_tasks ADD COLUMN IF NOT EXISTS review_mode TEXT NOT NULL DEFAULT
 
 -- pgvector lives in ag_catalog. Use schema-qualified type to avoid
 -- search_path gymnastics (ag_catalog.vector is always resolvable).
+CREATE TABLE IF NOT EXISTS dev_codebase_nodes (
+  id              BIGSERIAL PRIMARY KEY,
+  path            TEXT NOT NULL UNIQUE,
+  kind            TEXT NOT NULL,
+  language        TEXT,
+  loc             INTEGER,
+  last_modified   TIMESTAMPTZ,
+  summary         TEXT,
+  embedding       ag_catalog.vector(1536),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS dev_agent_lessons (
   id BIGSERIAL PRIMARY KEY,
   status dev_lesson_status NOT NULL DEFAULT 'draft',
@@ -208,7 +233,7 @@ async def pg_pool(_ensure_schema):
         # Truncate everything, restart sequences. dev_agent_runtime is a
         # singleton — reset its mutable columns, don't delete the row.
         await c.execute("""
-            TRUNCATE TABLE dev_agent_lessons, dev_task_events, dev_task_runs, dev_tasks
+            TRUNCATE TABLE dev_agent_lessons, dev_task_events, dev_task_runs, dev_tasks, dev_codebase_nodes
             RESTART IDENTITY CASCADE
         """)
         await c.execute("""

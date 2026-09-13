@@ -12,19 +12,22 @@ from matrix_shared.agent_runtime.runtime import AgentEvent
 pytestmark = pytest.mark.asyncio
 
 
-async def _fake_stream(*, prompt, system, cwd, max_turns, session_id):
-    yield AgentEvent("tool_use", {
-        "name": "Write",
-        "params": {"file_path": "services/execution/evil.py", "content": "x"},
-        "id": "1",
-    })
+def _fake_cursor_bin(tmp_path: Path) -> Path:
+    """A stand-in `cursor` CLI: emits one stream-json editToolCall against a
+    live-capital gate file, then lingers. The runner must kill it and fail the
+    task with trading_path_violation."""
+    script = tmp_path / "cursor"
+    event = (
+        '{"type":"tool_call","subtype":"started","call_id":"1",'
+        '"tool_call":{"editToolCall":{"args":{"path":"services/execution/src/execution/safety.py"}}}}'
+    )
+    script.write_text("#!/bin/sh\n" + f"printf '%s\\n' '{event}'\n" + "sleep 5\n")
+    script.chmod(0o755)
+    return script
 
 
 async def test_cursor_runner_blocks_trading_path(pg_pool, tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "matrix_shared.cursor_llm.cursor_agent_stream",
-        _fake_stream,
-    )
+    monkeypatch.setenv("MATRIX_CURSOR_BIN", str(_fake_cursor_bin(tmp_path)))
 
     task_id = await pg_pool.fetchval("""
         INSERT INTO dev_tasks (status, source, description, max_turns)

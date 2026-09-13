@@ -130,31 +130,21 @@ async def test_wallet():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_safe_apply_takes_lab_promotion_at_strategy_threshold():
-    """lab_promotion meeting per-strategy scan threshold auto-applies."""
+async def test_safe_apply_takes_lab_promotion_at_strategy_threshold(monkeypatch):
+    """lab_promotion meeting the per-strategy scan threshold auto-applies.
+
+    Uses a uuid-scoped strategy with a monkeypatched per-strategy threshold —
+    the earlier version inserted a proposal against the LIVE matrix_agent
+    config and applied it (and broke once matrix_agent existed in two markets).
+    """
+    from decimal import Decimal as _D
+
+    import labs.promote as P
     from labs.promote import apply_best_pending_safe
 
-    sid = "matrix_agent"
-    async with shared_session_scope() as session:
-        existing = (
-            await session.execute(
-                select(StrategyConfig)
-                .where(StrategyConfig.strategy_id == sid)
-                .where(StrategyConfig.status == "active")
-            )
-        ).scalar_one_or_none()
-        if existing is None:
-            session.add(
-                StrategyConfig(
-                    strategy_id=sid,
-                    asset_class="crypto",
-                    version=1,
-                    status="active",
-                    params={"signal_threshold": "0.18"},
-                    rationale="test-lab-auto",
-                )
-            )
-
+    sid = _make_sid()
+    monkeypatch.setitem(P.STRATEGY_THRESHOLDS, sid, (30, _D("0.05")))
+    await _insert_strategy(sid)
     pid = await _insert_proposal(
         sid,
         proposal_type="lab_promotion",
@@ -166,14 +156,11 @@ async def test_safe_apply_takes_lab_promotion_at_strategy_threshold():
     )
 
     try:
-        applied = await apply_best_pending_safe(min_fitness=Decimal("0.05"))
+        applied = await apply_best_pending_safe(min_fitness=_D("0.05"))
         assert pid in applied
         assert await _get_proposal_status(pid) == "applied"
     finally:
-        async with shared_session_scope() as session:
-            await session.execute(
-                delete(MutationProposal).where(MutationProposal.id == pid)
-            )
+        await _cleanup(sid)
 
 
 @pytest.mark.asyncio

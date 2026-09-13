@@ -33,6 +33,13 @@ def _draft(strategy_id: str, symbol: str, side: str = "long", asset_class: str =
 
 
 @pytest.fixture(autouse=True)
+def _no_bypass_corridor(monkeypatch):
+    """Legacy filter tests expect deterministic drops; the exploration
+    corridor (10% random keep) is exercised by its own test below."""
+    monkeypatch.setattr(lessons, "BYPASS_SHARE", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def _clear_cache():
     lessons._cache = None
     lessons._cache_ts = 0.0
