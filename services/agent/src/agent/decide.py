@@ -18,6 +18,7 @@ from typing import Any
 
 from loguru import logger
 from matrix_shared.agent_lessons import lessons_relevant_to
+from matrix_shared.setup_memory import SetupStats, confidence_adjustment, similar_setups
 
 from agent.config import FALLBACK, AgentConfig
 from agent.features import SymbolFeatures
@@ -248,6 +249,7 @@ def _feature_dump(f: SymbolFeatures) -> dict[str, Any]:
         "funding_rate": str(f.funding_rate) if f.funding_rate else None,
         "open_interest": str(f.open_interest) if f.open_interest else None,
         "oi_delta_pct_5m": str(f.oi_delta_pct_5m) if f.oi_delta_pct_5m else None,
+        "price_change_pct_5m": str(f.price_change_pct_5m) if f.price_change_pct_5m is not None else None,
         "n_news_1h": f.n_news_1h,
         "news_titles_sample": f.news_titles_sample,
         "regime": getattr(f, "regime", "unknown"),
@@ -268,6 +270,7 @@ def _llm_prompt(
     rule: "Decision | None" = None,
     lessons: list | None = None,
     symbol_edge: float | None = None,
+    setups: dict[str, SetupStats] | None = None,
 ) -> str:
     """Everything the quant side knows, so the model reasons over the same
     evidence instead of a bare price/flow snapshot (docs/AUTONOMY_PLAN.md §3.4):
@@ -313,6 +316,16 @@ def _llm_prompt(
                 f"- {h.verdict.upper()} {h.pattern_description} "
                 f"(n={h.n_observations}, win_rate={h.win_rate}, conf={h.confidence:.2f})"
             )
+    if setups:
+        shown = {side: st for side, st in setups.items() if st.n}
+        if shown:
+            parts.append("Nearest past setups of this symbol (cosine over flow/book/funding/OI/regime):")
+            for side, st in shown.items():
+                parts.append(
+                    f"- {side.upper()}: n={st.n} win_rate={st.win_rate:.2f} "
+                    f"[{st.wr_lower:.2f},{st.wr_upper:.2f}] avg_pnl_pct={st.avg_pnl_pct:+.4f} "
+                    f"sim={st.mean_sim:.2f} → {st.verdict}"
+                )
     return "\n".join(parts)
 
 
@@ -435,6 +448,38 @@ def blend_decisions(rule: Decision, llm: "LLMDecision | None", f: SymbolFeatures
                     feature_dump=audit, last_price=f.last_price)
 
 
+async def _setups_both_sides(f: SymbolFeatures, strategy_id: str, asset_class: str) -> dict[str, SetupStats]:
+    feats = _feature_dump(f)
+    out: dict[str, SetupStats] = {}
+    for side in ("long", "short"):
+        out[side] = await similar_setups(symbol=f.symbol, asset_class=asset_class,
+                                         strategy_id=strategy_id, side=side, features=feats)
+    return out
+
+
+async def _apply_setup_memory(d: Decision, f: SymbolFeatures, strategy_id: str, *, asset_class: str) -> Decision:
+    """Nearest-neighbour memory (matrix_shared.setup_memory): `good` bumps
+    confidence, `bad` halves it. Never flips the side, never touches holds or
+    exploration trades (those are the corridor that re-tests the memory)."""
+    if d.side == "hold" or d.feature_dump.get("is_exploration"):
+        return d
+    stats = await similar_setups(symbol=f.symbol, asset_class=asset_class, strategy_id=strategy_id,
+                                 side=d.side, features=d.feature_dump.get("features") or _feature_dump(f))
+    if not stats.n:
+        return d
+    new_conf = confidence_adjustment(stats, d.confidence)
+    audit = {**d.feature_dump, "setup_memory": stats.as_dict()}
+    if new_conf == d.confidence:
+        return Decision(symbol=d.symbol, side=d.side, confidence=d.confidence, thesis=d.thesis,
+                        method=d.method, feature_dump=audit, last_price=d.last_price)
+    tag = "SETUP+" if new_conf > d.confidence else "SETUP-"
+    return Decision(
+        symbol=d.symbol, side=d.side, confidence=new_conf,
+        thesis=f"{tag} k={stats.n} wr={stats.win_rate:.2f} pnl={stats.avg_pnl_pct:+.4f} | {d.thesis}"[:1000],
+        method=f"{d.method}+setup", feature_dump=audit, last_price=d.last_price,
+    )
+
+
 async def decide(
     f: SymbolFeatures,
     cfg: AgentConfig | None = None,
@@ -463,7 +508,8 @@ async def decide(
             hits = await lessons_relevant_to(f, strategy_id, asset_class=asset_class)
         except Exception:  # noqa: BLE001
             hits = []
-        llm = await call_llm_decision(_llm_prompt(f, rule=rule, lessons=hits, symbol_edge=symbol_edge))
+        setups = await _setups_both_sides(f, strategy_id, asset_class)
+        llm = await call_llm_decision(_llm_prompt(f, rule=rule, lessons=hits, symbol_edge=symbol_edge, setups=setups))
         if llm is None:
             logger.debug(f"llm fell back to rule for {f.symbol}")
         base = blend_decisions(rule, llm, f)
@@ -476,8 +522,9 @@ async def decide(
         asset_class=asset_class, symbol_edge=symbol_edge,
     )
 
-    return await _apply_lessons(base, f, strategy_id, asset_class=asset_class,
-                                bypass_roll=explore_rand())
+    d = await _apply_lessons(base, f, strategy_id, asset_class=asset_class,
+                             bypass_roll=explore_rand())
+    return await _apply_setup_memory(d, f, strategy_id, asset_class=asset_class)
 
 
 async def _apply_lessons(
@@ -605,9 +652,10 @@ async def decide_batch(
                 return []
 
         lesson_hits = await asyncio.gather(*[_hits(f, ac) for f, _, ac, _ in items])
+        setup_hits = await asyncio.gather(*[_setups_both_sides(f, strategy_id, ac) for f, _, ac, _ in items])
         prompts = [
-            (f.symbol, _llm_prompt(f, rule=rule, lessons=hits, symbol_edge=edge))
-            for (f, _, _, edge), rule, hits in zip(items, rules, lesson_hits)
+            (f.symbol, _llm_prompt(f, rule=rule, lessons=hits, symbol_edge=edge, setups=setups))
+            for (f, _, _, edge), rule, hits, setups in zip(items, rules, lesson_hits, setup_hits)
         ]
         llm_map = await call_llm_decisions_batch(prompts)
 
@@ -628,9 +676,13 @@ async def decide_batch(
             )
         )
 
+    after_lessons = await asyncio.gather(*[
+        _apply_lessons(b, f, strategy_id, asset_class=asset_class, bypass_roll=explore_rand())
+        for (f, _, asset_class, _), b in zip(items, bases)
+    ])
     return list(
         await asyncio.gather(*[
-            _apply_lessons(b, f, strategy_id, asset_class=asset_class, bypass_roll=explore_rand())
-            for (f, _, asset_class, _), b in zip(items, bases)
+            _apply_setup_memory(d, f, strategy_id, asset_class=asset_class)
+            for (f, _, asset_class, _), d in zip(items, after_lessons)
         ])
     )

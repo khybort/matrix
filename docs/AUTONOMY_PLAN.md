@@ -375,7 +375,12 @@ Emir gönderen tek kod yolu bu.
     tek-atış `OK`, Director ilk LLM tick'ini attı.
 
 2026-09-13: P1.3/P1.5/P1.6/P1.7 ✅ (cert CI alt sınırı + auto-revoke, slot n≥30 Wilson, orphan dışlama, reflection LLM kapısı).
-Sıradaki: P2.5 embedding/benzer-setup, `agent_usage` persist (migration zinciri açılınca — 0038 WIP
+2026-09-13: P2.5 ✅ benzer-setup hafızası embedding sağlayıcısı OLMADAN: `matrix_shared/setup_memory.py` her
+prediction'ın `context.features` snapshot'ını 14 boyutlu normalize vektöre çevirir, aynı sembol/strateji/yön
+tarihinde cosine k-NN (k=20, sim≥0.85; sembol tarihi ince ise asset-class havuzu sim≥0.95) → Wilson aralığı ile
+`good/bad/neutral`; agent kararında güven +0.10 / ÷2 (yön hiç değişmez, exploration koridoru dokunulmaz),
+LLM prompt'una iki yönün komşu istatistikleri eklenir. pgvector kolonu migration zinciri açılınca (vektör tanımı sözleşme).
+Sıradaki: `agent_usage` persist (migration zinciri açılınca — 0038 WIP
 commit'lendiğinde 0039+ eklenebilir), Telegram'dan `awaiting_review` dev task onayı.
 
 Bu 10'dan sonra sistem "çalışıyor gibi görünen" değil, **gerçekten kendini ölçen** hale gelir.

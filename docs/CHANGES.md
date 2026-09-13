@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-09-13 — P2.5 benzer-setup hafızası (embedding'siz k-NN) + paylaşılan Wilson istatistikleri
+- Yeni `matrix_shared/setup_memory.py`: `setup_vector()` prediction `context.features` → 14-dim vektör (flow, book, funding, OI, Δfiyat, haber, regime eksenleri, graph polaritesi); `similar_setups()` aynı sembol/strateji/yön son 60 günde cosine k-NN (k=20, sim≥0.85), sembol tarihi n<10 ise asset-class havuzu (sim≥0.95); Wilson aralığı ile `good/bad/neutral`. Süreç içi 300s satır cache'i; her hata `EMPTY` döner.
+- Agent: `_apply_setup_memory` lesson'lardan sonra çalışır — `good` güven +0.10, `bad` güven ÷2, yön asla değişmez, hold/exploration dokunulmaz; `feature_dump.setup_memory` audit. LLM prompt'una "Nearest past setups" bloğu (long/short). `feature_dump.features` artık `price_change_pct_5m` içerir.
+- Yeni `matrix_shared/stats.py` (`wilson_bounds/lower/upper`); slot_scorer buradan kullanır.
+
 ## 2026-09-13 — Sistem öz-hafızası: docs/ENGINEERING_LESSONS.md + dev_agent lesson retrieval düzeltmesi
 - Yeni `docs/ENGINEERING_LESSONS.md`: bir kez ödenmiş tuzaklar (test harness, izole test DB, json≠jsonb, AGE alias, staging, hot reload, istatistik kararları). CLAUDE.md ve dev_agent BASE_LAYER prompt'u ona işaret eder; kural: yeni ders aynı commit'te eklenir.
 - `dev_agent.memory.search_lessons_text`: tüm görev açıklamasını tek substring olarak arıyordu (hiç eşleşmiyordu) → token bazlı any-match + `relevant_paths` prefix boost. `dev_agent_lessons` tablosuna 10 aktif ders tohumlandı.

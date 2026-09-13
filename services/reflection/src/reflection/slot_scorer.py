@@ -8,7 +8,6 @@ MutationProposal (audit trail — live slots already updated in the same tick).
 
 from __future__ import annotations
 
-import math
 import os
 from datetime import UTC, datetime
 
@@ -16,6 +15,7 @@ from loguru import logger
 from sqlalchemy import func, select
 
 from matrix_shared import shared_session_scope
+from matrix_shared.stats import wilson_lower
 from matrix_shared.models import MutationProposal, PaperPosition, Prediction, Wallet
 from matrix_shared.models.slot_config import StrategySlotConfig
 
@@ -30,17 +30,6 @@ CONSECUTIVE_LOSS_AUTO_CUT = 8
 # (the consecutive-loss auto-cut still fires on its own evidence).
 LAST_N_POSITIONS = 30
 MIN_N_FOR_SLOT_CHANGE = int(os.environ.get("MATRIX_SLOT_MIN_N", "30"))
-
-
-def wilson_lower(wins: int, n: int, z: float = 1.96) -> float:
-    """Lower bound of the Wilson score interval for a win rate."""
-    if n <= 0:
-        return 0.0
-    p = wins / n
-    denom = 1 + z * z / n
-    centre = p + z * z / (2 * n)
-    margin = z * math.sqrt((p * (1 - p) + z * z / (4 * n)) / n)
-    return max(0.0, (centre - margin) / denom)
 
 
 def _perf_score(win_rate: float, avg_pnl_pct: float, total_pnl_usd: float) -> float:
