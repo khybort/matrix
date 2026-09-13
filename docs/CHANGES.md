@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Director yanlış öncülle görev açtı; reaper artefaktları temizlendi
+- Director tick'i (LOCAL tier'a geçtikten sonra) #4–#9 `worker_crash` satırlarını "lessons-feeder çöküyor" diye okuyup görev #13 açtı. O satırlar 14:05 test-DB olayı sonrası reaper damgasıydı → #13 iptal, #4–#9 `discarded` + not. Eski dev-agent worktree/branch'leri (task-2..9, ahead=0) silindi.
+
 ## 2026-09-13 — İlk otonom dev_agent yaması main'e alındı: param_tune soğuma süresi (mutasyon sarmalı)
 - Director'ın açtığı görev #10 (oi_delta v2→v3→v4→v5 mutasyon sarmalı) dev_agent tarafından yazıldı: `PARAM_TUNE_MIN_N` (oi_delta/oi_breakout/grid/dca/funding_reversion için n≥30), `MATRIX_PARAM_TUNE_COOLDOWN_HOURS=24` (aynı stratejide ardışık param_tune arası bekleme), son 3 günde denenen knob'lar `skip_knobs` ile atlanır; 5 yeni test. Görev `test_broke` ile düştü çünkü ilgisiz `test_grants` env'e bağlıydı (`granted_by` "+relaxed" eki `MATRIX_CERT_*` varken gelir) → assert `startswith`. Yama gözden geçirilip elle main'e alındı.
 - `test_operator_directives`: event-loop'lar arası cache'lenmiş engine için `reset_engines()` fixture'ı.
