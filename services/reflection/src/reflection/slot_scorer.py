@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 
 from matrix_shared import shared_session_scope
 from matrix_shared.stats import wilson_lower
-from matrix_shared.models import MutationProposal, PaperPosition, Prediction, Wallet
+from matrix_shared.models import MutationProposal, PaperPosition, Prediction, StrategyConfig, Wallet
 from matrix_shared.models.slot_config import StrategySlotConfig
 
 # Was 5/30; raised CONSEC threshold to 8 (more patient — a short losing streak
@@ -80,11 +80,18 @@ async def score_strategy_slots() -> int:
             if wallet.name == SHADOW_WALLET_NAME:
                 continue
 
+            # Share the wallet only among strategies that actually run here:
+            # slot rows for retired/phantom strategies (BIST modules on the
+            # crypto wallet, test residue) had inflated the divisor to 22 and
+            # cut every real strategy's base share to 80//22 = 3 instead of 8.
             n_active = (
                 await session.execute(
-                    select(func.count(StrategySlotConfig.strategy_id)).where(
-                        StrategySlotConfig.wallet_id == config.wallet_id
-                    )
+                    select(func.count(func.distinct(StrategySlotConfig.strategy_id)))
+                    .select_from(StrategySlotConfig)
+                    .join(StrategyConfig, (StrategyConfig.strategy_id == StrategySlotConfig.strategy_id)
+                          & (StrategyConfig.asset_class == StrategySlotConfig.asset_class))
+                    .where(StrategySlotConfig.wallet_id == config.wallet_id)
+                    .where(StrategyConfig.status.in_(("active", "shadow")))
                 )
             ).scalar_one() or 1
             base_share = max(1, wallet.max_concurrent_positions // n_active)

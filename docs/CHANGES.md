@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Slot payı yalnızca canlı stratejiler arasında bölünür
+- `strategy_slot_configs`'ta 15 hayalet satır (labs test kalıntısı `chal_*`, crypto cüzdanında BIST modülleri) bölen sayısını 22'ye çıkarıyordu: gerçek stratejilerin taban payı 80//22=3 yerine 80//9=8 olmalıydı. Kalıntılar silindi; scorer bölen olarak yalnızca `active`/`shadow` config'i olan stratejileri sayar.
+
 ## 2026-09-13 — Paper engine snapshot yalnızca kayıtlı marketlerin cüzdanları için
 - `snapshot_wallet`/`ensure_shadow_wallets` `all_markets()` dışındaki asset class'ları (testlerin sentetik `test` cüzdanları) atlar; kaybolan bir cüzdan için `wallet_snapshots` FK hatası artık tick'i düşürmez (20:16'da bir tick bu yüzden iptal olmuştu).
 
