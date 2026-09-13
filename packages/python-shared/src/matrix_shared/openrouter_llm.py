@@ -32,6 +32,7 @@ import httpx
 import orjson
 from loguru import logger
 
+from matrix_shared import usage_ledger
 from matrix_shared.agent_runtime.runtime import AgentEvent
 from matrix_shared.agent_runtime.tool import ToolRegistry
 
@@ -193,6 +194,8 @@ async def openrouter_single_shot(
         "agent.usage session=single_shot backend=openrouter model={m} turns=1 cost_usd=0 is_error=False tokens={t}",
         m=msg.get("_model"), t=(msg.get("_usage") or {}).get("total_tokens"),
     )
+    usage_ledger.record(session="single_shot", backend="openrouter", model=msg.get("_model"), turns=1,
+                        cost_usd=0.0, is_error=False)
     return (text or None), False
 
 

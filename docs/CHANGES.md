@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — LLM kullanım defteri (migration'sız `agent_usage`)
+- `matrix_shared/usage_ledger.py`: her `agent.usage` satırı ayrıca `~/.claude/matrix_usage/YYYY-MM-DD.jsonl`'e (tüm LLM servislerinde mount'lu `matrix_claude_config` volume'u) JSON olarak eklenir; `summary(days=)` servis başına çağrı/turn/maliyet/hata verir. subscription, agent tool-loop ve openrouter yollarına bağlandı. Alembic zinciri açılınca tabloya taşınır.
+
 ## 2026-09-13 — Director: discarded görevler rapordan çıktı, yanlış-öncül koruması
 - `dev_tasks_report` `discarded` satırları göstermez; #4–#9'un `failure_reason`'ı temizlendi; Director aynı hayalet "feeder crash" görevini ikinci kez (#16, `max_turns` ile düştü) açmıştı → discarded. System prompt: discarded / `stale_heartbeat` / olaya bağlanmış satırlar bug kanıtı değildir, aynı sorun için ikinci görev açılmaz.
 

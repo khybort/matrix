@@ -20,6 +20,8 @@ from typing import Any
 import orjson
 from loguru import logger
 
+from matrix_shared import usage_ledger
+
 # Model indirection — env-resolvable so a Bedrock/Vertex operator can swap
 # the IDs without code changes. Defaults match the Anthropic API short names
 # used by the subscription path (claude_agent_sdk → claude CLI on
@@ -405,6 +407,8 @@ async def _single_shot_once(
         c=f"{result_cost:.6f}" if result_cost is not None else None,
         e=result_is_err,
     )
+    usage_ledger.record(session="single_shot", backend=backend, model=resolved, turns=1,
+                        cost_usd=result_cost, is_error=bool(result_is_err))
     return (text or None), bool(result_is_err)
 
 
@@ -577,6 +581,10 @@ async def call_subscription_agent(
                 c=f"{cost:.6f}" if isinstance(cost, (int, float)) else cost,
                 e=is_err, x=extras,
             )
+            usage_ledger.record(session=str(session_id), backend=backend, model=resolved_model,
+                                turns=turns if isinstance(turns, int) else None,
+                                cost_usd=cost if isinstance(cost, (int, float)) else None,
+                                is_error=bool(is_err) if is_err is not None else None, reason=reason)
             payload.setdefault("model", resolved_model)
             if backend == "bedrock":
                 _record_bedrock(ok=not is_err)
