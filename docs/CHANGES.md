@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Director: discarded görevler rapordan çıktı, yanlış-öncül koruması
+- `dev_tasks_report` `discarded` satırları göstermez; #4–#9'un `failure_reason`'ı temizlendi; Director aynı hayalet "feeder crash" görevini ikinci kez (#16, `max_turns` ile düştü) açmıştı → discarded. System prompt: discarded / `stale_heartbeat` / olaya bağlanmış satırlar bug kanıtı değildir, aynı sorun için ikinci görev açılmaz.
+
 ## 2026-09-13 — Reflection: challenger koşarken veya öneri beklerken mutasyon yok
 - `_mutation_blocked`: (strateji, market) için `shadow` config varsa ya da aynı versiyondan `pending` öneri varsa tick LLM tool-loop'unu hiç çağırmaz (funding_reversion için 12 dk'da iki öneri üretilmiş, ikincisi zaten uygulanamazdı). Pending dedup artık LLM çağrısından ÖNCE.
 

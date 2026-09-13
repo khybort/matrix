@@ -126,7 +126,7 @@ def build_registry(state: TickState) -> ToolRegistry:
                     "SELECT id, status::text, source::text, failure_reason, left(description, 140) AS description, "
                     "       review_notes, created_at, finished_at FROM dev_tasks "
                     "WHERE status IN ('pending','running','awaiting_review') "
-                    "   OR finished_at >= now() - interval '48 hours' "
+                    "   OR (status <> 'discarded' AND finished_at >= now() - interval '48 hours') "
                     "ORDER BY created_at DESC LIMIT 30"))).mappings().all()
         except Exception as e:  # noqa: BLE001
             return _error(str(e))
