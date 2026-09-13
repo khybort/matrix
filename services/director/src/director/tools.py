@@ -17,7 +17,7 @@ from typing import Any
 
 import orjson
 from loguru import logger
-from matrix_shared import shared_session_scope
+from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.agent_runtime.tool import ToolRegistry, tool
 from sqlalchemy import text
 
@@ -51,7 +51,10 @@ async def file_dev_task_impl(
     """Insert one dev_tasks row, deduped by a content marker for DEV_TASK_DEDUP_DAYS."""
     digest_key = hashlib.sha1(description.strip().lower().encode()).hexdigest()[:10]
     marker = f"[director:{digest_key}]"
-    async with shared_session_scope() as s:
+    # dev_tasks lives on the LOCAL tier (dev_agent reads LOCAL_DATABASE_URL);
+    # the SHARED copy is an empty migration artefact — a row written there is
+    # never picked up (task #11 on 2026-09-13 was stranded that way).
+    async with local_session_scope() as s:
         dup = (await s.execute(text(
             "SELECT id FROM dev_tasks WHERE description LIKE :m "
             "AND created_at >= now() - make_interval(days => :d) LIMIT 1"
@@ -118,7 +121,7 @@ def build_registry(state: TickState) -> ToolRegistry:
           "dev_agent queue: pending / running / awaiting_review / recent failed tasks with reasons.", {})
     async def dev_tasks_report(_args: dict) -> dict:
         try:
-            async with shared_session_scope() as s:
+            async with local_session_scope() as s:
                 rows = (await s.execute(text(
                     "SELECT id, status::text, source::text, failure_reason, left(description, 140) AS description, "
                     "       review_notes, created_at, finished_at FROM dev_tasks "

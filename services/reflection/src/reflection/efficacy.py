@@ -40,7 +40,7 @@ from decimal import Decimal
 from typing import Any
 
 from loguru import logger
-from matrix_shared import shared_session_scope
+from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.models import MutationProposal, Outcome, Prediction, StrategyConfig
 from sqlalchemy import desc, func, select
 
@@ -426,11 +426,6 @@ async def maybe_file_dev_task(strategy_id: str, asset_class: str, *, now: dateti
         )).scalar_one()
         if int(negatives or 0) < DEV_TASK_NEGATIVE_THRESHOLD:
             return None
-        dup = (await session.execute(_text(
-            "SELECT id FROM dev_tasks WHERE description LIKE :m AND created_at >= :since LIMIT 1"
-        ), {"m": f"%{marker}%", "since": since})).scalar()
-        if dup is not None:
-            return None
         recent = (await session.execute(
             select(MutationProposal.proposal_type, MutationProposal.rationale, MutationProposal.metrics_window)
             .where(MutationProposal.strategy_id == strategy_id)
@@ -452,6 +447,14 @@ async def maybe_file_dev_task(strategy_id: str, asset_class: str, *, now: dateti
             f"it trading in the regime where it loses. Keep the change small and covered by tests; "
             f"do not touch risk caps or the live-capital gate files.\n\nRecent evidence:\n{evidence}"
         )
+    # dev_tasks is a LOCAL-tier table (dev_agent reads LOCAL_DATABASE_URL); the
+    # SHARED copy is an empty migration artefact where filed tasks were stranded.
+    async with local_session_scope() as session:
+        dup = (await session.execute(_text(
+            "SELECT id FROM dev_tasks WHERE description LIKE :m AND created_at >= :since LIMIT 1"
+        ), {"m": f"%{marker}%", "since": since})).scalar()
+        if dup is not None:
+            return None
         task_id = (await session.execute(_text(
             "INSERT INTO dev_tasks (source, description, priority, touches_files, run_tests, "
             " review_mode, auto_commit) "

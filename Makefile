@@ -174,6 +174,15 @@ circuit-reset: ## Operator reset of a tripped daily-loss circuit: make circuit-r
 	@if [ -z "$(ASSET)" ]; then echo "Usage: make circuit-reset ASSET=<asset_class> [WALLET=default]" && exit 1; fi
 	$(PSQL_SHARED) -c "UPDATE wallets SET circuit_tripped_at = NULL, day_start_equity = cash_usd + locked_usd, day_start_at = now() WHERE asset_class='$(ASSET)' AND name='$(or $(WALLET),default)' AND circuit_tripped_at IS NOT NULL RETURNING name, asset_class;"
 
+.PHONY: reset-capital
+reset-capital: ## Reset a paper wallet's capital WITHOUT touching learning data: make reset-capital ASSET=crypto [WALLET=default] [AMOUNT=+346.76]
+	@if [ -z "$(ASSET)" ]; then echo "Usage: make reset-capital ASSET=<asset_class> [WALLET=default] [AMOUNT=<signed usd, default: back to starting capital>]" && exit 1; fi
+	@if [ -n "$(AMOUNT)" ]; then \
+	  $(PSQL_SHARED) -c "UPDATE wallets SET cash_usd = cash_usd + ($(AMOUNT)), updated_at = now() WHERE asset_class='$(ASSET)' AND name='$(or $(WALLET),default)' RETURNING name, asset_class, round(cash_usd+locked_usd,2) AS equity;"; \
+	else \
+	  $(PSQL_SHARED) -c "UPDATE wallets SET cash_usd = starting_capital_usd - locked_usd, day_start_equity = starting_capital_usd, day_start_at = now(), circuit_tripped_at = NULL, updated_at = now() WHERE asset_class='$(ASSET)' AND name='$(or $(WALLET),default)' RETURNING name, asset_class, round(cash_usd+locked_usd,2) AS equity;"; \
+	fi
+
 .PHONY: backup-now
 backup-now: ## Run one scheduled-style backup now (pg_dump -Fc, market streams schema-only) → ./backups/<ts>/
 	$(DC) $(DC_BASE) run --rm backup once

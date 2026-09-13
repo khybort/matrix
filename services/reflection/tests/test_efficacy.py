@@ -13,7 +13,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import delete, select
 
-from matrix_shared import shared_session_scope
+from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.models import MutationProposal, Outcome, Prediction, StrategyConfig
 
 from reflection import efficacy as E
@@ -251,14 +251,14 @@ async def test_repeated_negatives_file_one_dev_task(monkeypatch):
                 ))
         assert await E.maybe_file_dev_task(sid, "crypto", now=now) is not None
         assert await E.maybe_file_dev_task(sid, "crypto", now=now) is None  # deduped
-        async with shared_session_scope() as session:
+        async with local_session_scope() as session:  # dev_tasks is a LOCAL-tier table
             rows = (await session.execute(text(
                 "SELECT description, source::text, touches_files FROM dev_tasks WHERE description LIKE :m"
             ), {"m": f"%[efficacy:{sid}/crypto]%"})).all()
             assert len(rows) == 1 and rows[0][1] == "reflection"
             assert "services/strategy/src/strategy/modules/crypto/" in rows[0][2]
     finally:
-        async with shared_session_scope() as session:
+        async with local_session_scope() as session:
             await session.execute(text("DELETE FROM dev_tasks WHERE description LIKE :m"),
                                   {"m": f"%[efficacy:{sid}/crypto]%"})
         await _cleanup(sid)

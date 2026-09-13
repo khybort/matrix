@@ -111,21 +111,6 @@ async def collect_digest(now: datetime | None = None) -> SystemDigest:
                 "SELECT status, proposal_type, count(*) FROM mutation_proposals "
                 "WHERE created_at >= now()-interval '7 days' GROUP BY 1,2 ORDER BY 1,2"))).all()}
 
-            d.dev = {
-                "by_status_7d": {str(st): int(n) for st, n in (await s.execute(text(
-                    "SELECT status::text, count(*) FROM dev_tasks "
-                    "WHERE created_at >= now()-interval '7 days' GROUP BY 1"))).all()},
-                "pending": int((await s.execute(text(
-                    "SELECT count(*) FROM dev_tasks WHERE status='pending'"))).scalar() or 0),
-                "spend_today_usd": float((await s.execute(text(
-                    "SELECT coalesce(sum(total_cost_usd),0) FROM dev_tasks "
-                    "WHERE finished_at >= date_trunc('day', now())"))).scalar() or 0),
-                "recent_failures": [dict(r) for r in (await s.execute(text(
-                    "SELECT id, failure_reason, left(description, 90) AS description "
-                    "FROM dev_tasks WHERE status='failed' AND finished_at >= now()-interval '24 hours' "
-                    "ORDER BY finished_at DESC LIMIT 5"))).mappings().all()],
-            }
-
             d.by_method = [dict(r) for r in (await s.execute(text(
                 "SELECT coalesce(p.context->>'method','(none)') AS method, count(*) AS n, "
                 "       round(sum(o.pnl_usd),2) AS pnl, round(avg((o.pnl_usd>0)::int),3) AS win_rate "
@@ -181,6 +166,27 @@ async def collect_digest(now: datetime | None = None) -> SystemDigest:
         d.health["disk_free_pct"] = round(u.free / u.total * 100, 1)
     except OSError:
         pass
+    # dev_agent queue lives on the LOCAL tier (dev_agent writes LOCAL_DATABASE_URL);
+    # reading the empty SHARED copy made the digest report a permanently idle dev_agent.
+    try:
+        async with local_session_scope() as s:
+            d.dev = {
+                "by_status_7d": {str(st): int(n) for st, n in (await s.execute(text(
+                    "SELECT status::text, count(*) FROM dev_tasks "
+                    "WHERE created_at >= now()-interval '7 days' GROUP BY 1"))).all()},
+                "pending": int((await s.execute(text(
+                    "SELECT count(*) FROM dev_tasks WHERE status='pending'"))).scalar() or 0),
+                "spend_today_usd": float((await s.execute(text(
+                    "SELECT coalesce(sum(total_cost_usd),0) FROM dev_tasks "
+                    "WHERE finished_at >= date_trunc('day', now())"))).scalar() or 0),
+                "recent_failures": [dict(r) for r in (await s.execute(text(
+                    "SELECT id, failure_reason, left(description, 90) AS description "
+                    "FROM dev_tasks WHERE status='failed' AND finished_at >= now()-interval '24 hours' "
+                    "ORDER BY finished_at DESC LIMIT 5"))).mappings().all()],
+            }
+    except Exception as e:  # noqa: BLE001 — digest must never fail the tick
+        logger.warning(f"digest: dev_tasks probe failed: {e}")
+
     return d
 
 

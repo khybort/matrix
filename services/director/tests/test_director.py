@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import text
 
-from matrix_shared import shared_session_scope
+from matrix_shared import local_session_scope, shared_session_scope
 
 from director import tools as T
 from director.digest import SystemDigest, render_brief
@@ -73,12 +73,12 @@ async def test_file_dev_task_dedupes_and_respects_budget(monkeypatch):
         out3 = await T.build_registry(state2).get("file_dev_task").handler(
             {"description": desc, "touches_files": [], "priority": 1})
         assert '"filed":false' in out3["content"][0]["text"]
-        async with shared_session_scope() as s:
+        async with local_session_scope() as s:  # dev_tasks is a LOCAL-tier table
             n = (await s.execute(text("SELECT count(*) FROM dev_tasks WHERE description LIKE :m"),
                                  {"m": f"%{uuid.UUID(desc.split()[3].rstrip(':')).hex}%"})).scalar()
             assert n == 1
     finally:
-        async with shared_session_scope() as s:
+        async with local_session_scope() as s:
             await s.execute(text("DELETE FROM dev_tasks WHERE description LIKE :m"),
                             {"m": f"%{desc[:60]}%"})
 

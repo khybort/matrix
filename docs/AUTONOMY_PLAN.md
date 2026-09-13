@@ -165,7 +165,7 @@ efficacy → rollback        ❌     yok
 | 7 | Migration | profile-gated one-shot | `depends_on: migrate: service_completed_successfully` |
 | 8 | LLM re-auth | Cursor/Bedrock oturumu düşer, fallback yok, alarm yok | backend_state() → alarm + otomatik fallback |
 | 9 | Disk / retention | 97 GB, büyüme sınırsız | time-partition + TTL job |
-| 10 | Wallet reset | Sadece `db-reset` (TRUNCATE CASCADE, öğrenme verisini de siler) | ayrı "reset capital" |
+| 10 | Wallet reset | Sadece `db-reset` (TRUNCATE CASCADE, öğrenme verisini de siler) | ✅ 2026-09-13 `make reset-capital ASSET= [WALLET=] [AMOUNT=]` |
 | 11 | `weight_tune`/`llm_guide` onayı | Dashboard butonu; 7 günde süpürülüyor | ✅ 2026-09-13: challenger modunda LLM önerileri otomatik `shadow` config olur, efficacy karar verir; anahtar doğrulaması var |
 | 12 | `LIVE_EXECUTION_ENABLED`, capital cap, mainnet key | **Tasarım gereği manuel — kalacak** | — |
 
@@ -387,6 +387,8 @@ boş kopyayı okuyordu → LOCAL tier. notify dev overlay'e eklendi (hot reload;
 2026-09-13: KRİTİK bug — challenger (shadow) pozisyonları şampiyon cüzdanına slot cap'siz yazılıyordu; funding_reversion v3
 tek günde 1.198 trade / −$343 (şampiyon v2: 25 trade). Düzeltildi + aday havuzu sıralı + regresyon testi. Bu, G3 (paper pozitif EV)
 ölçümünü de kirletiyordu: şampiyon/challenger PnL'i aynı cüzdanda karışıktı; 2026-09-13 öncesi champion/challenger karşılaştırmaları geçersiz.
+2026-09-13: Director/efficacy `dev_tasks` yazımları SHARED tier'daydı (dev_agent LOCAL okur) → LOCAL'a taşındı; ilk gerçek
+Director görevi (#10, oi_delta mutasyon sarmalı) dev_agent'ta çalışıyor. LLM önerileri artık otomatik challenger (7 tanesi uygulandı).
 Sıradaki: `agent_usage` persist (migration zinciri açılınca — 0038 WIP
 commit'lendiğinde 0039+ eklenebilir), Telegram'dan `awaiting_review` dev task onayı.
 

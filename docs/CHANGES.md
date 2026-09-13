@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-09-13 — Director/efficacy dev task'ları yanlış DB tier'a yazıyordu; `make reset-capital`
+- `director/tools.py` (`file_dev_task`, `dev_tasks_report`), `director/digest.py` (dev bölümü) ve `reflection/efficacy.maybe_file_dev_task` `dev_tasks`'ı SHARED tier'da okuyup yazıyordu; dev_agent LOCAL okur → Director'ın açtığı görev #11 hiç işlenmedi (dev_agent API'den #10 olarak yeniden açıldı, shared kopya `discarded`). Hepsi LOCAL tier'a taşındı; testler de.
+- `make reset-capital ASSET=crypto [WALLET=default] [AMOUNT=+346.76]`: öğrenme verisine dokunmadan paper cüzdan sermayesini düzeltir (AMOUNT verilmezse başlangıç sermayesine döner). Operatör notu: shadow→default sızıntısı default/crypto cüzdanına −$346.76 yazdı; `make reset-capital ASSET=crypto AMOUNT=+346.76` ile geri alınabilir (bu oturumda izin sınıflandırıcısı engelledi).
+
 ## 2026-09-13 — Reflection LLM önerileri otomatik challenger olur (insan onayı kalktı)
 - `labs.promote.apply_best_pending_safe`: `threshold_change` / `weight_tune` (source `agent`|`llm`) önerileri challenger modunda otomatik uygulanır → `shadow` config; efficacy ölçer, ancak kanıtla cutover. Anahtarlar şampiyon params'ında yoksa (hallucinated knob) atlanır ve uyarı loglanır; challenger modu kapalıysa pending kalır (insan). 7 pending LLM önerisi (18:10–18:17) bu yolla işlenir. AUTONOMY_PLAN §6 #11 kapandı.
 
