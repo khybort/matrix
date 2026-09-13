@@ -492,6 +492,14 @@ llm-subscription: ## Route LLM back through Claude Code subscription (OAuth)
 llm-cursor: ## Route all LLM calls through Cursor Auto (`cursor agent login` or API key)
 	@./scripts/llm_backend.sh cursor
 
+.PHONY: llm-openrouter
+llm-openrouter: ## Make OpenRouter (free models) the primary LLM backend; subscription stays as fallback
+	@./scripts/llm_backend.sh openrouter
+
+.PHONY: openrouter-models
+openrouter-models: ## List currently free OpenRouter models (tool-calling ones first)
+	$(DC) $(DC_BASE) exec director uv run python -c "import asyncio,json; from matrix_shared.openrouter_llm import list_free_models; [print(('T ' if m['tools'] else '  ')+m['id'], m['context']) for m in asyncio.run(list_free_models())]"
+
 .PHONY: cursor-login-docker
 cursor-login-docker: ## One-time Cursor CLI login (matrix-agent volume → graph/dev_agent too)
 	@./scripts/cursor_login_docker.sh

@@ -55,6 +55,13 @@ x-python-env: &python-env
   # optional CURSOR_API_KEY. All calls use model=auto (tier pins ignored).
   MATRIX_LLM_BACKEND: ${MATRIX_LLM_BACKEND:-}
   CURSOR_API_KEY: ${CURSOR_API_KEY:-}
+  # OpenRouter (free models): last LLM fallback before the rule path, or primary
+  # when MATRIX_LLM_BACKEND=openrouter. `make llm-openrouter`, `make openrouter-models`.
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  MATRIX_OPENROUTER_MODEL_HAIKU: ${MATRIX_OPENROUTER_MODEL_HAIKU:-}
+  MATRIX_OPENROUTER_MODEL_SONNET: ${MATRIX_OPENROUTER_MODEL_SONNET:-}
+  MATRIX_OPENROUTER_MODEL_OPUS: ${MATRIX_OPENROUTER_MODEL_OPUS:-}
+  MATRIX_OPENROUTER_FALLBACKS: ${MATRIX_OPENROUTER_FALLBACKS:-}
   MATRIX_CURSOR_BIN: ${MATRIX_CURSOR_BIN:-/root/.local/bin/cursor}
   MATRIX_CURSOR_CWD: ${MATRIX_CURSOR_CWD:-/tmp}
   # Screener public-ticker source. MAINNET by default: it reads only public

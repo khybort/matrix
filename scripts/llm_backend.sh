@@ -8,7 +8,7 @@
 # Secrets (AWS creds, optional CURSOR_API_KEY) are written to .env only — never echoed.
 # .env is gitignored.
 #
-# Usage: scripts/llm_backend.sh <bedrock|subscription|cursor|haiku|sonnet|status>
+# Usage: scripts/llm_backend.sh <bedrock|subscription|cursor|openrouter|haiku|sonnet|status>
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -125,6 +125,20 @@ cmd_cursor() {
   echo "  Restart to apply:  make down && make up-dev"
 }
 
+cmd_openrouter() {
+  upsert_env MATRIX_LLM_BACKEND "openrouter"
+  upsert_env CLAUDE_CODE_USE_BEDROCK ""
+  upsert_env AWS_ACCESS_KEY_ID ""
+  upsert_env AWS_SECRET_ACCESS_KEY ""
+  upsert_env AWS_SESSION_TOKEN ""
+  upsert_env AWS_REGION ""
+  echo "✓ LLM backend → OpenRouter primary (free models); subscription stays as fallback if token set"
+  if [ -z "$(get_env OPENROUTER_API_KEY)" ]; then
+    echo "⚠ OPENROUTER_API_KEY is empty in .env — set it (https://openrouter.ai/keys)."
+  fi
+  echo "  Restart to apply:  make restart   (or docker compose up -d)"
+}
+
 cmd_status() {
   local be tier hk sn region keyhint cursor_keyhint
   be="$(get_env MATRIX_LLM_BACKEND)"
@@ -134,7 +148,9 @@ cmd_status() {
   region="$(get_env AWS_REGION)"
   keyhint="$(get_env AWS_ACCESS_KEY_ID | cut -c1-6)"
   cursor_keyhint="$(get_env CURSOR_API_KEY | cut -c1-8)"
-  if [ "$be" = "cursor" ]; then
+  if [ "$be" = "openrouter" ]; then
+    echo "Backend       : openrouter (key=$(get_env OPENROUTER_API_KEY | cut -c1-8)…), subscription fallback=$([ -n "$(get_env CLAUDE_CODE_OAUTH_TOKEN)" ] && echo yes || echo no)"
+  elif [ "$be" = "cursor" ]; then
     cursor_model="$(get_env MATRIX_CURSOR_MODEL)"
     if [ -n "$(get_env CURSOR_API_KEY)" ]; then
       echo "Backend       : cursor-auto (api_key=${cursor_keyhint}…, model=${cursor_model:-auto})"
@@ -157,8 +173,9 @@ case "${1:-}" in
   subscription) cmd_subscription ;;
   bedrock)      cmd_bedrock ;;
   cursor)       cmd_cursor ;;
+  openrouter)   cmd_openrouter ;;
   haiku)        cmd_tier haiku ;;
   sonnet)       cmd_tier sonnet ;;
   status)       cmd_status ;;
-  *) echo "usage: $0 <bedrock|subscription|cursor|haiku|sonnet|status>"; exit 2 ;;
+  *) echo "usage: $0 <bedrock|subscription|cursor|openrouter|haiku|sonnet|status>"; exit 2 ;;
 esac

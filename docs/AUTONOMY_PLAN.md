@@ -316,9 +316,10 @@ Emir gönderen tek kod yolu bu.
 8. ✅ Champion/challenger shadow (P1.2, 97520a2)
 9. ✅ Lesson TTL + exploration koridoru + efficacy (P2.1, 1bcbbfb)
 10. ✅ dev_agent test→commit→merge + guard'lar + efficacy→dev task (P4.1/2/4/5/6, 485239f)
-11. ⏳ OpenRouter backend: `MATRIX_LLM_BACKEND=openrouter`, ücretsiz modeller (`:free` suffix) için
-    tier eşlemesi (`MATRIX_MODEL_<HAIKU|SONNET|OPUS>`), rate-limit/latency'e göre otomatik fallback
-    sırası: subscription → openrouter-free → rule-only. Operatör isteği 2026-09-12.
+11. ✅ OpenRouter backend (`matrix_shared/openrouter_llm.py`): ücretsiz modeller, tier eşlemesi
+    `MATRIX_OPENROUTER_MODEL_*`, model fallback listesi, 429 cooldown; plan sırası
+    subscription → openrouter → rule-only (`MATRIX_LLM_BACKEND=openrouter` ile primary).
+    `OPENROUTER_API_KEY` gerekli; `make openrouter-models` güncel `:free` listesini verir.
 
 12. ✅ Director (P3.1, ilk sürüm): `services/director` — saatlik deterministik digest → Sonnet tool
     loop (`file_dev_task`, `retire_strategy`, `revoke_certificate`; grant/cap/wallet/live yok) →

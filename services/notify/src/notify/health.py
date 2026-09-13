@@ -86,6 +86,8 @@ def llm_configured() -> bool:
         return True
     if os.environ.get("CLAUDE_CODE_USE_VERTEX", "").strip() in ("1", "true"):
         return True
+    if os.environ.get("OPENROUTER_API_KEY", "").strip():
+        return True
     return False
 
 

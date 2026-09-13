@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-09-13 — OpenRouter backend (free models) in the LLM failover chain
+
+- `matrix_shared/openrouter_llm.py`: OpenAI-compatible chat completions with tool calling.
+  `openrouter_single_shot` and `openrouter_agent_stream` (drives the existing `ToolRegistry` via
+  function calling, honours `can_use_tool`, yields the same `AgentEvent`s as the SDK path). Tier map
+  `MATRIX_OPENROUTER_MODEL_<HAIKU|SONNET|OPUS>` (defaults are `:free` models), `MATRIX_OPENROUTER_FALLBACKS`
+  walked on 400/404 model errors, 429 → 90s per-process cooldown, `list_free_models()`.
+- `subscription_llm._plan_backends`: OpenRouter is appended as the LAST LLM in every plan
+  (subscription/bedrock/cursor → openrouter → rule-only) and becomes primary with
+  `MATRIX_LLM_BACKEND=openrouter` (subscription stays as fallback). `subscription_enabled()` is
+  true with only an OpenRouter key. The agent loop now skips a breaker-open subscription and
+  moves to the next backend instead of returning nothing.
+- Wiring: compose `*python-env` passes `OPENROUTER_API_KEY` + model envs; `.env.example` section;
+  `make llm-openrouter`, `make openrouter-models`; notify `llm_configured()` counts the key.
+
 ## 2026-09-13 — Director service (P3.1) + agents always on + LLM → subscription
 
 - New `services/director` (default service, hourly): `digest.py` builds a deterministic system

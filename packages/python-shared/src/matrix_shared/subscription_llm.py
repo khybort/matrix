@@ -163,6 +163,18 @@ def _cursor_ready() -> bool:
     return cursor_enabled()
 
 
+def _openrouter_primary() -> bool:
+    from matrix_shared.openrouter_llm import openrouter_primary
+
+    return openrouter_primary()
+
+
+def _openrouter_ready() -> bool:
+    from matrix_shared.openrouter_llm import openrouter_ready
+
+    return openrouter_ready()
+
+
 def _primary_backend_label() -> str:
     if _cursor_primary():
         return "cursor"
@@ -181,25 +193,36 @@ def backend_state() -> dict[str, Any]:
         "bedrock_next_try_in_s": max(0.0, _bedrock_next_try - now),
         "subscription_available": _subscription_ready(),
         "cursor_available": _cursor_ready(),
+        "openrouter_available": _openrouter_ready(),
     }
 
 
 def _plan_backends() -> list[str]:
-    """Ordered backends to attempt for this call (empty list = degraded → None)."""
+    """Ordered backends to attempt for this call (empty list = degraded → None).
+
+    OpenRouter (free models) sits at the end of every plan as the last LLM
+    before the deterministic rule path, or first when
+    MATRIX_LLM_BACKEND=openrouter.
+    """
+    orr = ["openrouter"] if _openrouter_ready() else []
+    if _openrouter_primary():
+        sub = ["subscription"] if _subscription_ready() and not breaker_is_open() else []
+        return orr + sub
     if _cursor_primary():
-        return ["cursor"] if _cursor_ready() else []
+        return (["cursor"] if _cursor_ready() else []) + orr
     now = time.monotonic()
     if not _bedrock_primary():
-        return ["subscription"] if _subscription_ready() else []
+        sub = ["subscription"] if _subscription_ready() and not breaker_is_open() else []
+        return sub + orr
     sub = ["subscription"] if _subscription_ready() else []
     if _bedrock_demoted:
         # On subscription now; periodically probe Bedrock to restore it.
-        return (["bedrock"] + sub) if now >= _bedrock_next_try else sub
+        return ((["bedrock"] + sub) if now >= _bedrock_next_try else sub) + orr
     # Within the grace window: keep trying Bedrock (respect probe backoff); do
     # NOT use the subscription yet — sustained failure must persist GRACE_S first.
     if now >= _bedrock_next_try:
-        return ["bedrock"]
-    return []
+        return ["bedrock"] + orr
+    return orr
 
 
 def _record_bedrock(ok: bool) -> None:
@@ -282,16 +305,21 @@ def subscription_enabled() -> bool:
       2. Claude Code subscription — `CLAUDE_CODE_OAUTH_TOKEN` set. Default.
       3. AWS Bedrock — `CLAUDE_CODE_USE_BEDROCK=1` + AWS creds in env.
       4. Google Vertex — `CLAUDE_CODE_USE_VERTEX=1` + Google creds in env.
+      5. OpenRouter (free models) — `OPENROUTER_API_KEY`; primary when
+         `MATRIX_LLM_BACKEND=openrouter`, otherwise the last fallback.
 
     The historical name `subscription_*` is kept for backward compatibility —
     read it as "is LLM path ready?".
     """
+    from matrix_shared.openrouter_llm import openrouter_enabled
+
     if _cursor_primary():
-        return _cursor_ready()
+        return _cursor_ready() or openrouter_enabled()
     return bool(
         os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
         or os.environ.get("CLAUDE_CODE_USE_BEDROCK")
         or os.environ.get("CLAUDE_CODE_USE_VERTEX")
+        or openrouter_enabled()
     )
 
 
@@ -303,6 +331,10 @@ async def _single_shot_once(
         from matrix_shared.cursor_llm import cursor_single_shot
 
         return await cursor_single_shot(user=user, system=system, model=model)
+    if backend == "openrouter":
+        from matrix_shared.openrouter_llm import openrouter_single_shot
+
+        return await openrouter_single_shot(user=user, system=system, model=model, tier_of=_TIER_OF)
     try:
         from claude_agent_sdk import ClaudeAgentOptions, query
     except ImportError as e:
@@ -394,7 +426,7 @@ async def call_subscription(
         ok = (not is_err) and text is not None
         if backend == "bedrock":
             _record_bedrock(ok)
-        else:
+        elif backend == "subscription":
             _breaker_record(is_err)
         if ok:
             return text
@@ -458,11 +490,20 @@ async def call_subscription_agent(
     # Streaming loop: pick ONE backend up-front from the failover plan (we can't
     # swap backends mid-stream). Failover to the other backend happens on the
     # NEXT call — fine, since these agent loops recur on a schedule.
-    plan = _plan_backends()
+    plan = [b for b in _plan_backends() if not (b == "subscription" and breaker_is_open())]
     if not plan:
         return
     backend = plan[0]
-    if backend == "subscription" and breaker_is_open():
+
+    if backend == "openrouter":
+        from matrix_shared.openrouter_llm import openrouter_agent_stream
+
+        async for ev in openrouter_agent_stream(
+            prompt=prompt, system=system, model=model, tool_registry=tool_registry,
+            max_turns=max_turns, session_id=session_id, limiter=limiter,
+            can_use_tool=can_use_tool, tier_of=_TIER_OF,
+        ):
+            yield ev
         return
 
     if backend == "cursor":
@@ -530,6 +571,6 @@ async def call_subscription_agent(
             payload.setdefault("model", resolved_model)
             if backend == "bedrock":
                 _record_bedrock(ok=not is_err)
-            else:
+            elif backend == "subscription":
                 _breaker_record(is_err)
         yield ev
