@@ -51,7 +51,7 @@ DEFAULT_REST_BACKFILL_HOURS = 168.0
 # Postgres does the bucketing. ON CONFLICT DO UPDATE makes the operation
 # idempotent: re-running over the same window produces the same bar row
 # (open/close stay stable, late-arriving trades fix any incomplete bar).
-_AGGREGATE_SQL = text("""
+_AGGREGATE_SQL_TEMPLATE = """
 INSERT INTO market_bars
   (id, symbol, asset_class, interval, ts, open, high, low, close, volume, source, created_at)
 SELECT
@@ -69,7 +69,7 @@ SELECT
   NOW()                                     AS created_at
 FROM market_trades
 WHERE trade_ts >= :since
-  AND trade_ts <  :until
+  AND trade_ts <  :until{symbol_clause}
 GROUP BY symbol, exchange, date_trunc('minute', trade_ts)
 ON CONFLICT (asset_class, symbol, interval, ts) DO UPDATE
   SET open   = EXCLUDED.open,
@@ -78,17 +78,33 @@ ON CONFLICT (asset_class, symbol, interval, ts) DO UPDATE
       close  = EXCLUDED.close,
       volume = EXCLUDED.volume,
       source = EXCLUDED.source
-""")
+"""
 
 
-async def aggregate_window(since: datetime, until: datetime) -> int:
+def _aggregate_sql(with_symbols: bool):
+    """The only index on market_trades is (symbol, trade_ts). A time-only
+    predicate walks the WHOLE index (planner cost 7.1M, ~6 min per tick on
+    284M rows — the bars-stale alerts of 2026-09-13); with `symbol = ANY(...)`
+    it becomes one range scan per symbol (cost 18)."""
+    clause = "\n  AND symbol = ANY(:symbols)" if with_symbols else ""
+    return text(_AGGREGATE_SQL_TEMPLATE.format(symbol_clause=clause))
+
+
+_AGGREGATE_SQL = _aggregate_sql(False)
+
+
+async def aggregate_window(since: datetime, until: datetime, symbols: list[str] | None = None) -> int:
     """Aggregate trades in [since, until) into 1m bars. Returns rows affected.
 
     `until` is exclusive so consecutive ticks don't double-count the boundary
-    minute. Re-running over the same window is idempotent (upsert).
+    minute. Re-running over the same window is idempotent (upsert). Pass
+    `symbols` (the streaming universe) whenever known — see `_aggregate_sql`.
     """
+    params: dict = {"since": since, "until": until}
+    if symbols:
+        params["symbols"] = list(symbols)
     async with session_scope() as session:
-        result = await session.execute(_AGGREGATE_SQL, {"since": since, "until": until})
+        result = await session.execute(_aggregate_sql(bool(symbols)), params)
         return result.rowcount or 0
 
 
@@ -272,13 +288,28 @@ async def backfill_all(max_hours: float | None = None) -> int:
     return n
 
 
+# Per-tick 1h rollup window. Startup `backfill_all` covers the long tail; the
+# loop only needs to refresh the current and previous few hours (bars are
+# upserted idempotently, older hours never change).
+ROLLUP_TICK_HOURS = float(os.environ.get("BARS_ROLLUP_TICK_HOURS", "3"))
+
+
+async def _tick_symbols() -> list[str] | None:
+    try:
+        from matrix_shared.markets.crypto import crypto_universe_async
+        syms = await crypto_universe_async()
+        return list(syms) or None
+    except Exception as e:  # noqa: BLE001 — fall back to the unfiltered (slow) query
+        logger.debug(f"bars tick: universe lookup failed ({e}); aggregating all symbols")
+        return None
+
+
 async def tick(lookback_minutes: int) -> int:
     """Re-aggregate the last `lookback_minutes` worth of bars. Idempotent."""
     until = datetime.now(timezone.utc)
     since = until - timedelta(minutes=lookback_minutes)
-    n = await aggregate_window(since, until)
-    # Roll up last 8 days of 1m → 1h (covers momentum_xs 7d lookback + buffer).
-    h_since = until - timedelta(days=8)
+    n = await aggregate_window(since, until, symbols=await _tick_symbols())
+    h_since = until - timedelta(hours=ROLLUP_TICK_HOURS)
     h = await rollup_1h_bars(h_since, until)
     if n or h:
         logger.info(

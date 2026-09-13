@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — bars-aggregator her dakika 284M satırlık indeksi tarıyordu
+- `_AGGREGATE_SQL` yalnızca `trade_ts` ile filtreliyordu; tek indeks `(symbol, trade_ts)` → her tick tüm indeksi yürüyordu (planner maliyeti 7.1M, ~6 dk; bugünkü "bars stale"/"ingestion stale" alarmlarının kaynağı). Tick artık `symbol = ANY(universe)` ekler (maliyet 18); 1h rollup penceresi 8 gün → 3 saat (`BARS_ROLLUP_TICK_HOURS`), tam rollup startup backfill'de.
+
 ## 2026-09-13 — LLM kullanım defteri (migration'sız `agent_usage`)
 - `matrix_shared/usage_ledger.py`: her `agent.usage` satırı ayrıca `~/.claude/matrix_usage/YYYY-MM-DD.jsonl`'e (tüm LLM servislerinde mount'lu `matrix_claude_config` volume'u) JSON olarak eklenir; `summary(days=)` servis başına çağrı/turn/maliyet/hata verir. subscription, agent tool-loop ve openrouter yollarına bağlandı. Alembic zinciri açılınca tabloya taşınır.
 
