@@ -49,7 +49,7 @@ that remain (docs/AUTONOMY_PLAN.md):
 | `make openrouter-models` | Current free OpenRouter models (tool-calling first) when a default vanishes |
 | `make retention-drain` / `make db-compact TABLE=market_trades` | Force the retention backlog through / return disk to the OS (locks the table) |
 | `make backup-now` | Extra backup before risky work (sidecar dumps daily) |
-| `make dev-agent-queue` / `/dev-task accept <id>` | Only for tasks left `awaiting_review` (dirty tree or merge conflict); tests+merge are automatic otherwise |
+| `make dev-agent-queue` / Telegram `/dev_tasks`, `/dev_accept <id>`, `/dev_discard <id>`, `/dev_revise <id> <notes>` | Only for tasks left `awaiting_review` (dirty tree or merge conflict); tests+merge are automatic otherwise. Accept performs the real merge (same dirty-tree guard) and only then marks the task merged; notify pushes a 🧩 alert with the commands when a task lands in review |
 
 ## Failure modes & recovery
 

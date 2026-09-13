@@ -99,12 +99,32 @@ def build_app(pool: asyncpg.Pool) -> FastAPI:
 
     @app.post("/tasks/{task_id}/accept")
     async def accept(task_id: int, body: dict[str, Any]) -> dict[str, str]:
+        """Merge an awaiting_review task's branch into its base branch. The
+        row only becomes `merged` when the merge really happened (before
+        this the endpoint flipped the status and left the branch dangling)."""
+        import asyncio
+        import os
+        from pathlib import Path
+
+        from dev_agent.integrate import merge_reviewed_task
+
+        task = await pool.fetchrow("SELECT id, status, description, base_branch FROM dev_tasks WHERE id=$1", task_id)
+        if task is None:
+            raise HTTPException(404, "task not found")
+        if task["status"] != "awaiting_review":
+            raise HTTPException(409, f"task is {task['status']}, not awaiting_review")
+        repo_root = Path(os.environ.get("DEV_AGENT_REPO_ROOT", "/workspace"))
+        worktree_root = Path(os.environ.get("DEV_AGENT_WORKTREE_ROOT", str(repo_root / "worktrees" / "dev-agent")))
+        ok, note = await asyncio.to_thread(merge_reviewed_task, repo_root, worktree_root, dict(task))
+        if not ok:
+            await pool.execute("UPDATE dev_tasks SET review_notes=$1 WHERE id=$2", note[:500], task_id)
+            raise HTTPException(409, note)
         await pool.execute(
-            "UPDATE dev_tasks SET status='merged', reviewed_at=NOW(), reviewed_by=$1 "
+            "UPDATE dev_tasks SET status='merged', reviewed_at=NOW(), reviewed_by=$1, review_notes=$3 "
             "WHERE id=$2",
-            body.get("by", "user"), task_id,
+            body.get("by", "user"), task_id, note[:500],
         )
-        return {"status": "merged"}
+        return {"status": "merged", "note": note}
 
     @app.post("/tasks/{task_id}/discard")
     async def discard(task_id: int, body: dict[str, Any]) -> dict[str, str]:

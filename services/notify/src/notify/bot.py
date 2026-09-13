@@ -33,6 +33,7 @@ from notify.alerts import (
     format_status,
     format_strategies,
 )
+from notify import dev_client
 from notify.brain_client import ask_brain
 from notify.state import (
     get_active_strategies,
@@ -178,6 +179,55 @@ async def cmd_circuit_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text(f"Nothing to reset: {name}/{asset_class} is not tripped (or not found).")
 
 
+def _task_id(ctx: ContextTypes.DEFAULT_TYPE) -> int | None:
+    args = list(ctx.args or [])
+    try:
+        return int(str(args[0]).lstrip("#"))
+    except (IndexError, ValueError):
+        return None
+
+
+async def cmd_dev_tasks(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _authorized(update, get_allowed_chat_ids()):
+        return
+    await update.message.reply_text(await dev_client.list_awaiting())
+
+
+async def cmd_dev_accept(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Merge an awaiting_review dev_agent task into main. Usage: /dev_accept <id>"""
+    if not _authorized(update, get_allowed_chat_ids()):
+        return
+    task_id = _task_id(ctx)
+    if task_id is None:
+        await update.message.reply_text("Usage: /dev_accept <task_id>")
+        return
+    by = f"telegram:{update.effective_chat.id}"
+    logger.warning(f"dev task #{task_id} accept requested by {by}")
+    await update.message.reply_text(await dev_client.accept(task_id, by=by))
+
+
+async def cmd_dev_discard(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _authorized(update, get_allowed_chat_ids()):
+        return
+    task_id = _task_id(ctx)
+    if task_id is None:
+        await update.message.reply_text("Usage: /dev_discard <task_id>")
+        return
+    by = f"telegram:{update.effective_chat.id}"
+    await update.message.reply_text(await dev_client.discard(task_id, by=by))
+
+
+async def cmd_dev_revise(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _authorized(update, get_allowed_chat_ids()):
+        return
+    task_id = _task_id(ctx)
+    notes = " ".join(list(ctx.args or [])[1:]).strip()
+    if task_id is None or not notes:
+        await update.message.reply_text("Usage: /dev_revise <task_id> <what to change>")
+        return
+    await update.message.reply_text(await dev_client.revise(task_id, notes))
+
+
 # ----------------------------------------------------------------- builder
 
 
@@ -188,6 +238,10 @@ def build_application(token: str) -> Application:
     app.add_handler(CommandHandler("strategies", cmd_strategies))
     app.add_handler(CommandHandler("circuit", cmd_circuit))
     app.add_handler(CommandHandler("circuit_reset", cmd_circuit_reset))
+    app.add_handler(CommandHandler("dev_tasks", cmd_dev_tasks))
+    app.add_handler(CommandHandler("dev_accept", cmd_dev_accept))
+    app.add_handler(CommandHandler("dev_discard", cmd_dev_discard))
+    app.add_handler(CommandHandler("dev_revise", cmd_dev_revise))
     app.add_handler(CommandHandler("help", cmd_help))
     # Any non-command text becomes a question for the Brain.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cmd_ask))

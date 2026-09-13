@@ -55,6 +55,8 @@ class HealthSample:
     agent_llm_predictions_in_window: int = 0
     # dev_agent
     dev_failed_since_prev: list[tuple[int, str]] = field(default_factory=list)
+    # (task_id, first description line, review_notes) newly awaiting an operator
+    dev_awaiting_since_prev: list[tuple[int, str, str]] = field(default_factory=list)
     dev_stuck_running: list[int] = field(default_factory=list)
 
 
@@ -121,6 +123,14 @@ async def collect_health(prev: HealthFlags, now: datetime | None = None) -> Heal
             s.agent_predictions_in_window = int(row.n or 0)
             s.agent_llm_predictions_in_window = int(row.n_llm or 0)
 
+    except Exception as e:  # noqa: BLE001 — health must never crash the poller
+        logger.warning(f"health: shared-tier probe failed: {e}")
+
+    # --- dev_agent (LOCAL tier: dev_agent writes to LOCAL_DATABASE_URL; the
+    # shared copy of dev_tasks is an empty migration artefact, so probing it
+    # there meant these alerts never fired) -----------------------------------
+    try:
+        async with local_session_scope() as session:
             since = prev.last_dev_failed_check or (now.replace(microsecond=0))
             rows = (await session.execute(text(
                 "SELECT id, COALESCE(failure_reason, '') FROM dev_tasks "
@@ -129,13 +139,22 @@ async def collect_health(prev: HealthFlags, now: datetime | None = None) -> Heal
             s.dev_failed_since_prev = [(int(r[0]), str(r[1])) for r in rows]
 
             rows = (await session.execute(text(
+                "SELECT id, description, COALESCE(review_notes, '') FROM dev_tasks "
+                "WHERE status = 'awaiting_review' AND finished_at > :since ORDER BY id"
+            ), {"since": since})).all()
+            s.dev_awaiting_since_prev = [
+                (int(r[0]), str(r[1] or "").strip().splitlines()[0][:80] if r[1] else "", str(r[2])[:120])
+                for r in rows
+            ]
+
+            rows = (await session.execute(text(
                 "SELECT id FROM dev_tasks WHERE status = 'running' "
                 "  AND heartbeat_at IS NOT NULL "
                 "  AND heartbeat_at < now() - (:s || ' seconds')::interval"
             ), {"s": str(DEV_TASK_HEARTBEAT_STALE_S)})).all()
             s.dev_stuck_running = [int(r[0]) for r in rows]
-    except Exception as e:  # noqa: BLE001 — health must never crash the poller
-        logger.warning(f"health: shared-tier probe failed: {e}")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"health: dev_agent probe failed: {e}")
 
     # --- local tier (market data) -----------------------------------------
     try:
@@ -247,6 +266,14 @@ def detect_health_alerts(
         alerts.append((
             ALERT_WARNING,
             f"⚡ dev_agent task #{task_id} failed: {reason or 'no reason recorded'}.",
+        ))
+
+    for task_id, title, notes in s.dev_awaiting_since_prev:
+        alerts.append((
+            ALERT_INFO,
+            f"🧩 dev_agent task #{task_id} awaiting review: {title or 'no description'}"
+            + (f" — {notes}" if notes else "")
+            + f"\nReply /dev_accept {task_id} · /dev_discard {task_id} · /dev_revise {task_id} <notes>",
         ))
 
     return alerts, HealthFlags(active=new_active, last_dev_failed_check=now)

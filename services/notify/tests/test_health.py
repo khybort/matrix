@@ -113,3 +113,15 @@ def test_failed_dev_tasks_are_point_events():
         flags, HealthSample(now=NOW + timedelta(minutes=1), llm_configured=True)
     )
     assert alerts2 == []
+
+
+def test_awaiting_review_tasks_are_point_events_with_commands():
+    sample = _healthy(dev_awaiting_since_prev=[(42, "tighten slippage model", "committed abc123; awaiting review")])
+    alerts, flags = detect_health_alerts(HealthFlags(), sample)
+    assert len(alerts) == 1
+    level, text = alerts[0]
+    assert level == ALERT_INFO and "#42" in text and "tighten slippage" in text
+    assert "/dev_accept 42" in text and "/dev_discard 42" in text
+    # next tick: nothing new → silent
+    alerts2, _ = detect_health_alerts(flags, _healthy())
+    assert alerts2 == []

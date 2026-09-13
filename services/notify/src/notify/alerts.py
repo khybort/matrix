@@ -207,6 +207,8 @@ def format_help() -> str:
         "/strategies   — active strategy configs + cert state\n"
         "/circuit      — daily-loss circuit breaker state\n"
         "/circuit_reset <asset_class> [wallet] — operator reset of a tripped circuit\n"
+        "/dev_tasks    — dev_agent tasks awaiting review\n"
+        "/dev_accept <id> · /dev_discard <id> · /dev_revise <id> <notes>\n"
         "/help         — this message\n\n"
         "Push alerts you'll get automatically:\n"
         "  ⚠️ circuit tripped\n"
@@ -215,5 +217,6 @@ def format_help() -> str:
         "  ℹ️ paper_trade_certificate granted\n"
         "  ℹ️ daily summary (once per UTC day)\n"
         "  ⚠️ paper engine / ingestion stalled, disk pressure\n"
-        "  ⚡ signals stalled, LLM path rule-only, dev_agent task failed/stuck"
+        "  ⚡ signals stalled, LLM path rule-only, dev_agent task failed/stuck\n"
+        "  🧩 dev_agent task awaiting your review"
     )

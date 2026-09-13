@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-09-13 — Telegram'dan dev task onayı; accept gerçekten merge eder; notify dev_agent probe tier fix
+- notify: `/dev_tasks`, `/dev_accept <id>`, `/dev_discard <id>`, `/dev_revise <id> <notes>` (yeni `notify/dev_client.py`, dev_agent REST `DEV_AGENT_API_URL`, vars. `http://dev_agent:8009`); `awaiting_review`'a düşen görev için 🧩 push (komutlarla). Health: `dev_tasks` probe'ları SHARED yerine LOCAL tier'dan (shared kopya boş migration artefaktı → failed/stuck alarmları hiç çalmıyordu).
+- dev_agent `POST /tasks/{id}/accept`: `merge_reviewed_task` — branch'i base'e merge eder (dirty-tree guard, worktree temizliği); başarısızsa 409 + `review_notes`, status `awaiting_review` kalır. Önceden yalnızca status'u `merged` yapıyor, branch askıda kalıyordu.
+- `docker-compose.dev.yml`: notify hot-reload girdisi (image'daki eski kodu çalıştırıyordu).
+
 ## 2026-09-13 — P2.5 benzer-setup hafızası (embedding'siz k-NN) + paylaşılan Wilson istatistikleri
 - Yeni `matrix_shared/setup_memory.py`: `setup_vector()` prediction `context.features` → 14-dim vektör (flow, book, funding, OI, Δfiyat, haber, regime eksenleri, graph polaritesi); `similar_setups()` aynı sembol/strateji/yön son 60 günde cosine k-NN (k=20, sim≥0.85), sembol tarihi n<10 ise asset-class havuzu (sim≥0.95); Wilson aralığı ile `good/bad/neutral`. Süreç içi 300s satır cache'i; her hata `EMPTY` döner.
 - Agent: `_apply_setup_memory` lesson'lardan sonra çalışır — `good` güven +0.10, `bad` güven ÷2, yön asla değişmez, hold/exploration dokunulmaz; `feature_dump.setup_memory` audit. LLM prompt'una "Nearest past setups" bloğu (long/short). `feature_dump.features` artık `price_change_pct_5m` içerir.

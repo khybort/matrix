@@ -116,3 +116,70 @@ async def test_lessons_list_filter_by_status(pg_pool):
         assert r.status_code == 200
         items = r.json()
         assert any(l["topic"] == "t1" for l in items)
+
+
+def _git(cwd, *args):
+    import subprocess
+    return subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True).stdout
+
+
+def _repo_with_task_branch(tmp_path, task_id: int):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    (repo / "a.txt").write_text("a\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "init")
+    _git(repo, "checkout", "-q", "-b", f"dev-agent/task-{task_id}")
+    (repo / "b.txt").write_text("from agent\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "agent change")
+    _git(repo, "checkout", "-q", "main")
+    return repo
+
+
+async def test_accept_merges_branch_into_main(pg_pool, tmp_path, monkeypatch):
+    task_id = await pg_pool.fetchval(
+        "INSERT INTO dev_tasks (status, source, description) VALUES ('awaiting_review','manual','merge me') RETURNING id"
+    )
+    repo = _repo_with_task_branch(tmp_path, task_id)
+    monkeypatch.setenv("DEV_AGENT_REPO_ROOT", str(repo))
+    monkeypatch.setenv("DEV_AGENT_WORKTREE_ROOT", str(tmp_path / "wt"))
+    app = build_app(pool=pg_pool)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.post(f"/tasks/{task_id}/accept", json={"by": "telegram:1"})
+    assert r.status_code == 200 and r.json()["status"] == "merged"
+    assert (repo / "b.txt").exists()
+    row = await pg_pool.fetchrow("SELECT status, reviewed_by FROM dev_tasks WHERE id=$1", task_id)
+    assert row["status"] == "merged" and row["reviewed_by"] == "telegram:1"
+    assert f"dev-agent/task-{task_id}" not in _git(repo, "branch", "--list")
+
+
+async def test_accept_refuses_when_repo_has_overlapping_dirty_edits(pg_pool, tmp_path, monkeypatch):
+    task_id = await pg_pool.fetchval(
+        "INSERT INTO dev_tasks (status, source, description) VALUES ('awaiting_review','manual','dirty') RETURNING id"
+    )
+    repo = _repo_with_task_branch(tmp_path, task_id)
+    (repo / "b.txt").write_text("operator WIP\n")  # uncommitted edit to the same file
+    monkeypatch.setenv("DEV_AGENT_REPO_ROOT", str(repo))
+    monkeypatch.setenv("DEV_AGENT_WORKTREE_ROOT", str(tmp_path / "wt"))
+    app = build_app(pool=pg_pool)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.post(f"/tasks/{task_id}/accept", json={})
+        assert r.status_code == 409 and "uncommitted" in r.json()["detail"]
+        r2 = await client.post(f"/tasks/{task_id}/accept", json={})
+    row = await pg_pool.fetchrow("SELECT status, review_notes FROM dev_tasks WHERE id=$1", task_id)
+    assert row["status"] == "awaiting_review" and "not merged" in row["review_notes"]
+    assert r2.status_code == 409
+
+
+async def test_accept_rejects_non_review_tasks(pg_pool):
+    task_id = await pg_pool.fetchval(
+        "INSERT INTO dev_tasks (status, source, description) VALUES ('pending','manual','x') RETURNING id"
+    )
+    app = build_app(pool=pg_pool)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.post(f"/tasks/{task_id}/accept", json={})
+    assert r.status_code == 409

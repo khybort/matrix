@@ -380,6 +380,10 @@ prediction'ın `context.features` snapshot'ını 14 boyutlu normalize vektöre �
 tarihinde cosine k-NN (k=20, sim≥0.85; sembol tarihi ince ise asset-class havuzu sim≥0.95) → Wilson aralığı ile
 `good/bad/neutral`; agent kararında güven +0.10 / ÷2 (yön hiç değişmez, exploration koridoru dokunulmaz),
 LLM prompt'una iki yönün komşu istatistikleri eklenir. pgvector kolonu migration zinciri açılınca (vektör tanımı sözleşme).
+2026-09-13: Telegram dev-task onayı ✅ — notify `/dev_tasks` `/dev_accept` `/dev_discard` `/dev_revise` (dev_agent REST'e
+httpx); `awaiting_review`'a düşen görev için 🧩 push. dev_agent `/tasks/{id}/accept` artık gerçekten merge eder (dirty-tree
+guard, worktree temizliği), merge olmadıysa 409 + review_notes. Bug fix: notify dev_tasks probe'ları SHARED tier'da
+boş kopyayı okuyordu → LOCAL tier. notify dev overlay'e eklendi (hot reload; önceden image'daki eski kodu çalıştırıyordu).
 Sıradaki: `agent_usage` persist (migration zinciri açılınca — 0038 WIP
 commit'lendiğinde 0039+ eklenebilir), Telegram'dan `awaiting_review` dev task onayı.
 

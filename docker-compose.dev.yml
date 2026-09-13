@@ -166,6 +166,16 @@ services:
       - *cursor-agent-auth-volume
       - *cursor-config-auth-volume
 
+  notify:
+    <<: *matrix-dev-watch
+    command:
+      - "python -m notify.main --poll-interval 60"
+      - "/workspace/services/notify/src"
+      - "/workspace/packages/python-shared/src"
+    volumes:
+      - ./services/notify/src:/workspace/services/notify/src
+      - ./packages/python-shared/src:/workspace/packages/python-shared/src
+
   synthesis:
     <<: *matrix-dev-watch
     command:

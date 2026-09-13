@@ -68,3 +68,48 @@ async def test_push_continues_when_one_chat_fails(monkeypatch):
     # 2 successes, 1 failure
     assert sent == 2
     assert app.bot.send_message.await_count == 3
+
+
+def _update(chat_id: int):
+    upd = MagicMock()
+    upd.effective_chat.id = chat_id
+    upd.message.reply_text = AsyncMock()
+    return upd
+
+
+async def test_dev_accept_routes_to_client_with_chat_identity(monkeypatch):
+    from notify import bot as B
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "1")
+    calls = []
+
+    async def fake_accept(task_id, *, by):
+        calls.append((task_id, by))
+        return "✅ task #7 merged."
+    monkeypatch.setattr(B.dev_client, "accept", fake_accept)
+    ctx = MagicMock(); ctx.args = ["#7"]
+    upd = _update(1)
+    await B.cmd_dev_accept(upd, ctx)
+    assert calls == [(7, "telegram:1")]
+    upd.message.reply_text.assert_awaited_once_with("✅ task #7 merged.")
+
+
+async def test_dev_commands_ignore_unauthorized_and_validate_usage(monkeypatch):
+    from notify import bot as B
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "1")
+
+    async def never(*a, **k):
+        raise AssertionError("must not call dev_agent")
+    monkeypatch.setattr(B.dev_client, "accept", never)
+    monkeypatch.setattr(B.dev_client, "revise", never)
+    ctx = MagicMock(); ctx.args = ["7"]
+    stranger = _update(999)
+    await B.cmd_dev_accept(stranger, ctx)
+    stranger.message.reply_text.assert_not_awaited()
+    bad = _update(1); ctx.args = ["seven"]
+    await B.cmd_dev_accept(bad, ctx)
+    bad.message.reply_text.assert_awaited_once()
+    assert "Usage" in bad.message.reply_text.await_args.args[0]
+    ctx.args = ["7"]  # revise without notes
+    bad2 = _update(1)
+    await B.cmd_dev_revise(bad2, ctx)
+    assert "Usage" in bad2.message.reply_text.await_args.args[0]

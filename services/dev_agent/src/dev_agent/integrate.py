@@ -220,3 +220,28 @@ async def integrate(
     logger.info(f"task #{task['id']}: merged {wt.branch} → {note[:12]} ({len(files)} files)")
     return IntegrationResult(status="merged", tests=tests, commit_sha=note,
                              changed_files=files, notes=f"merged into {task.get('base_branch') or 'main'} as {note[:12]}")
+
+
+def merge_reviewed_task(repo_root: Path, worktree_root: Path, task: dict[str, Any]) -> tuple[bool, str]:
+    """Operator accepted an `awaiting_review` task (web UI / Telegram): merge
+    its dev-agent/task-N branch into the base branch with the same dirty-tree
+    guard as the auto path. Returns (merged, note). A task whose branch is
+    gone (no changes were produced) counts as merged."""
+    task_id = int(task["id"])
+    base = task.get("base_branch") or "main"
+    branch = f"dev-agent/task-{task_id}"
+    if _git(repo_root, "rev-parse", "--verify", "--quiet", branch, check=False).returncode != 0:
+        return True, "no branch to merge (task produced no changes)"
+    files = [f for f in _git(repo_root, "diff", "--name-only", f"{base}...{branch}").stdout.splitlines() if f]
+    overlap = _dirty_overlap(repo_root, files)
+    if overlap:
+        return False, f"repo has uncommitted edits to {overlap[:5]} — not merged; retry when the tree is clean"
+    first_line = (task.get("description") or "dev_agent change").strip().splitlines()[0][:72]
+    ok, note = merge_into_base(repo_root, branch, base, f"Merge {branch}: {first_line}")
+    if not ok:
+        return False, note
+    try:
+        WorktreeManager(repo_root=repo_root, worktree_root=worktree_root).cleanup(task_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"worktree cleanup after reviewed merge failed: {e}")
+    return True, f"merged into {base} as {note[:12]}"
