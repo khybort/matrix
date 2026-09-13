@@ -176,3 +176,60 @@ async def test_too_young_proposals_are_not_evaluated():
         assert await E.evaluate_applied_proposals(now=now, strategy_id=sid) == {}
     finally:
         await _cleanup(sid)
+
+
+# ---------------------------------------------------------------- challengers
+
+def test_challenger_verdict_rule(monkeypatch):
+    monkeypatch.setattr(E, "CHALLENGER_MIN_N", 5)
+    champ = _sample([0.1, 0.2, 0.0, 0.1, 0.2, 0.1])
+    better = _sample([1.0, 1.1, 0.9, 1.2, 1.0, 1.1])
+    worse = _sample([-1.0, -1.1, -0.9, -1.2, -1.0, -1.1])
+    assert E.challenger_verdict(champ, better, age_h=48) == "cutover"
+    assert E.challenger_verdict(champ, worse, age_h=48) == "retire"
+    assert E.challenger_verdict(champ, _sample([0.1, 0.1]), age_h=48) == "pending"
+    assert E.challenger_verdict(champ, _sample([0.1, 0.1]), age_h=E.CHALLENGER_MAX_HOURS) == "retire"
+    same = _sample([0.1, 0.2, 0.0, 0.1, 0.2, 0.1])
+    assert E.challenger_verdict(champ, same, age_h=48) == "pending"
+
+
+async def test_challenger_cutover_and_retire(monkeypatch):
+    monkeypatch.setattr(E, "CHALLENGER_MIN_N", 5)
+    sid = f"chal_{uuid.uuid4().hex[:6]}"
+    now = datetime.now(UTC)
+    started = now - timedelta(hours=30)
+    try:
+        async with shared_session_scope() as session:
+            session.add(StrategyConfig(strategy_id=sid, asset_class="crypto", version=1, status="active",
+                                       params={"knob": 1}))
+            session.add(StrategyConfig(strategy_id=sid, asset_class="crypto", version=2, status="shadow",
+                                       params={"knob": 2}, promoted_at=started))
+        await _seed(sid, 1, [0.1, 0.0, 0.2, 0.1, 0.0, 0.1], observed_at=started + timedelta(hours=1))
+        await _seed(sid, 2, [1.0, 1.1, 0.9, 1.2, 1.0, 1.1], observed_at=started + timedelta(hours=1))
+        counts = await E.evaluate_challengers(now=now, strategy_id=sid)
+        assert counts == {"cutover": 1}
+        async with shared_session_scope() as session:
+            rows = {r.version: r.status for r in (await session.execute(
+                select(StrategyConfig).where(StrategyConfig.strategy_id == sid))).scalars()}
+            assert rows == {1: "retired", 2: "active"}
+            prop = (await session.execute(select(MutationProposal)
+                    .where(MutationProposal.strategy_id == sid))).scalar_one()
+            assert prop.proposal_type == "cutover" and prop.status == "applied"
+            assert prop.metrics_window["challenger"]["version"] == 2
+
+        # A losing challenger against the new champion gets retired.
+        async with shared_session_scope() as session:
+            session.add(StrategyConfig(strategy_id=sid, asset_class="crypto", version=3, status="shadow",
+                                       params={"knob": 3}, promoted_at=started))
+        await _seed(sid, 3, [-1.0, -1.1, -0.9, -1.2, -1.0, -1.1], observed_at=started + timedelta(hours=2))
+        counts = await E.evaluate_challengers(now=now, strategy_id=sid)
+        assert counts == {"retire": 1}
+        async with shared_session_scope() as session:
+            v3 = (await session.execute(select(StrategyConfig).where(StrategyConfig.strategy_id == sid)
+                                        .where(StrategyConfig.version == 3))).scalar_one()
+            assert v3.status == "retired"
+            v2 = (await session.execute(select(StrategyConfig).where(StrategyConfig.strategy_id == sid)
+                                        .where(StrategyConfig.version == 2))).scalar_one()
+            assert v2.status == "active"
+    finally:
+        await _cleanup(sid)

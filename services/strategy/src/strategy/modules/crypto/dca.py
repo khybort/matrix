@@ -75,6 +75,7 @@ class Dca:
                     last_stmt = (
                         select(Prediction.generated_at)
                         .where(Prediction.strategy_id == STRATEGY_ID)
+                        .where(Prediction.strategy_version == self.version)
                         .where(Prediction.symbol == symbol)
                         .order_by(desc(Prediction.generated_at))
                         .limit(1)

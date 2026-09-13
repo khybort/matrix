@@ -26,6 +26,7 @@ not survive this layer.
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -100,6 +101,13 @@ FORBIDDEN_FIELDS = {
 }
 
 LAB_PROMOTION_TYPE = "lab_promotion"
+
+# Champion/challenger (docs/AUTONOMY_PLAN.md P1.2): when on, applying a param
+# proposal creates a `shadow` config that runs beside the active champion in
+# the shadow wallet; reflection.efficacy promotes (cutover) or retires it on
+# measured PnL. Off → legacy immediate cutover.
+def challenger_mode() -> bool:
+    return os.environ.get("MATRIX_CHALLENGER_MODE", "true").strip().lower() != "false"
 
 # Deterministic strategies whose rule-generated param_tune proposals are
 # eligible for auto-apply. matrix_agent is excluded — weight/param changes
@@ -305,8 +313,15 @@ def _params_equivalent(a: dict[str, Any] | None, b: dict[str, Any] | None) -> bo
     return True
 
 
-async def apply_proposal(proposal_id: uuid.UUID) -> bool:
-    """Apply a pending MutationProposal. Returns True on success."""
+async def apply_proposal(proposal_id: uuid.UUID, *, as_shadow: bool | None = None) -> bool:
+    """Apply a pending MutationProposal. Returns True on success.
+
+    `as_shadow` (default: challenger_mode()) inserts the new version as a
+    `shadow` challenger instead of retiring the champion. Only one challenger
+    per (strategy_id, asset_class) at a time — a second proposal stays pending.
+    """
+    if as_shadow is None:
+        as_shadow = challenger_mode()
     async with shared_session_scope() as session:
         proposal = await session.get(MutationProposal, proposal_id)
         if proposal is None:
@@ -338,15 +353,30 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
         current_params = (current_cfg.params if current_cfg else {}) or {}
         merged_params = _merge_strategy_params(current_params, scrubbed)
 
-        # Retire existing active (same strategy_id + asset_class)
-        retire_stmt = (
-            select(StrategyConfig)
-            .where(StrategyConfig.strategy_id == proposal.strategy_id)
-            .where(StrategyConfig.asset_class == proposal.asset_class)
-            .where(StrategyConfig.status == "active")
-        )
-        for cfg in (await session.execute(retire_stmt)).scalars():
-            cfg.status = "retired"
+        if as_shadow:
+            existing_shadow = (await session.execute(
+                select(StrategyConfig.version)
+                .where(StrategyConfig.strategy_id == proposal.strategy_id)
+                .where(StrategyConfig.asset_class == proposal.asset_class)
+                .where(StrategyConfig.status == "shadow")
+                .limit(1)
+            )).scalar_one_or_none()
+            if existing_shadow is not None:
+                logger.info(
+                    f"apply: {proposal.strategy_id}/{proposal.asset_class} already has challenger "
+                    f"v{existing_shadow}; proposal {proposal_id} stays pending"
+                )
+                return False
+        else:
+            # Legacy cutover: retire existing active (same strategy_id + asset_class)
+            retire_stmt = (
+                select(StrategyConfig)
+                .where(StrategyConfig.strategy_id == proposal.strategy_id)
+                .where(StrategyConfig.asset_class == proposal.asset_class)
+                .where(StrategyConfig.status == "active")
+            )
+            for cfg in (await session.execute(retire_stmt)).scalars():
+                cfg.status = "retired"
 
         # `to_version` is computed when the proposal is created and can go
         # stale if other promotions land first (the version it targets may
@@ -366,7 +396,7 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
             strategy_id=proposal.strategy_id,
             asset_class=proposal.asset_class,
             version=new_version,
-            status="active",
+            status="shadow" if as_shadow else "active",
             params=merged_params,
             rationale=proposal.rationale,
             promoted_at=datetime.now(UTC),
@@ -414,7 +444,11 @@ async def apply_proposal(proposal_id: uuid.UUID) -> bool:
         proposal.applied_at = datetime.now(UTC)
         # Record the version this proposal actually produced (to_version can
         # be stale, see above) so reflection.efficacy compares the right rows.
-        proposal.metrics_window = {**(proposal.metrics_window or {}), "applied_version": new_version}
+        proposal.metrics_window = {
+            **(proposal.metrics_window or {}),
+            "applied_version": new_version,
+            "challenger": bool(as_shadow),
+        }
 
         # If this came from labs, mark the source experiment promoted
         lab_id_str = (proposal.metrics_window or {}).get("lab_experiment_id")

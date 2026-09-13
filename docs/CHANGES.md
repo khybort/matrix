@@ -5,6 +5,23 @@
 
 ---
 
+## 2026-09-12 — P1.2: champion/challenger (shadow configs) end to end
+
+- `MATRIX_CHALLENGER_MODE=true` (default): `labs/promote.apply_proposal` now inserts the new
+  version as `status='shadow'` beside the active champion instead of cutting over (one challenger
+  per strategy/market; a second proposal stays pending). `as_shadow=False` = legacy cutover.
+- Challengers run on the same data: strategy dispatcher instantiates the shadow config too and tags
+  drafts `context.is_shadow=true`; the agent runs a rule-only decision with the shadow
+  `matrix_agent` config (`agent/config.load_shadow_config`, no LLM spend). Module dedup and the
+  agent's `_recent_signal_exists` are version-scoped so champion and challenger don't suppress
+  each other.
+- `backtest/paper_trade`: per-market `shadow` wallet (created at engine start with the default
+  wallet's caps); shadow predictions open only there, champion wallet never sees them.
+  `exchange_shadow` never mirrors challenger trades.
+- `reflection/efficacy.evaluate_challengers`: champion vs challenger outcomes since the challenger
+  started → `cutover` (z ≥ 1, positive PnL) / `retire` (z ≤ −1 or 14 days without a win) /
+  `pending`, with an auditable `cutover` / `challenger_retired` proposal row.
+
 ## 2026-09-12 — P1.1: mutation efficacy + automatic rollback
 
 - `reflection/efficacy.py`: every `applied` proposal (≥24h old) gets a before/after comparison of

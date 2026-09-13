@@ -210,6 +210,8 @@ async def evaluate_applied_proposals(
         if p.proposal_type in _SKIP_TYPES:
             continue
         mw = dict(p.metrics_window or {})
+        if mw.get("challenger"):
+            continue  # judged by evaluate_challengers (champion vs shadow), not before/after
         prev = mw.get("efficacy") or {}
         if prev.get("verdict") in ("positive", "neutral", "negative", "insufficient"):
             continue  # final verdicts are evaluated once
@@ -273,4 +275,103 @@ async def evaluate_applied_proposals(
 
     if counts:
         logger.info("efficacy: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    return counts
+
+
+# --------------------------------------------------------------- challengers
+
+CHALLENGER_MIN_N = int(os.environ.get("MATRIX_CHALLENGER_MIN_N", "50"))
+CHALLENGER_MAX_HOURS = float(os.environ.get("MATRIX_CHALLENGER_MAX_HOURS", "336"))  # 14d
+
+
+def challenger_verdict(champion: Sample, challenger: Sample, *, age_h: float) -> str:
+    """cutover | retire | pending.
+
+    cutover: enough samples, challenger significantly better (z >= Z_POS) and
+             not loss-making; retire: significantly worse, or time is up
+             without a win; pending: keep running.
+    """
+    if challenger.n < CHALLENGER_MIN_N or champion.n < 2:
+        return "retire" if age_h >= CHALLENGER_MAX_HOURS else "pending"
+    se = math.sqrt(champion.var / champion.n + challenger.var / challenger.n)
+    z = (challenger.mean - champion.mean) / se if se > 0 else 0.0
+    if z >= Z_POS and challenger.total > 0 and challenger.mean > champion.mean:
+        return "cutover"
+    if z <= -Z_NEG or age_h >= CHALLENGER_MAX_HOURS:
+        return "retire"
+    return "pending"
+
+
+async def evaluate_challengers(*, now: datetime | None = None, strategy_id: str | None = None) -> dict[str, int]:
+    """Compare every `shadow` config against its active champion since the
+    challenger started; cut over or retire it. Returns counts by verdict."""
+    now = now or datetime.now(UTC)
+    counts: dict[str, int] = {}
+    async with shared_session_scope() as session:
+        stmt = select(StrategyConfig).where(StrategyConfig.status == "shadow")
+        if strategy_id is not None:
+            stmt = stmt.where(StrategyConfig.strategy_id == strategy_id)
+        shadows = list((await session.execute(stmt)).scalars())
+
+    for sh in shadows:
+        started = sh.promoted_at or sh.created_at
+        started = started if started.tzinfo else started.replace(tzinfo=UTC)
+        age_h = (now - started).total_seconds() / 3600.0
+        try:
+            async with shared_session_scope() as session:
+                champ = (await session.execute(
+                    select(StrategyConfig)
+                    .where(StrategyConfig.strategy_id == sh.strategy_id)
+                    .where(StrategyConfig.asset_class == sh.asset_class)
+                    .where(StrategyConfig.status == "active")
+                    .order_by(desc(StrategyConfig.version)).limit(1)
+                )).scalar_one_or_none()
+                if champ is None:
+                    continue
+                c_s = await _sample(session, sh.strategy_id, sh.asset_class, champ.version, started, None)
+                s_s = await _sample(session, sh.strategy_id, sh.asset_class, sh.version, started, None)
+            verdict = challenger_verdict(c_s, s_s, age_h=age_h)
+            counts[verdict] = counts.get(verdict, 0) + 1
+            if verdict == "pending":
+                continue
+            snapshot = {
+                "verdict": verdict,
+                "champion": {"version": champ.version, "n": c_s.n, "mean": round(c_s.mean, 6), "total": round(c_s.total, 4)},
+                "challenger": {"version": sh.version, "n": s_s.n, "mean": round(s_s.mean, 6), "total": round(s_s.total, 4)},
+                "since": started.isoformat(), "evaluated_at": now.isoformat(),
+            }
+            async with shared_session_scope() as session:
+                sh_row = await session.get(StrategyConfig, sh.id)
+                ch_row = await session.get(StrategyConfig, champ.id)
+                if sh_row is None or ch_row is None or sh_row.status != "shadow":
+                    continue
+                if verdict == "cutover":
+                    ch_row.status = "retired"
+                    sh_row.status = "active"
+                    sh_row.promoted_at = now
+                    ptype, pstatus = "cutover", "applied"
+                    logger.warning(
+                        f"efficacy: CUTOVER {sh.strategy_id}/{sh.asset_class} v{champ.version} → "
+                        f"v{sh.version} (challenger mean {s_s.mean:.4f} vs {c_s.mean:.4f}, n={s_s.n})"
+                    )
+                else:
+                    sh_row.status = "retired"
+                    ptype, pstatus = "challenger_retired", "rejected"
+                    logger.info(
+                        f"efficacy: retired challenger {sh.strategy_id}/{sh.asset_class} v{sh.version} "
+                        f"(n={s_s.n}, mean {s_s.mean:.4f} vs champion {c_s.mean:.4f}, age {age_h:.0f}h)"
+                    )
+                session.add(MutationProposal(
+                    strategy_id=sh.strategy_id, asset_class=sh.asset_class,
+                    from_version=champ.version, to_version=sh.version,
+                    proposal_type=ptype, before_params=dict(champ.params or {}),
+                    after_params=dict(sh.params or {}),
+                    metrics_window={**snapshot, "applied_version": sh.version},
+                    rationale=f"challenger evaluation: {verdict}", status=pstatus,
+                    applied_at=now if pstatus == "applied" else None, source="efficacy",
+                ))
+        except Exception as e:  # noqa: BLE001
+            logger.exception(f"efficacy: challenger {sh.strategy_id} v{sh.version} evaluation failed: {e}")
+    if counts:
+        logger.info("challengers: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
     return counts

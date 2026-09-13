@@ -1,18 +1,13 @@
-"""BIST opening-gap fade v1.
+"""US opening-gap fade v1 (long + short).
 
-Hypothesis: BIST equities open with overnight gaps that frequently mean-revert
-within the first session. Large gap up → fade short; large gap down → fade
-long. Long-only constraint (default Turkish equity market rule) means we
-*only* emit `long` signals on gap-downs and `flat`/no-signal on gap-ups, but
-we record the gap-up case in `context` so the dashboard can see what the
-strategy *would* have done.
+Hypothesis: US equities open with overnight gaps that frequently mean-revert
+in the first hour. Large gap up → fade short; large gap down → fade long.
+Unlike BIST, US allows shorting, so both directions are actionable.
 
-Implementation:
-    Read last 1d bar close vs. latest 1m bar (open-of-day proxy in session;
-    latest close out of session) for each active BIST symbol.
-    If gap_pct < -GAP_THRESHOLD → emit long with confidence ~ |gap|.
-    If gap_pct > +GAP_THRESHOLD → record short hypothesis (paper only, not
-    actionable under long-only rule).
+Read prior 1d close vs the latest 1m bar (open-of-day proxy). If
+|gap| >= threshold, emit a fade in the opposite direction, confidence scaling
+with gap magnitude. Dedup against open predictions within one horizon so the
+static opening gap isn't re-emitted every tick.
 
 Horizon: 30min (intraday mean reversion).
 """
@@ -29,35 +24,31 @@ from matrix_shared import session_scope, shared_session_scope
 from matrix_shared.models import Prediction
 
 from strategy.base import PredictionDraft
-from strategy.modules.bist._helpers import (
-    BIST_EXCHANGE,
-    active_bist_symbols,
+from strategy.modules.us._helpers import (
+    US_EXCHANGE,
+    active_us_symbols,
     in_session,
     latest_bar,
     recent_bars,
     safe_pct,
 )
 
-STRATEGY_ID = "bist_gap_fade"
+STRATEGY_ID = "us_gap_fade"
 STRATEGY_VERSION = 1
 GAP_THRESHOLD = Decimal("0.015")  # 1.5%
 GAP_CAP = Decimal("0.05")  # 5% gap → confidence 1.0
 HORIZON_S = 1800  # 30min
 DEFAULT_TP_PCT = Decimal("0.020")  # 2% take-profit
 DEFAULT_SL_PCT = Decimal("0.010")  # 1% stop-loss
-# The opening gap is a once-per-day, slow-moving signal — its value barely
-# moves intraday. Without dedup the 30s generator loop re-emits the same
-# ~28 signals every tick (~960 rows/symbol/session). Suppress re-emission
-# within one horizon window: at most one open prediction per symbol+side
-# at a time, re-evaluated after the outcome window closes.
 DEDUP_WINDOW_S = HORIZON_S
 
 
-class BistGapFade:
+class UsGapFade:
     id: str = STRATEGY_ID
     version: int = STRATEGY_VERSION
-    market: str = "bist"
-    asset_class: str = "bist"
+    market: str = "us"
+    asset_class: str = "us"
+    horizon_seconds: int = HORIZON_S
 
     def __init__(
         self,
@@ -82,7 +73,7 @@ class BistGapFade:
         drafts: list[PredictionDraft] = []
 
         async with session_scope() as session:
-            symbols = await active_bist_symbols(session)
+            symbols = await active_us_symbols(session)
             for symbol in symbols:
                 eod_bars = await recent_bars(session, symbol, interval="1d", n=2)
                 if len(eod_bars) < 1:
@@ -100,13 +91,9 @@ class BistGapFade:
 
                 magnitude = min(abs(gap) / self.gap_cap, Decimal("1"))
                 confidence = max(Decimal("0.05"), magnitude)
+                # Fade the gap: gap down → long bounce; gap up → short fade.
+                side = "long" if gap < 0 else "short"
 
-                # Long-only: only act on gap-down (expect bounce). Gap-up is logged
-                # but emitted as `flat` so the agent never tries to short BIST.
-                side = "long" if gap < 0 else "flat"
-
-                # Dedup against SHARED predictions within dedup_window_s so the
-                # static opening gap isn't re-written every 30s tick.
                 dedup_since = now - timedelta(seconds=self.dedup_window_s)
                 async with shared_session_scope() as shared:
                     dup = (
@@ -128,7 +115,7 @@ class BistGapFade:
                         strategy_id=self.id,
                         strategy_version=self.version,
                         symbol=symbol,
-                        exchange=BIST_EXCHANGE,
+                        exchange=US_EXCHANGE,
                         asset_class=self.asset_class,
                         side=side,
                         confidence=confidence,
@@ -137,16 +124,15 @@ class BistGapFade:
                         generated_at=now,
                         thesis=(
                             f"gap {gap * 100:.2f}% from prior close {prior_close} → "
-                            f"{'long fade' if side == 'long' else 'observed (long-only, skip)'}"
+                            f"{side} fade"
                         ),
                         context={
                             "prior_close": str(prior_close),
                             "last_px": str(last_px),
                             "gap_pct": str(gap),
-                            "long_only": True,
                         },
-                        tp_pct=self.tp_pct if side == "long" else None,
-                        sl_pct=self.sl_pct if side == "long" else None,
+                        tp_pct=self.tp_pct,
+                        sl_pct=self.sl_pct,
                     )
                 )
                 logger.info(

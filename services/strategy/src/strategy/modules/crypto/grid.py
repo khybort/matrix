@@ -169,6 +169,7 @@ class Grid:
                     dup_stmt = (
                         select(Prediction.id)
                         .where(Prediction.strategy_id == STRATEGY_ID)
+                        .where(Prediction.strategy_version == self.version)
                         .where(Prediction.symbol == symbol)
                         .where(Prediction.side == side)
                         .where(Prediction.generated_at >= dedup_since)

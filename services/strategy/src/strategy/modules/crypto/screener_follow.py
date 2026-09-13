@@ -140,6 +140,7 @@ class ScreenerFollow:
                     await shared.execute(
                         select(Prediction.id)
                         .where(Prediction.strategy_id == STRATEGY_ID)
+                        .where(Prediction.strategy_version == self.version)
                         .where(Prediction.symbol == symbol)
                         .where(Prediction.thesis.contains(signal_type))
                         .where(Prediction.generated_at >= cooldown_cutoff)

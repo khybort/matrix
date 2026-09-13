@@ -46,19 +46,60 @@ from matrix_shared.models.slot_config import StrategySlotConfig
 DEFAULT_WALLET_ID = uuid.UUID("00000000-0000-0000-0000-00000000d0e1")
 
 
-async def _resolve_wallet(session, asset_class: str) -> Wallet | None:
-    """The default wallet for a market. Each asset_class has its own capital
-    pool + concurrent-position slots, so a flood of signals in one market
-    can't starve another (Phase 1 fix: BIST gap_fade was filling the shared
-    5-slot pool and crowding crypto out of the candidate queue)."""
+# Challenger (shadow) configs book their paper positions in a separate wallet
+# per market so they never consume champion capital/slots, yet are priced and
+# closed by exactly the same engine. reflection.efficacy compares the two.
+SHADOW_WALLET_NAME = "shadow"
+
+
+async def _resolve_wallet(session, asset_class: str, *, shadow: bool = False) -> Wallet | None:
+    """The default (or shadow) wallet for a market. Each asset_class has its
+    own capital pool + concurrent-position slots, so a flood of signals in one
+    market can't starve another (Phase 1 fix: BIST gap_fade was filling the
+    shared 5-slot pool and crowding crypto out of the candidate queue)."""
+    stmt = select(Wallet).where(Wallet.asset_class == asset_class)
+    if shadow:
+        stmt = stmt.where(Wallet.name == SHADOW_WALLET_NAME)
+    else:
+        stmt = stmt.where(Wallet.name != SHADOW_WALLET_NAME)
     return (
-        await session.execute(
-            select(Wallet)
-            .where(Wallet.asset_class == asset_class)
-            .order_by(Wallet.created_at.asc())
-            .limit(1)
-        )
+        await session.execute(stmt.order_by(Wallet.created_at.asc()).limit(1))
     ).scalar_one_or_none()
+
+
+async def ensure_shadow_wallets() -> int:
+    """Create a `shadow` wallet (same caps as the default) for every market
+    that has a default wallet. Idempotent; called at engine start."""
+    created = 0
+    async with shared_session_scope() as session:
+        wallets = list((await session.execute(select(Wallet))).scalars())
+        by_class: dict[str, list[Wallet]] = {}
+        for w in wallets:
+            by_class.setdefault(w.asset_class, []).append(w)
+        for ac, ws in by_class.items():
+            if any(w.name == SHADOW_WALLET_NAME for w in ws):
+                continue
+            base = sorted(ws, key=lambda w: w.created_at)[0]
+            session.add(Wallet(
+                name=SHADOW_WALLET_NAME,
+                asset_class=ac,
+                starting_capital_usd=base.starting_capital_usd,
+                cash_usd=base.starting_capital_usd,
+                locked_usd=Decimal("0"),
+                max_position_pct=base.max_position_pct,
+                max_concurrent_positions=base.max_concurrent_positions,
+                daily_loss_circuit_pct=base.daily_loss_circuit_pct,
+                day_start_equity=base.starting_capital_usd,
+                day_start_at=datetime.now(UTC),
+                equity_trailing_stop_pct=base.equity_trailing_stop_pct,
+            ))
+            created += 1
+            logger.info(f"created shadow wallet for {ac} (caps copied from {base.name})")
+    return created
+
+
+def _is_shadow_prediction(p: Prediction) -> bool:
+    return bool((p.context or {}).get("is_shadow", False))
 FRESHNESS_S = 60                       # crypto: ticks every few seconds
 FRESHNESS_S_BARS = 60 * 30             # BIST 1m bars + 15min Yahoo delay window
 SLIPPAGE_BPS = Decimal("2")  # legacy flat allowance; live fills use FeeModel via matrix_shared.trading
@@ -400,10 +441,11 @@ async def open_due_positions() -> int:
     total = 0
     for market in all_markets():
         total += await _open_for_market(market.asset_class)
+        total += await _open_for_market(market.asset_class, shadow=True)
     return total
 
 
-async def _open_for_market(asset_class: str) -> int:
+async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
     """Open positions for one market's predictions, enforcing two-layer slot caps:
     1. Wallet-level: total open positions < wallet.max_concurrent_positions
     2. Per-strategy: open positions for strategy < config.allocated_slots
@@ -411,10 +453,11 @@ async def _open_for_market(asset_class: str) -> int:
     All wallet/prediction state lives in SHARED; entry pricing is read from
     the LOCAL tier's market_trades / market_bars."""
     async with shared_session_scope() as session:
-        wallet = await _resolve_wallet(session, asset_class)
+        wallet = await _resolve_wallet(session, asset_class, shadow=shadow)
         if wallet is None:
             # No wallet seeded for this market yet — skip silently. (BIST
-            # gets one via `make bist-wallet-seed` / the 0019 data migration.)
+            # gets one via `make bist-wallet-seed` / the 0019 data migration;
+            # shadow wallets via ensure_shadow_wallets at engine start.)
             return 0
         if wallet.circuit_tripped_at is not None:
             logger.debug(f"circuit tripped ({asset_class}); opening blocked")
@@ -479,9 +522,14 @@ async def _open_for_market(asset_class: str) -> int:
             .where(Prediction.asset_class == asset_class)
             .where(Prediction.side.in_(allowed_sides))
             .where(Prediction.close_by > now)
+            .where(
+                text("coalesce(predictions.context->>'is_shadow', 'false') = :is_shadow")
+            )
             .limit(wallet_slots_left * 5)
         )
-        candidates_raw = list((await session.execute(pred_stmt)).scalars())
+        candidates_raw = list((await session.execute(
+            pred_stmt, {"is_shadow": "true" if shadow else "false"}
+        )).scalars())
 
         # Batch-load per-symbol potential scores for the edge multiplier.
         # Symbols absent from tradable_symbols get score=None → neutral (1.0×).

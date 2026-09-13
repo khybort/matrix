@@ -26,6 +26,7 @@ from matrix_shared.trading_safety import maybe_grant_certificate
 from sqlalchemy import select
 
 from backtest.paper_trade import (
+    ensure_shadow_wallets,
     close_due_positions,
     expire_stale_predictions,
     open_due_positions,
@@ -104,6 +105,11 @@ async def run(interval_s: float) -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _handle_signal)
+
+    try:
+        await ensure_shadow_wallets()
+    except Exception as e:
+        logger.exception(f"ensure_shadow_wallets failed (challengers disabled this run): {e}")
 
     last_cert_check = 0.0
     while not stop.is_set():

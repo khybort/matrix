@@ -25,7 +25,7 @@ from matrix_shared import shared_session_scope
 from matrix_shared.models import MutationProposal, StrategyConfig
 from sqlalchemy import select
 
-from reflection.efficacy import evaluate_applied_proposals, recently_reverted
+from reflection.efficacy import evaluate_applied_proposals, evaluate_challengers, recently_reverted
 from reflection.metrics import metrics_window
 from reflection.mutate import llm_propose, rule_propose, rule_propose_param_tune
 
@@ -176,6 +176,7 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
     # auto-rollback the ones that made things significantly worse.
     try:
         await evaluate_applied_proposals()
+        await evaluate_challengers()
     except Exception:
         logger.exception("efficacy pass failed (non-fatal)")
 

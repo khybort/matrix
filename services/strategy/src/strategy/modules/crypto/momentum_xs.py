@@ -152,6 +152,7 @@ class MomentumXs:
             dup_stmt = (
                 select(Prediction.symbol)
                 .where(Prediction.strategy_id == STRATEGY_ID)
+                .where(Prediction.strategy_version == self.version)
                 .where(Prediction.generated_at >= dedup_since)
             )
             recent_syms: set[str] = {

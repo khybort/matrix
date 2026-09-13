@@ -88,3 +88,20 @@ def test_every_registered_strategy_instantiates_with_empty_params():
             strat = instantiate(cls, symbols=["BTCUSDT"] if market == "crypto" else None,
                                 version=2, params={})
             assert strat.version == 2, cls
+
+
+def test_challenger_instances_are_tagged_and_versioned():
+    from matrix_shared.markets import get_market
+    from strategy.main import _instantiate_for_market
+
+    market = get_market("crypto")
+    configs = {("grid", "crypto"): (4, {"n_grids": 8})}
+    shadows = {("grid", "crypto"): (5, {"n_grids": 12})}
+    instances = _instantiate_for_market(market, ["BTCUSDT"], configs, shadows)
+    grids = [i for i in instances if i.id == "grid"]
+    assert [(g.version, g.n_grids, getattr(g, "matrix_is_shadow", False)) for g in grids] == [
+        (4, 8, False), (5, 12, True),
+    ]
+    # No shadow → champion only.
+    only = [i for i in _instantiate_for_market(market, ["BTCUSDT"], configs, {}) if i.id == "grid"]
+    assert len(only) == 1 and not getattr(only[0], "matrix_is_shadow", False)

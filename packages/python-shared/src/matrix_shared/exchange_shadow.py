@@ -113,6 +113,8 @@ async def shadow_open_position(
         return
     if prediction.asset_class != "crypto" or prediction.exchange != "bybit":
         return
+    if (prediction.context or {}).get("is_shadow"):
+        return  # challenger (shadow-wallet) trade — paper only, never mirrored
     if not _shadow_symbol_allowed(prediction.symbol):
         logger.debug("shadow skip open {}: not in allowlist", prediction.symbol)
         return
@@ -195,7 +197,7 @@ async def shadow_close_position(
 
     async with shared_session_scope() as session:
         pred = await session.get(Prediction, prediction.id)
-    if pred is None:
+    if pred is None or (pred.context or {}).get("is_shadow"):
         return
     shadow = (pred.context or {}).get(_SHADOW_CTX_KEY) or {}
     qty_raw = shadow.get("qty")

@@ -73,6 +73,7 @@ class CashAndCarry:
                 await shared.execute(
                     select(Prediction.symbol)
                     .where(Prediction.strategy_id == STRATEGY_ID)
+                    .where(Prediction.strategy_version == self.version)
                     .where(Prediction.side == "delta_neutral")
                     .where(Prediction.status == "open")
                 )

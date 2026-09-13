@@ -41,7 +41,7 @@ DEFAULT_INTERVAL_S = 15.0
 
 
 async def _recent_signal_exists(
-    symbol: str, asset_class: str, horizon_seconds: int
+    symbol: str, asset_class: str, horizon_seconds: int, version: int | None = None
 ) -> bool:
     """Skip re-emitting while a prior matrix_agent signal is still live.
 
@@ -58,6 +58,7 @@ async def _recent_signal_exists(
                 .where(Prediction.asset_class == asset_class)
                 .where(Prediction.status == "open")
                 .where(Prediction.generated_at >= since)
+                .where(Prediction.strategy_version == version if version is not None else True)
                 .limit(1)
             )
         ).first()
@@ -195,7 +196,7 @@ async def _tick(symbols: list[str]) -> int:
     # would reject the signal anyway. Checks run in parallel.
     async def _has_recent(sym: str, ac: str) -> bool:
         try:
-            return await _recent_signal_exists(sym, ac, cfgs[ac].horizon_seconds)
+            return await _recent_signal_exists(sym, ac, cfgs[ac].horizon_seconds, cfgs[ac].version)
         except Exception:
             return False
 
@@ -246,7 +247,7 @@ async def _tick(symbols: list[str]) -> int:
             continue
 
         # Dedup guard: belt-and-suspenders in case a concurrent tick slipped through
-        if await _recent_signal_exists(symbol, asset_class, cfg.horizon_seconds):
+        if await _recent_signal_exists(symbol, asset_class, cfg.horizon_seconds, cfg.version):
             logger.debug(f"{symbol} [{asset_class}]: dedup skip (concurrent race)")
             continue
 
@@ -282,6 +283,56 @@ async def _tick(symbols: list[str]) -> int:
             f"conf={decision.confidence:.3f} method={decision.method}"
         )
 
+    # Challenger pass: a `shadow` config decides rule-only on the same features
+    # and books into the shadow wallet (context.is_shadow). No LLM spend.
+    try:
+        persisted += await _shadow_pass(valid)
+    except Exception as e:
+        logger.warning(f"shadow pass failed (non-fatal): {e}")
+
+    return persisted
+
+
+async def _shadow_pass(valid: list) -> int:
+    from agent.config import load_shadow_config
+    from agent.decide import rule_decide
+
+    shadow_cfgs = {ac: await load_shadow_config(AGENT_STRATEGY_ID, ac) for ac in {ac for _, ac, _ in valid}}
+    if not any(shadow_cfgs.values()):
+        return 0
+    persisted = 0
+    for symbol, asset_class, feat in valid:
+        sh = shadow_cfgs.get(asset_class)
+        if sh is None:
+            continue
+        d = rule_decide(feat, sh.weights, sh.signal_threshold, asset_class=asset_class)
+        if d.side == "hold" or d.last_price is None or d.confidence < Decimal("0.1"):
+            continue
+        if await _recent_signal_exists(symbol, asset_class, sh.horizon_seconds, sh.version):
+            continue
+        now = datetime.now(UTC)
+        pred = Prediction(
+            strategy_id=AGENT_STRATEGY_ID,
+            strategy_version=sh.version,
+            generated_at=now,
+            symbol=symbol,
+            exchange=_exchange_for(asset_class),
+            asset_class=asset_class,
+            side=d.side,
+            confidence=d.confidence,
+            horizon_seconds=sh.horizon_seconds,
+            close_by=now + timedelta(seconds=sh.horizon_seconds),
+            entry_price_ref=d.last_price,
+            tp_pct=sh.tp_pct,
+            sl_pct=sh.sl_pct,
+            thesis=d.thesis,
+            context={**d.feature_dump, "agent_version": sh.version, "method": "rule+shadow", "is_shadow": True},
+            status="open",
+        )
+        async with shared_session_scope() as session:
+            session.add(pred)
+        persisted += 1
+        logger.info(f"{symbol} [{asset_class}] shadow v{sh.version}: {d.side.upper()} conf={d.confidence:.3f}")
     return persisted
 
 

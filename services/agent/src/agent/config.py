@@ -94,6 +94,12 @@ async def load_agent_config(
         _cache[key] = (now, FALLBACK)
         return FALLBACK
 
+    cfg = _config_from_row(row)
+    _cache[key] = (now, cfg)
+    return cfg
+
+
+def _config_from_row(row: StrategyConfig) -> AgentConfig:
     params = row.params or {}
     raw_w = params.get("weights", {}) or {}
     weights = {
@@ -105,7 +111,7 @@ async def load_agent_config(
     for f in ("trade_flow", "funding", "oi_delta", "ob_imbalance", "news"):
         weights.setdefault(f, Decimal("0.05"))
 
-    cfg = AgentConfig(
+    return AgentConfig(
         version=row.version,
         weights=weights,
         signal_threshold=Decimal(str(params.get("signal_threshold", "0.15"))),
@@ -114,7 +120,35 @@ async def load_agent_config(
         sl_pct=Decimal(str(params.get("sl_pct", "0.01"))),
         explore_epsilon=float(params.get("explore_epsilon", 0.03)),
     )
-    _cache[key] = (now, cfg)
+
+
+_shadow_cache: dict[tuple[str, str], tuple[float, AgentConfig | None]] = {}
+
+
+async def load_shadow_config(
+    strategy_id: str = "matrix_agent", asset_class: str = "crypto"
+) -> AgentConfig | None:
+    """The challenger (`status='shadow'`) config for this market, if any.
+
+    Runs rule-only beside the champion; its predictions carry
+    `context.is_shadow=True` and land in the shadow wallet.
+    """
+    now = time.monotonic()
+    key = (strategy_id, asset_class)
+    cached = _shadow_cache.get(key)
+    if cached and now - cached[0] < CACHE_TTL_S:
+        return cached[1]
+    async with shared_session_scope() as session:
+        row = (await session.execute(
+            select(StrategyConfig)
+            .where(StrategyConfig.strategy_id == strategy_id)
+            .where(StrategyConfig.asset_class == asset_class)
+            .where(StrategyConfig.status == "shadow")
+            .order_by(StrategyConfig.version.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+    cfg = _config_from_row(row) if row is not None else None
+    _shadow_cache[key] = (now, cfg)
     return cfg
 
 

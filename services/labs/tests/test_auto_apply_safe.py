@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import os
+
+os.environ["MATRIX_CHALLENGER_MODE"] = "false"  # these tests assert legacy immediate cutover
+
+import os
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal

@@ -12,10 +12,12 @@ from __future__ import annotations
 
 from strategy.modules.bist import STRATEGIES as _BIST_STRATEGIES
 from strategy.modules.crypto import STRATEGIES as _CRYPTO_STRATEGIES
+from strategy.modules.us import STRATEGIES as _US_STRATEGIES
 
 STRATEGIES_BY_MARKET: dict[str, list[type]] = {
     "crypto": _CRYPTO_STRATEGIES,
     "bist": _BIST_STRATEGIES,
+    "us": _US_STRATEGIES,
 }
 
 __all__ = ["STRATEGIES_BY_MARKET"]

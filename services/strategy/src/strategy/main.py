@@ -42,6 +42,7 @@ DEFAULT_INTERVAL_S = 30.0
 # its params at runtime without restarting the container.
 _CONFIG_TTL_S = 60.0
 _configs_cache: dict[tuple[str, str], tuple[int, dict]] | None = None
+_shadow_cache: dict[tuple[str, str], tuple[int, dict]] = {}
 _configs_ts: float = 0.0
 
 
@@ -51,7 +52,7 @@ async def _active_configs() -> dict[tuple[str, str], tuple[int, dict]]:
     Empty dict when the table has NO active rows at all — bootstrap state,
     every registered strategy runs with module defaults at version 1.
     """
-    global _configs_cache, _configs_ts
+    global _configs_cache, _shadow_cache, _configs_ts
     now = time.monotonic()
     if _configs_cache is not None and now - _configs_ts < _CONFIG_TTL_S:
         return _configs_cache
@@ -59,15 +60,18 @@ async def _active_configs() -> dict[tuple[str, str], tuple[int, dict]]:
     async with shared_session_scope() as session:
         rows = (await session.execute(
             select(StrategyConfig.strategy_id, StrategyConfig.asset_class,
-                   StrategyConfig.version, StrategyConfig.params)
-            .where(StrategyConfig.status == "active")
+                   StrategyConfig.version, StrategyConfig.params, StrategyConfig.status)
+            .where(StrategyConfig.status.in_(("active", "shadow")))
             .order_by(StrategyConfig.version.desc())
         )).all()
 
     cfgs: dict[tuple[str, str], tuple[int, dict]] = {}
-    for sid, ac, ver, params in rows:
-        cfgs.setdefault((sid, ac), (int(ver), dict(params or {})))
+    shadows: dict[tuple[str, str], tuple[int, dict]] = {}
+    for sid, ac, ver, params, status in rows:
+        target = cfgs if status == "active" else shadows
+        target.setdefault((sid, ac), (int(ver), dict(params or {})))
     _configs_cache = cfgs
+    _shadow_cache = shadows
     _configs_ts = now
     return cfgs
 
@@ -76,6 +80,7 @@ def _instantiate_for_market(
     market: MarketAdapter,
     symbols: list[str] | None = None,
     configs: dict[tuple[str, str], tuple[int, dict]] | None = None,
+    shadows: dict[tuple[str, str], tuple[int, dict]] | None = None,
 ) -> list:
     """Build strategy instances for `market`, bound to their active config.
 
@@ -95,9 +100,11 @@ def _instantiate_for_market(
         )
         return []
     configs = configs or {}
+    shadows = shadows if shadows is not None else _shadow_cache
     out = []
     for cls in STRATEGIES_BY_MARKET[market.name]:
-        cfg = configs.get((cls.id, market.asset_class))
+        key = (cls.id, market.asset_class)
+        cfg = configs.get(key)
         if cfg is None:
             if configs:
                 logger.debug(f"strategy {cls.id}/{market.asset_class}: no active config row; skip")
@@ -113,6 +120,20 @@ def _instantiate_for_market(
                 f"({e}); falling back to defaults"
             )
             out.append(instantiate(cls, symbols=symbols, version=version))
+        # Challenger: a `shadow` config runs side by side on the same data; its
+        # drafts are tagged is_shadow so the paper engine books them in the
+        # shadow wallet and reflection.efficacy can compare it to the champion.
+        sh = shadows.get(key)
+        if sh is not None:
+            sh_version, sh_params = sh
+            try:
+                challenger = instantiate(cls, symbols=symbols, version=sh_version, params=sh_params)
+                challenger.matrix_is_shadow = True
+                out.append(challenger)
+            except Exception as e:
+                logger.exception(
+                    f"strategy {cls.id}/{market.asset_class} shadow v{sh_version}: params rejected ({e})"
+                )
     return out
 
 
@@ -132,6 +153,9 @@ async def _tick() -> int:
         for strat in _instantiate_for_market(market, market_symbols, configs):
             try:
                 ds = await strat.generate()
+                if getattr(strat, "matrix_is_shadow", False):
+                    for d in ds:
+                        d.context = {**(d.context or {}), "is_shadow": True}
                 drafts.extend(ds)
             except Exception as e:
                 logger.exception(f"strategy {strat.id} ({market.name}) failed: {e}")
