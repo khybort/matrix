@@ -29,6 +29,7 @@ CONSECUTIVE_LOSS_AUTO_CUT = 8
 # refuse to move slots on fewer than MIN_N_FOR_SLOT_CHANGE closed positions
 # (the consecutive-loss auto-cut still fires on its own evidence).
 LAST_N_POSITIONS = 30
+SHADOW_WALLET_NAME = "shadow"
 MIN_N_FOR_SLOT_CHANGE = int(os.environ.get("MATRIX_SLOT_MIN_N", "30"))
 
 
@@ -72,6 +73,11 @@ async def score_strategy_slots() -> int:
         for config in configs:
             wallet = wallets.get(config.wallet_id)
             if wallet is None:
+                continue
+            # Challenger wallets don't own slots: the paper engine runs the
+            # shadow pass under the CHAMPION wallet's slot configs, so scoring
+            # the shadow wallet's rows only produced noise proposals.
+            if wallet.name == SHADOW_WALLET_NAME:
                 continue
 
             n_active = (

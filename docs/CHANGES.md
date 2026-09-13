@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Slot scorer shadow cüzdan satırlarını puanlamıyor
+- Paper engine shadow pass'i şampiyonun slot config'lerini kullandığı için shadow cüzdanındaki 16 slot satırı yalnızca gürültü `slot_adjustment` önerisi üretiyordu; scorer artık `shadow` cüzdanını atlar. Test eklendi.
+
 ## 2026-09-13 — Prediction backlog backpressure (LLM/DB israfı)
 - 24 saatte funding_reversion 9.257 expired / 36 closed; matrix_agent 1.441 expired prediction için LLM çağrısı yaptı (~$29/gün boşa). Yeni `matrix_shared/backpressure.py`: `room()` = max(3, şampiyon slot × 5) − dolmamış açık prediction sayısı (champion/shadow ayrı). Strategy `persist_drafts` her (strateji, market, shadow) grubunu en yüksek güvenle `room` kadar keser; agent tick'i feature/LLM'den ÖNCE sembolleri `room`'a göre (edge sırasıyla) kısar. Env: `MATRIX_BACKLOG_SLOTS_MULT`, `MATRIX_BACKLOG_MIN`, `MATRIX_BACKLOG_DEFAULT_SLOTS`. Probe hatasında 3'e düşer, hiçbir strateji tamamen susmaz.
 

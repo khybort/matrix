@@ -198,3 +198,36 @@ def test_wilson_lower_is_conservative_for_small_n():
     assert wilson_lower(7, 10) < 0.7 and wilson_lower(7, 10) > 0.35
     assert wilson_lower(70, 100) > wilson_lower(7, 10)
     assert wilson_lower(0, 0) == 0.0 and wilson_lower(0, 10) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_shadow_wallet_slot_rows_are_not_scored():
+    """Challenger wallet rows must be left untouched (the engine borrows the
+    champion's slots for the shadow pass)."""
+    from reflection.slot_scorer import score_strategy_slots
+    wid = uuid.uuid4()
+    strat = f"TEST_shadowslot_{uuid.uuid4().hex[:6]}"
+    async with shared_session_scope() as session:
+        session.add(Wallet(id=wid, name="shadow", asset_class="test", starting_capital_usd=Decimal("10000"),
+                           cash_usd=Decimal("10000"), locked_usd=Decimal("0"), max_position_pct=Decimal("0.05"),
+                           max_concurrent_positions=50, daily_loss_circuit_pct=Decimal("0.10"),
+                           day_start_equity=Decimal("10000"), day_start_at=datetime.now(timezone.utc)))
+    async with shared_session_scope() as session:
+        session.add(StrategySlotConfig(strategy_id=strat, asset_class="test", wallet_id=wid,
+                                       allocated_slots=10, perf_score=0.5, consecutive_losses=0))
+    try:
+        for pnl in (-1.0,) * 9:
+            await _seed_closed_position(wid, pnl)
+        await score_strategy_slots()
+        async with shared_session_scope() as session:
+            row = await session.get(StrategySlotConfig, (strat, "test", wid))
+            assert row.allocated_slots == 10 and row.last_evaluated_at is None
+    finally:
+        async with shared_session_scope() as session:
+            pids = list((await session.execute(
+                select(PaperPosition.prediction_id).where(PaperPosition.wallet_id == wid))).scalars())
+            await session.execute(delete(PaperPosition).where(PaperPosition.wallet_id == wid))
+            if pids:
+                await session.execute(delete(Prediction).where(Prediction.id.in_(pids)))
+            await session.execute(delete(StrategySlotConfig).where(StrategySlotConfig.wallet_id == wid))
+            await session.execute(delete(Wallet).where(Wallet.id == wid))
