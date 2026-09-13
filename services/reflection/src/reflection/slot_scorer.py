@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from loguru import logger
 from sqlalchemy import func, select
+from sqlalchemy.orm.exc import StaleDataError
 
 from matrix_shared import shared_session_scope
 from matrix_shared.stats import wilson_lower
@@ -49,6 +50,20 @@ def _slots_for_score(score: float, base_share: int) -> int:
         return max(1, base_share // 2)
     else:
         return max(1, base_share // 4)
+
+
+async def _flush_config(session, config: StrategySlotConfig) -> bool:
+    """Flush one config's changes inside a savepoint. A slot row deleted by
+    another process mid-pass (labs/test cleanup, operator SQL) used to raise
+    StaleDataError at commit and throw away the whole hourly pass."""
+    try:
+        async with session.begin_nested():
+            await session.flush()
+        return True
+    except StaleDataError:
+        logger.info(f"slot row vanished mid-pass: {config.strategy_id}/{config.asset_class}; skipping")
+        session.expunge(config)
+        return False
 
 
 async def score_strategy_slots() -> int:
@@ -154,6 +169,7 @@ async def score_strategy_slots() -> int:
                 # Not enough evidence to move capital either way.
                 config.perf_score = score
                 config.last_evaluated_at = datetime.now(UTC)
+                await _flush_config(session, config)
                 continue
             else:
                 new_slots = _slots_for_score(score, base_share)
@@ -164,6 +180,7 @@ async def score_strategy_slots() -> int:
             config.updated_at = datetime.now(UTC)
 
             if new_slots == old_slots:
+                await _flush_config(session, config)
                 continue
 
             config.allocated_slots = new_slots
@@ -212,5 +229,7 @@ async def score_strategy_slots() -> int:
                     f"slot updated: {config.strategy_id}/{config.asset_class} "
                     f"{old_slots}→{new_slots} score={score:.4f}"
                 )
+            if not await _flush_config(session, config):
+                updated -= 1
 
     return updated

@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Slot scorer: pass ortasında silinen satır tüm pass'i düşürmez
+- Her config savepoint içinde flush edilir; `StaleDataError` (labs/test temizliği veya operatör SQL'i satırı sildi) yalnızca o config'i atlar. Bugün iki kez saatlik pass tamamen iptal olmuştu.
+
 ## 2026-09-13 — Director restart'ta hemen review yapmaz
 - Hot reload her paylaşılan kod kaydında Director'ı yeniden başlatıyor ve her seferinde LLM review koşuyordu (30 dk'da 4 brief). Başlangıçta kullanım defterinden son review zamanına bakılır (`usage_ledger.last_record_ts`), saatlik kadans oradan devam eder.
 
