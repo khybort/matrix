@@ -170,3 +170,12 @@ async def test_no_bist():
     assert bist_drafts == [], "BIST symbols must not appear in momentum_xs drafts"
 
     assert strategy.market == "crypto"
+
+
+def test_drafts_carry_the_config_version_not_the_module_constant():
+    """v2/v3 configs were stamping strategy_version=1 (the module constant), so
+    reflection saw n=0 for every live version and the retired v1 kept scoring."""
+    from strategy.params import instantiate
+    from strategy.modules.crypto.momentum_xs import STRATEGY_VERSION, MomentumXs
+    strat = instantiate(MomentumXs, symbols=["BTCUSDT"], version=STRATEGY_VERSION + 41, params={})
+    assert strat.version == STRATEGY_VERSION + 41

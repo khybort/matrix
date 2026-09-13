@@ -174,7 +174,7 @@ class MomentumXs:
             display_rank = rank if side == "long" else (n_surv - rank + 1)
             return PredictionDraft(
                 strategy_id=STRATEGY_ID,
-                strategy_version=STRATEGY_VERSION,
+                strategy_version=self.version,  # config version, not the module constant (v2/v3 were stamping v1)
                 symbol=symbol,
                 exchange=EXCHANGE_FALLBACK,
                 side=side,

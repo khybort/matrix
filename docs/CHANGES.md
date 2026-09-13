@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-09-13 — momentum_xs her versiyonu v1 damgalıyordu; test kalıntıları temizlendi
+- `modules/crypto/momentum_xs.py` draft'a `STRATEGY_VERSION` sabitini yazıyordu → v2 (active) ve v3 (shadow) prediction'ları v1 (retired) olarak kaydediliyor, reflection/efficacy bu strateji için n=0 görüyordu, retired v1 skor topluyordu. `self.version` ile düzeltildi; regresyon testi. Diğer 16 modül zaten doğruydu.
+- Canlı shared DB'de 342 `TEST_scorer_*` prediction ve 15 test slot config kalıntısı silindi; `test_slot_scorer` fixture'ı artık position/prediction'larını da temizler.
+
 ## 2026-09-13 — dev_agent worktree testleri kendi venv'ini siliyordu
 - `integrate._test_env` artık `UV_PROJECT_ENVIRONMENT`/`VIRTUAL_ENV`'i düşürür: image'ın ihraç ettiği değer yüzünden `uv run --project <worktree>/services/<svc>` hedef projeyi dev_agent venv'ine senkronluyor, dev_agent paketi kayboluyordu (reload'da `No module named 'dev_agent'`). Venv `uv sync` ile onarıldı, servis yeniden başlatıldı. Regresyon testi eklendi.
 

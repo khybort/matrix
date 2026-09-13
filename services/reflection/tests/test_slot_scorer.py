@@ -110,6 +110,10 @@ async def scorer_wallet():
         await session.execute(delete(StrategySlotConfig).where(
             StrategySlotConfig.wallet_id == wid
         ))
+        # positions → predictions → wallet: the seeded rows used to outlive the
+        # test (342 TEST_scorer_* predictions were found in the live table).
+        await session.execute(delete(PaperPosition).where(PaperPosition.wallet_id == wid))
+        await session.execute(delete(Prediction).where(Prediction.strategy_id == STRAT))
         await session.execute(delete(Wallet).where(Wallet.id == wid))
 
 
