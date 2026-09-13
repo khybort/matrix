@@ -1,13 +1,17 @@
-# CPU caps for local dev — keeps Matrix from saturating OrbStack / the host.
+# CPU and memory caps for local dev — keeps Matrix from saturating OrbStack / the host.
 #
 # Applied automatically by `make up-dev` and `make up-dev-local`.
-# Defaults below are the "performance" profile (~4.5 cores max if all pegged).
-# Tighten after host RAM/CPU is scarce (e.g. MATRIX_CPU_HEAVY=0.5).
+# CPU defaults are the "performance" profile (~4.5 cores max if all pegged).
+# Memory caps exist because on 2026-09-13 the unlimited stack pushed the 10 GiB
+# OrbStack VM into kernel OOM ("VM_FAULT_OOM leaked") and the Docker socket
+# hung for hours; with per-container caps a runaway service is OOM-killed and
+# restarted by compose instead of taking the VM down. Sum of caps ≈ 11 GiB
+# worst case against a 12 GiB VM (`orb config set memory_mib 12288`).
 # Override per tier via .env (fractional CPUs, e.g. 0.5 = half a core):
-#   MATRIX_CPU_HEAVY  — ingestion-market, web
-#   MATRIX_CPU_DB     — postgres
-#   MATRIX_CPU_WORKER — agent, labs, graph, strategy, backtest, bars-aggregator
-#   MATRIX_CPU_LIGHT  — news, reflection, lessons, synthesis, brain, dev_agent
+#   MATRIX_CPU_HEAVY / MATRIX_MEM_HEAVY   — ingestion-market, web
+#   MATRIX_CPU_DB / MATRIX_MEM_DB         — postgres
+#   MATRIX_CPU_WORKER / MATRIX_MEM_WORKER — agent, labs, graph, strategy, backtest, bars-aggregator
+#   MATRIX_CPU_LIGHT / MATRIX_MEM_LIGHT   — news, reflection, lessons, synthesis, brain, dev_agent, ...
 #
 # Recreate containers after changing limits:
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml \
@@ -17,15 +21,19 @@ name: matrix
 
 x-cpu-heavy: &cpu_heavy
   cpus: ${MATRIX_CPU_HEAVY:-1.0}
+  mem_limit: ${MATRIX_MEM_HEAVY:-1g}
 
 x-cpu-db: &cpu_db
   cpus: ${MATRIX_CPU_DB:-0.75}
+  mem_limit: ${MATRIX_MEM_DB:-2g}
 
 x-cpu-worker: &cpu_worker
   cpus: ${MATRIX_CPU_WORKER:-0.5}
+  mem_limit: ${MATRIX_MEM_WORKER:-768m}
 
 x-cpu-light: &cpu_light
   cpus: ${MATRIX_CPU_LIGHT:-0.25}
+  mem_limit: ${MATRIX_MEM_LIGHT:-512m}
 
 services:
   postgres:
@@ -77,3 +85,15 @@ services:
 
   web:
     <<: *cpu_heavy
+
+  notify:
+    <<: *cpu_light
+
+  execution:
+    <<: *cpu_light
+
+  bulletin:
+    <<: *cpu_light
+
+  backup:
+    <<: *cpu_light
