@@ -66,7 +66,7 @@ async def _recent_signal_exists(
 
 
 def _exchange_for(asset_class: str) -> str:
-    return "BIST" if asset_class == "bist" else "bybit"
+    return {"bist": "BIST", "us": "US"}.get(asset_class, "bybit")
 
 
 _QUOTE_SUFFIXES = ("USDT", "USDC", "BUSD", "USD")
@@ -209,6 +209,14 @@ async def _tick(symbols: list[str]) -> int:
     if not fresh_targets:
         return 0
 
+    # Backpressure: an LLM call for a symbol whose prediction will expire
+    # unfilled is pure cost (1,441 expired vs 36 traded on 2026-09-13). Keep,
+    # per market, only as many targets as the open backlog has room for,
+    # best realised edge first.
+    fresh_targets = await _trim_to_room(fresh_targets, edge_map)
+    if not fresh_targets:
+        return 0
+
     # Parallel feature extraction — only for symbols without a recent signal
     async def _safe_features(sym: str, ac: str):
         try:
@@ -291,6 +299,22 @@ async def _tick(symbols: list[str]) -> int:
         logger.warning(f"shadow pass failed (non-fatal): {e}")
 
     return persisted
+
+
+async def _trim_to_room(targets: list[tuple[str, str]], edge_map: dict[str, float]) -> list[tuple[str, str]]:
+    from matrix_shared.backpressure import room
+
+    out: list[tuple[str, str]] = []
+    for ac in sorted({ac for _, ac in targets}):
+        mine = [t for t in targets if t[1] == ac]
+        r = await room(AGENT_STRATEGY_ID, ac)
+        if r >= len(mine):
+            out.extend(mine)
+            continue
+        mine.sort(key=lambda t: edge_map.get(t[0], 0.5), reverse=True)
+        out.extend(mine[:r])
+        logger.info(f"backpressure [{ac}]: open backlog full — deciding {r}/{len(mine)} symbols this tick")
+    return out
 
 
 async def _shadow_pass(valid: list) -> int:

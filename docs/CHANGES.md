@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Prediction backlog backpressure (LLM/DB israfı)
+- 24 saatte funding_reversion 9.257 expired / 36 closed; matrix_agent 1.441 expired prediction için LLM çağrısı yaptı (~$29/gün boşa). Yeni `matrix_shared/backpressure.py`: `room()` = max(3, şampiyon slot × 5) − dolmamış açık prediction sayısı (champion/shadow ayrı). Strategy `persist_drafts` her (strateji, market, shadow) grubunu en yüksek güvenle `room` kadar keser; agent tick'i feature/LLM'den ÖNCE sembolleri `room`'a göre (edge sırasıyla) kısar. Env: `MATRIX_BACKLOG_SLOTS_MULT`, `MATRIX_BACKLOG_MIN`, `MATRIX_BACKLOG_DEFAULT_SLOTS`. Probe hatasında 3'e düşer, hiçbir strateji tamamen susmaz.
+
 ## 2026-09-13 — momentum_xs her versiyonu v1 damgalıyordu; test kalıntıları temizlendi
 - `modules/crypto/momentum_xs.py` draft'a `STRATEGY_VERSION` sabitini yazıyordu → v2 (active) ve v3 (shadow) prediction'ları v1 (retired) olarak kaydediliyor, reflection/efficacy bu strateji için n=0 görüyordu, retired v1 skor topluyordu. `self.version` ile düzeltildi; regresyon testi. Diğer 16 modül zaten doğruydu.
 - Canlı shared DB'de 342 `TEST_scorer_*` prediction ve 15 test slot config kalıntısı silindi; `test_slot_scorer` fixture'ı artık position/prediction'larını da temizler.
