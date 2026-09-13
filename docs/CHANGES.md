@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Reflection: challenger koşarken veya öneri beklerken mutasyon yok
+- `_mutation_blocked`: (strateji, market) için `shadow` config varsa ya da aynı versiyondan `pending` öneri varsa tick LLM tool-loop'unu hiç çağırmaz (funding_reversion için 12 dk'da iki öneri üretilmiş, ikincisi zaten uygulanamazdı). Pending dedup artık LLM çağrısından ÖNCE.
+
 ## 2026-09-13 — Challenger karşılaştırma taban çizgisi sıfırlandı (veri düzeltmesi)
 - Shadow-cüzdan düzeltmesinden (74eb6ff, 19:03 UTC) önce başlamış iki challenger'ın (`matrix_agent` v8, `oi_delta` v9) `promoted_at`'i şimdiye çekildi; önceki örnekleri şampiyon cüzdanında slot cap'siz oluşmuştu, kıyas geçersizdi. Diğer challenger'lar düzeltmeden sonra doğdu.
 

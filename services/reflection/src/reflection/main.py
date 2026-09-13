@@ -50,6 +50,30 @@ PARAM_TUNE_COOLDOWN_HOURS = float(os.environ.get("MATRIX_PARAM_TUNE_COOLDOWN_HOU
 PARAM_TUNE_SKIP_KNOBS_DAYS = float(os.environ.get("MATRIX_PARAM_TUNE_SKIP_KNOBS_DAYS", "3"))
 
 
+async def _mutation_blocked(cfg: StrategyConfig) -> str | None:
+    """Why this strategy must not be mutated right now: a `shadow` challenger
+    is still being measured, or a proposal from this version is still pending."""
+    async with shared_session_scope() as session:
+        shadow_v = (await session.execute(
+            select(StrategyConfig.version)
+            .where(StrategyConfig.strategy_id == cfg.strategy_id)
+            .where(StrategyConfig.asset_class == cfg.asset_class)
+            .where(StrategyConfig.status == "shadow").limit(1)
+        )).scalar_one_or_none()
+        if shadow_v is not None:
+            return f"challenger v{shadow_v} still running"
+        pending = (await session.execute(
+            select(MutationProposal.id)
+            .where(MutationProposal.strategy_id == cfg.strategy_id)
+            .where(MutationProposal.asset_class == cfg.asset_class)
+            .where(MutationProposal.from_version == cfg.version)
+            .where(MutationProposal.status == "pending").limit(1)
+        )).scalar_one_or_none()
+        if pending is not None:
+            return f"pending proposal #{pending} not applied yet"
+    return None
+
+
 async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_trigger: float) -> int:
     """One reflection cycle. Returns number of proposals written."""
     proposals_written = 0
@@ -79,6 +103,13 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
         # PnL-aligned rule path was pre-empted whenever the model answered.
         if not _underperforming(m, min_outcomes=min_outcomes, score_trigger=Decimal(str(score_trigger))):
             logger.info(f"{cfg.strategy_id}/{cfg.asset_class}: healthy or thin sample; no mutation")
+            continue
+        # A running challenger or an unapplied proposal means nothing new can
+        # be applied yet — spending an LLM tool-loop on it every tick only
+        # produced duplicate pending rows (funding_reversion, 2026-09-13).
+        blocked = await _mutation_blocked(cfg)
+        if blocked:
+            logger.info(f"{cfg.strategy_id}/{cfg.asset_class}: {blocked}; no mutation")
             continue
         if use_llm:
             # Agent tool-loop first: grounds the proposal in recent outcomes,
