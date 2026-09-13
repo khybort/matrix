@@ -22,6 +22,10 @@
   `paper_positions_prediction_id_key` ihlaliyle canlı tick'i düşürdü, assert'leri kuyruk derinliğine bağlıydı. Artık
   `tests/isolated_market.py`: sentetik `asset_class="test"` + kendi champion/shadow cüzdanları (`all_markets()` "test"
   içermez → engine hiç görmez). Engine'e dokunan her yeni test bunu kullanır.
+- **2026-09-13 — Hot reload uzun sorguları öksüz bırakır.** watchfiles çocuğu SIGKILL'lediğinde Postgres tarafındaki
+  INSERT/DELETE devam eder; yeni süreç aynı satırlara yazmaya kalkınca Lock'ta bekler (3 paralel `INSERT INTO market_bars`,
+  6 restart/15 dk). Paylaşılan koda sık dokunurken uzun startup işleri olan servisleri hesaba kat; startup işini boşluk
+  kadar boyutlandır; yığılma görürsen `pg_cancel_backend` ile öksüzleri kes.
 - **2026-09-13 — Startup'ta tam tablo taraması yok.** bars-aggregator `backfill_all()` 302M `market_trades` satırını
   tarıyordu, backtest testleri asılıyordu → `BARS_STARTUP_BACKFILL_MAX_HOURS=48`. `DELETE … WHERE exchange_trade_id IN (…)`
   index'siz; kullanma.
