@@ -366,8 +366,11 @@ Emir gönderen tek kod yolu bu.
     slotu; container başına 3 lokal slot artık 3N eşzamanlı loop olmuyor. `agent_usage` tablosu
     migration gerektirdiği için (0038 commit'lenmemiş) ertelendi; usage hâlâ log-only.
 
-Sıradaki: P2.5 embedding/benzer-setup, `agent_usage` persist (migration zinciri açılınca), Web apply
-route'unun Python `apply_proposal` ile hizalanması (P5 §5.11).
+23. ✅ §5.11 Web `apply` route'u Python `apply_proposal` ile hizalandı: gerçek sonraki versiyon,
+    params merge, tam forbidden listesi, challenger (shadow) modu, `metrics_window.applied_version`.
+
+Sıradaki: P2.5 embedding/benzer-setup, `agent_usage` persist (migration zinciri açılınca — 0038 WIP
+commit'lendiğinde 0039+ eklenebilir), Telegram'dan `awaiting_review` dev task onayı.
 
 Bu 10'dan sonra sistem "çalışıyor gibi görünen" değil, **gerçekten kendini ölçen** hale gelir.
 Director (P3) ancak ölçüm altyapısı varken anlamlı; ondan önce yazılırsa gürültüyü orkestre eder.

@@ -5,6 +5,15 @@
 
 ---
 
+## 2026-09-13 — Web `apply` route aligned with the Python apply path
+
+- `apps/web/.../proposals/[id]/apply/route.ts`: computes `max(version)+1` (the verbatim `to_version`
+  insert hit `uq_strategy_configs_id_class_ver` once other promotions landed), merges `after_params`
+  over the current params (weights deep-merged), scrubs the full FORBIDDEN set incl.
+  `live_capital_cap_usd`/`live_execution_enabled`, inserts a `shadow` challenger by default
+  (`MATRIX_CHALLENGER_MODE`, refuses a second challenger) and records
+  `metrics_window.applied_version/challenger/applied_by=operator` for reflection.efficacy.
+
 ## 2026-09-13 — P1.8 counterfactual virtual outcomes + P3.3 cross-container LLM slots
 
 - `paper_trade.expire_stale_predictions` → `_record_virtual_outcomes`: every untraded prediction
