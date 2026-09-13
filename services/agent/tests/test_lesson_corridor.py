@@ -51,3 +51,12 @@ async def test_exploration_trade_bypasses_within_corridor():
 async def test_exploration_trade_vetoed_outside_corridor():
     d = await D._apply_lessons(_decision(True), _F(), "matrix_agent", asset_class="crypto", bypass_roll=0.9)
     assert d.side == "hold"
+
+
+async def test_operator_directive_is_never_bypassed(monkeypatch):
+    async def fake(features, strategy_id, *, side=None, asset_class=None):
+        return [LessonHit(lesson_id="OP", verdict="avoid", pattern_description="OPERATOR: avoid long on BTCUSDT — stop",
+                          confidence=Decimal("0.99"), win_rate=None, n_observations=0)]
+    monkeypatch.setattr(D, "lessons_relevant_to", fake)
+    d = await D._apply_lessons(_decision(True), _F(), "matrix_agent", asset_class="crypto", bypass_roll=0.0)
+    assert d.side == "hold" and d.feature_dump["lesson_override"]["lesson_id"] == "OP"

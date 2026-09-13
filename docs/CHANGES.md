@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-09-13 — P2.4 overlay chain completed + P2.6 operator directives
+
+- `matrix_shared/graph_overlay.py` (service-agnostic AGE writers): `backtest/paper_trade._close_position`
+  links `Prediction-[RESULTED_IN]->Outcome` on every close; `agent_lessons` upserts `Lesson` nodes with
+  `GENERALIZED_INTO` edges from the bucket's outcomes and mirrors superseded/expired status. The
+  reasoning overlay was write-only Prediction nodes before.
+- Operator directives (`matrix_shared.agent_lessons.remember_directive/forget_directive`): stored as
+  `OPERATOR:`-prefixed `agent_lessons` rows (confidence 0.99, 10-year `observed_until`) for every
+  strategy in the market, so the agent veto/boost, the strategy draft filter and reflection tools
+  honour them with no new plumbing. Exploration corridor, corridor-based retirement, TTL sweep and
+  statistical supersede all skip operator lessons. Brain gains the two `write` tools
+  (`assert_all_read_only(..., allow_write=)`), prompt updated — "stop trading DOGE" in Telegram
+  now becomes durable system behaviour.
+
 ## 2026-09-13 — P3.2: LLM decisions blended with the rule model + method A/B
 
 - `agent/decide.blend_decisions`: agreement → trade at mean confidence (`llm+rule`); only the LLM

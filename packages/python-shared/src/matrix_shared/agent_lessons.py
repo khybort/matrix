@@ -184,7 +184,104 @@ async def lessons_relevant_to(
 __all__ = [
     "AgentLesson",
     "LessonHit",
+    "OPERATOR_PREFIX",
     "active_lessons",
+    "forget_directive",
+    "is_operator_lesson",
     "lessons_relevant_to",
     "matches",
+    "remember_directive",
 ]
+
+
+# ------------------------------------------------------------ operator directives
+# An operator instruction ("don't trade DOGE", "prefer BTC longs") is stored as
+# an agent_lessons row so every consumer that already honours lessons — the
+# decision agent's veto/boost, the strategy dispatcher's draft filter, the
+# reflection tools — applies it with zero new plumbing. Directives are marked by
+# the OPERATOR_PREFIX in pattern_description, carry confidence 0.99, a far
+# observed_until (immune to the 14-day TTL) and are never bypassed by the
+# exploration corridor or retired by corridor evidence.
+
+OPERATOR_PREFIX = "OPERATOR:"
+OPERATOR_CONFIDENCE = Decimal("0.99")
+
+
+def is_operator_lesson(description: str | None) -> bool:
+    return bool(description) and str(description).startswith(OPERATOR_PREFIX)
+
+
+async def remember_directive(
+    *,
+    symbol: str,
+    verdict: str,
+    reason: str,
+    asset_class: str,
+    side: str | None = None,
+    strategy_ids: list[str] | None = None,
+) -> list[str]:
+    """Persist an operator directive for one symbol (optionally one side) as
+    active lessons for the given strategies (default: every strategy that has
+    an active/shadow config in that market plus matrix_agent). Returns ids."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import text
+
+    verdict = verdict.strip().lower()
+    if verdict not in ("avoid", "prefer"):
+        raise ValueError("verdict must be 'avoid' or 'prefer'")
+    symbol = symbol.strip().upper()
+    side = side.strip().lower() if side else None
+    if side not in (None, "long", "short"):
+        raise ValueError("side must be long, short or omitted")
+    now = datetime.now(timezone.utc)
+    filt: dict[str, Any] = {"symbol": symbol}
+    if side:
+        filt["side"] = side
+    desc = f"{OPERATOR_PREFIX} {verdict} {side or 'any side'} on {symbol} — {reason.strip()[:300]}"
+    ids: list[str] = []
+    async with shared_session_scope() as session:
+        if not strategy_ids:
+            rows = (await session.execute(text(
+                "SELECT DISTINCT strategy_id FROM strategy_configs "
+                "WHERE asset_class = :ac AND status IN ('active','shadow')"
+            ), {"ac": asset_class})).all()
+            strategy_ids = sorted({r[0] for r in rows} | {"matrix_agent"})
+        for sid in strategy_ids:
+            # supersede an existing operator directive for the same target
+            await session.execute(text(
+                "UPDATE agent_lessons SET status = 'superseded', updated_at = :now "
+                "WHERE strategy_id = :sid AND asset_class = :ac AND status = 'active' "
+                "  AND pattern_description LIKE :pfx "
+                "  AND pattern_filter->>'symbol' = :sym "
+                "  AND coalesce(pattern_filter->>'side', '') = :side"
+            ), {"sid": sid, "ac": asset_class, "now": now, "pfx": f"{OPERATOR_PREFIX}%",
+                "sym": symbol, "side": side or ""})
+            row = AgentLesson(
+                strategy_id=sid, strategy_version=0, asset_class=asset_class,
+                pattern_kind="symbol_specific", pattern_description=desc, pattern_filter=filt,
+                n_observations=0, win_rate=None, avg_pnl_usd=None, total_pnl_usd=None,
+                verdict=verdict, confidence=OPERATOR_CONFIDENCE,
+                observed_from=now, observed_until=now + timedelta(days=3650),
+                generated_at=now, status="active",
+            )
+            session.add(row)
+            await session.flush()
+            ids.append(str(row.id))
+    return ids
+
+
+async def forget_directive(*, symbol: str, asset_class: str) -> int:
+    """Expire every active operator directive for a symbol in a market."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import text
+
+    async with shared_session_scope() as session:
+        rows = (await session.execute(text(
+            "UPDATE agent_lessons SET status = 'expired', updated_at = :now "
+            "WHERE status = 'active' AND asset_class = :ac AND pattern_description LIKE :pfx "
+            "  AND pattern_filter->>'symbol' = :sym RETURNING id"
+        ), {"now": datetime.now(timezone.utc), "ac": asset_class, "pfx": f"{OPERATOR_PREFIX}%",
+            "sym": symbol.strip().upper()})).all()
+    return len(rows)

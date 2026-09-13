@@ -339,7 +339,16 @@ Emir gönderen tek kod yolu bu.
     Method bazlı A/B: `make method-ab`, Director brief'inde "by method" satırı. Tool loop bilerek
     yok: 25 sembol × 15s'de tool turn'leri rate bütçesini yer; aynı bilgi prompt'a gömüldü.
 
-P0 tamamı kapandı. Sıradaki: P2.4 overlay Outcome/Lesson, P2.6 operatör direktifleri, P2.3 regime memory.
+16. ✅ P2.4 Overlay tamamlandı: `matrix_shared/graph_overlay.py` — paper engine her kapanışta
+    `Prediction-[RESULTED_IN]->Outcome`, lessons synthesizer `Lesson` node + `GENERALIZED_INTO`
+    kenarları + status güncellemeleri yazıyor. "Ne kararlaştırdık → ne oldu → ne öğrendik" artık
+    Brain'in `cypher_query`'sinden traverse edilebilir.
+17. ✅ P2.6 Operatör direktifleri: Brain'e `remember_directive` / `forget_directive` (write) —
+    direktif `OPERATOR:` önekli, 0.99 confidence, 10 yıl TTL'li `agent_lessons` satırı olur;
+    decision veto, strategy filter ve reflection tool'ları anında uygular; exploration koridoru ve
+    çelişki-retire mekanizması direktiflere dokunmaz.
+
+Sıradaki: P2.3 regime memory, P2.5 embedding/benzer-setup, P4.3 dev_agent codebase_ctx.
 
 Bu 10'dan sonra sistem "çalışıyor gibi görünen" değil, **gerçekten kendini ölçen** hale gelir.
 Director (P3) ancak ölçüm altyapısı varken anlamlı; ondan önce yazılırsa gürültüyü orkestre eder.

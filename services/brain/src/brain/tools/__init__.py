@@ -183,9 +183,50 @@ def build_registry(pools: Pools) -> ToolRegistry:
         out = [str(r["result"]) for r in rows[:cap]]
         return _text(out if verbose else _summarize_rows(out))
 
-    for t in (list_tables, describe_table, sql_read, cypher_query):
+    @tool(
+        "remember_directive",
+        "Persist an OPERATOR directive as a protected lesson every agent honours: "
+        "verdict 'avoid' vetoes new trades on the symbol (optionally one side), 'prefer' boosts "
+        "confidence. Applies to all strategies in the market unless strategy_ids is given. "
+        "Use ONLY when the operator explicitly instructs it (e.g. 'stop trading DOGE').",
+        {"symbol": str, "verdict": str, "reason": str, "asset_class": str, "side": str,
+         "strategy_ids": list},
+        side_effect="write",
+    )
+    async def remember_directive(args) -> dict:
+        from matrix_shared.agent_lessons import remember_directive as _remember
+        try:
+            ids = await _remember(
+                symbol=str(args.get("symbol", "")), verdict=str(args.get("verdict", "")),
+                reason=str(args.get("reason", "operator instruction")),
+                asset_class=str(args.get("asset_class", "crypto") or "crypto"),
+                side=(str(args["side"]) if args.get("side") else None),
+                strategy_ids=[str(x) for x in (args.get("strategy_ids") or [])] or None,
+            )
+        except Exception as e:  # noqa: BLE001
+            return _error(str(e))
+        return _text({"stored": len(ids), "lesson_ids": ids})
+
+    @tool(
+        "forget_directive",
+        "Expire every active OPERATOR directive for a symbol in a market (undo of remember_directive).",
+        {"symbol": str, "asset_class": str},
+        side_effect="write",
+    )
+    async def forget_directive(args) -> dict:
+        from matrix_shared.agent_lessons import forget_directive as _forget
+        try:
+            n = await _forget(symbol=str(args.get("symbol", "")),
+                              asset_class=str(args.get("asset_class", "crypto") or "crypto"))
+        except Exception as e:  # noqa: BLE001
+            return _error(str(e))
+        return _text({"expired": n})
+
+    for t in (list_tables, describe_table, sql_read, cypher_query, remember_directive, forget_directive):
         reg.add(t)
-    assert_all_read_only(reg)
+    # Read-only belt with exactly two advisory writes (operator directives are
+    # lessons, never orders/money/certs).
+    assert_all_read_only(reg, allow_write=frozenset({"remember_directive", "forget_directive"}))
     return reg
 
 

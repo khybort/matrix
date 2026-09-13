@@ -63,6 +63,7 @@ async def _load_avoid_filters() -> list[dict]:
                         AgentLesson.strategy_id,
                         AgentLesson.asset_class,
                         AgentLesson.pattern_filter,
+                        AgentLesson.pattern_description,
                     )
                     .where(AgentLesson.status == "active")
                     .where(AgentLesson.verdict == "avoid")
@@ -77,6 +78,7 @@ async def _load_avoid_filters() -> list[dict]:
             "strategy_id": r.strategy_id,
             "asset_class": r.asset_class,
             "filter": r.pattern_filter or {},
+            "operator": str(r.pattern_description or "").startswith("OPERATOR:"),
         }
         for r in rows
     ]
@@ -120,7 +122,7 @@ async def filter_drafts(
     for d in drafts:
         hit = next((L for L in lessons if _draft_matches(d, L)), None)
         if hit is not None:
-            if roll() < BYPASS_SHARE:
+            if not hit.get("operator") and roll() < BYPASS_SHARE:
                 d.context = {**(d.context or {}), "lesson_bypass": hit.get("id")}
                 survivors.append(d)
                 continue

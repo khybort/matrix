@@ -506,7 +506,12 @@ async def _apply_lessons(
         (h for h in hits if h.verdict == "avoid" and h.confidence >= LESSON_CONFIDENCE_GATE),
         None,
     )
-    if avoid_hit is not None and d.feature_dump.get("is_exploration") and bypass_roll < LESSON_EXPLORE_BYPASS:
+    if (
+        avoid_hit is not None
+        and d.feature_dump.get("is_exploration")
+        and bypass_roll < LESSON_EXPLORE_BYPASS
+        and not avoid_hit.pattern_description.startswith("OPERATOR:")
+    ):
         return Decision(
             symbol=d.symbol,
             side=d.side,

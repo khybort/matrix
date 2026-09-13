@@ -25,6 +25,7 @@ from sqlalchemy import func, select, text
 from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.allocation import expected_value, load_pair_edges, risk_multiplier
 from matrix_shared.exchange_shadow import shadow_close_position, shadow_open_position
+from matrix_shared.graph_overlay import link_outcome_node
 from matrix_shared.markets import all_markets
 from matrix_shared.trading import apply_slippage, funding_pnl_usd
 from matrix_shared.models import (
@@ -807,8 +808,10 @@ async def _close_position(pos: PaperPosition, pred: Prediction, reason: str, now
             {"n": pos_db.notional_usd, "pnl": pnl_usd, "wid": pos_db.wallet_id},
         )
 
+        outcome_id = uuid.uuid4()
         session.add(
             Outcome(
+                id=outcome_id,
                 prediction_id=pred.id,
                 asset_class=pos.asset_class,
                 observed_at=now,
@@ -827,6 +830,11 @@ async def _close_position(pos: PaperPosition, pred: Prediction, reason: str, now
         await shadow_close_position(prediction=pred, position=pos)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"shadow close error pos={pos.id}: {e}")
+    # Reasoning overlay: Prediction -[RESULTED_IN]-> Outcome (best-effort index).
+    await link_outcome_node(
+        pred_id=str(pred.id), outcome_id=str(outcome_id), score=str(score),
+        pnl_usd=str(pnl_usd), reason=reason,
+    )
     return True
 
 

@@ -90,9 +90,15 @@ class NonReadOnlyToolError(RuntimeError):
     """Raised when a belt expected to be read-only contains a writing tool."""
 
 
-def assert_all_read_only(registry: ToolRegistry) -> None:
-    """Guarantee every tool in `registry` is side_effect='read'."""
-    offenders = [t.name for t in registry.all() if t.side_effect != "read"]
+def assert_all_read_only(registry: ToolRegistry, *, allow_write: frozenset[str] = frozenset()) -> None:
+    """Guarantee every tool in `registry` is side_effect='read', except the
+    explicitly named `allow_write` tools (which must be 'write', never
+    'risk-gated' — a read-only belt can carry advisory writes like operator
+    directives, never anything that moves money)."""
+    offenders = [
+        t.name for t in registry.all()
+        if t.side_effect != "read" and not (t.name in allow_write and t.side_effect == "write")
+    ]
     if offenders:
         raise NonReadOnlyToolError(
             f"non-read-only tools in a read-only belt: {', '.join(offenders)}"

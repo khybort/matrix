@@ -197,9 +197,11 @@ async def synthesize(
         if verdict is None:
             # Neutral — supersede any active lesson for this bucket so we
             # don't leave stale advice live when the pattern washes out.
-            await _supersede_if_active(
-                strategy_id, asset_class, "symbol_specific", s.bucket_filter, now
-            )
+            existing = await _find_active(strategy_id, asset_class, "symbol_specific", s.bucket_filter)
+            if existing is not None and not str(existing.pattern_description or "").startswith("OPERATOR:"):
+                await _supersede_if_active(
+                    strategy_id, asset_class, "symbol_specific", s.bucket_filter, now
+                )
             continue
 
         # Has an active lesson for this exact bucket already? If its
@@ -208,6 +210,8 @@ async def synthesize(
         existing = await _find_active(
             strategy_id, asset_class, "symbol_specific", s.bucket_filter
         )
+        if existing is not None and str(existing.pattern_description or "").startswith("OPERATOR:"):
+            continue  # operator directives are not statistical; never overwrite them
         if existing is not None and existing.win_rate is not None:
             if abs(Decimal(existing.win_rate) - s.win_rate) < Decimal("0.05"):
                 # Close enough — keep it, but record that fresh outcomes still
@@ -287,6 +291,15 @@ async def _insert_lesson(
             generated_at=datetime.now(timezone.utc),
             status="active",
         ))
+    # Overlay: Lesson node + GENERALIZED_INTO edges from the bucket's outcomes.
+    from matrix_shared.graph_overlay import upsert_lesson_node
+
+    await upsert_lesson_node(
+        lesson_id=str(new_id), pattern_kind=kind, verdict=verdict,
+        confidence=str(_confidence(stat.n, stat.win_rate)), description=stat.description,
+        symbol=stat.bucket_filter.get("symbol"), side=stat.bucket_filter.get("side"),
+        strategy_id=strategy_id,
+    )
     return new_id
 
 
@@ -299,6 +312,9 @@ async def _mark_superseded(
             .where(AgentLesson.id == old_id)
             .values(status="superseded", superseded_by=new_id, updated_at=at)
         )
+    from matrix_shared.graph_overlay import set_lesson_status
+
+    await set_lesson_status(lesson_id=str(old_id), status="superseded")
 
 
 async def _supersede_if_active(
@@ -319,6 +335,9 @@ async def _supersede_if_active(
             .where(AgentLesson.id == existing.id)
             .values(status="expired", updated_at=at)
         )
+    from matrix_shared.graph_overlay import set_lesson_status
+
+    await set_lesson_status(lesson_id=str(existing.id), status="expired")
     logger.info(f"lesson {existing.id} expired (pattern returned to neutral)")
 
 
@@ -350,6 +369,10 @@ async def expire_stale_lessons(*, now: datetime | None = None, ttl_days: int = L
         )
         ids = list(result.scalars())
     if ids:
+        from matrix_shared.graph_overlay import set_lesson_status
+
+        for lid in ids:
+            await set_lesson_status(lesson_id=str(lid), status="expired")
         logger.info(f"expired {len(ids)} lesson(s) not re-confirmed within {ttl_days}d")
     return len(ids)
 
@@ -369,6 +392,7 @@ async def retire_contradicted_lessons(*, min_n: int = BYPASS_MIN_N) -> int:
             "JOIN predictions p ON p.context->>'lesson_bypass' = l.id::text "
             "JOIN outcomes o ON o.prediction_id = p.id "
             "WHERE l.status = 'active' AND l.verdict = 'avoid' "
+            "  AND l.pattern_description NOT LIKE 'OPERATOR:%' "
             "GROUP BY l.id HAVING count(o.id) >= :min_n"
         ), {"min_n": min_n})).all()
         retired = 0
