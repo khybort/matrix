@@ -26,6 +26,8 @@ from agent_lessons.feeder import feed_once
 from agent_lessons.synthesizer import (
     DEFAULT_STRATEGY_ID,
     LOOKBACK_HOURS,
+    expire_stale_lessons,
+    retire_contradicted_lessons,
     synthesize,
 )
 
@@ -33,6 +35,13 @@ DEFAULT_INTERVAL_S = 3600.0  # hourly
 
 
 async def _cycle_once(strategy_id: str, lookback_hours: int) -> None:
+    # Lifecycle first: TTL expiry + corridor contradiction, so this cycle's
+    # synthesis starts from a clean active set.
+    for fn in (expire_stale_lessons, retire_contradicted_lessons):
+        try:
+            await fn()
+        except Exception as e:
+            logger.exception(f"lesson lifecycle {fn.__name__} failed (non-fatal): {e}")
     for market in all_markets():
         try:
             n = await synthesize(

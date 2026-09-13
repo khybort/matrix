@@ -1,9 +1,8 @@
 """Helpers for matching agent_lessons against current feature state.
 
-The agent process (services/agent — FORBIDDEN_PATHS) will eventually
-call `lessons_relevant_to(features, strategy_id)` per tick. We keep
-this in matrix_shared so the integration is a one-import change in
-the agent's decide() once the operator green-lights it.
+The agent (`services/agent/decide._apply_lessons`) calls
+`lessons_relevant_to(features, strategy_id, side=, asset_class=)` per tick;
+always pass the market so BIST lessons never gate crypto decisions.
 
 Pattern filter schema (JSON in agent_lessons.pattern_filter):
 
@@ -157,13 +156,14 @@ async def lessons_relevant_to(
     strategy_id: str,
     *,
     side: str | None = None,
+    asset_class: str | None = None,
 ) -> list[LessonHit]:
     """The agent's per-tick consult call. Pulls every active lesson for the
     strategy and returns the subset that matches the current feature state
     (+ optional decided side). Order: 'avoid' verdicts first, then 'prefer',
     then 'neutral' — caller can short-circuit at the first 'avoid' if it
     wants to."""
-    rows = await active_lessons(strategy_id)
+    rows = await active_lessons(strategy_id, asset_class=asset_class)
     hits = [
         LessonHit(
             lesson_id=str(r.id),

@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-09-12 — P2.1: lesson lifecycle — TTL, effect-size confidence, exploration corridor
+
+- `agent_lessons/synthesizer`: `_confidence(n, win_rate)` = sample curve × binomial-z significance
+  (z ≤ 1 → 0, z ≥ 2.5 → full), so 39%/20 trades no longer clears the 0.40 gate while 20%/60 does.
+  Confirmed lessons refresh `observed_until`; `expire_stale_lessons` expires anything not
+  re-confirmed within `MATRIX_LESSON_TTL_DAYS` (14). `retire_contradicted_lessons` expires an
+  `avoid` lesson when ≥10 corridor trades that bypassed it were profitable (lesson efficacy).
+- Exploration corridor: `agent/decide._apply_lessons` lets `MATRIX_LESSON_EXPLORE_BYPASS` (25%) of
+  *exploration* trades through an `avoid` veto, tagged `context.lesson_bypass=<lesson id>`;
+  `strategy/lessons.filter_drafts` keeps `MATRIX_LESSON_STRATEGY_BYPASS` (10%) of matching drafts
+  the same way. Breaks the self-lock where a lesson suppressed the trades that could refute it.
+- `lessons_relevant_to(..., asset_class=)` now market-scoped on the decision path (was the bug the
+  parity test warned about); `strategy/lessons` applies the same 0.40 confidence gate as the agent.
+
 ## 2026-09-12 — P1.2: champion/challenger (shadow configs) end to end
 
 - `MATRIX_CHALLENGER_MODE=true` (default): `labs/promote.apply_proposal` now inserts the new

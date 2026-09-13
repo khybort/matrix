@@ -28,6 +28,10 @@ from agent.llm import call_llm_decision, call_llm_decisions_batch, llm_enabled
 # curve — enough signal to act on, low enough to catch fast-bleeding patterns
 # before the bucket grows. Tighten later if false-positives appear.
 LESSON_CONFIDENCE_GATE = Decimal("0.4")
+# Exploration corridor: this share of *exploration* trades that an `avoid`
+# lesson would veto are let through (tagged context.lesson_bypass) so the
+# lesson can be contradicted by evidence instead of locking itself in.
+LESSON_EXPLORE_BYPASS = float(__import__("os").environ.get("MATRIX_LESSON_EXPLORE_BYPASS", "0.25"))
 
 # Defaults kept only for stand-alone / test invocations; the live loop loads
 # the current AgentConfig from DB and passes it explicitly.
@@ -386,17 +390,28 @@ async def decide(
         asset_class=asset_class, symbol_edge=symbol_edge,
     )
 
-    return await _apply_lessons(base, f, strategy_id)
+    return await _apply_lessons(base, f, strategy_id, asset_class=asset_class,
+                                bypass_roll=explore_rand())
 
 
 async def _apply_lessons(
-    d: Decision, f: SymbolFeatures, strategy_id: str
+    d: Decision,
+    f: SymbolFeatures,
+    strategy_id: str,
+    *,
+    asset_class: str = "crypto",
+    bypass_roll: float = 1.0,
 ) -> Decision:
-    """Consult agent_lessons; override hold on confident avoid hits."""
+    """Consult agent_lessons; override hold on confident avoid hits.
+
+    Exploration trades get a corridor: with probability LESSON_EXPLORE_BYPASS
+    an `avoid` veto is skipped and the trade is tagged `lesson_bypass` so
+    the lessons synthesizer can measure whether the lesson still holds.
+    """
     if d.side == "hold":
         return d
     try:
-        hits = await lessons_relevant_to(f, strategy_id, side=d.side)
+        hits = await lessons_relevant_to(f, strategy_id, side=d.side, asset_class=asset_class)
     except Exception as e:
         logger.warning(f"agent_lessons lookup failed for {f.symbol}: {e}")
         return d
@@ -407,6 +422,16 @@ async def _apply_lessons(
         (h for h in hits if h.verdict == "avoid" and h.confidence >= LESSON_CONFIDENCE_GATE),
         None,
     )
+    if avoid_hit is not None and d.feature_dump.get("is_exploration") and bypass_roll < LESSON_EXPLORE_BYPASS:
+        return Decision(
+            symbol=d.symbol,
+            side=d.side,
+            confidence=d.confidence,
+            thesis=f"LESSON-BYPASS (exploration corridor) {avoid_hit.pattern_description} | {d.thesis}"[:1000],
+            method=f"{d.method}+bypass",
+            feature_dump={**d.feature_dump, "lesson_bypass": avoid_hit.lesson_id},
+            last_price=d.last_price,
+        )
     if avoid_hit is not None:
         new_thesis = (
             f"LESSON-OVERRIDE → hold | {avoid_hit.pattern_description} "
@@ -514,7 +539,7 @@ async def decide_batch(
 
     return list(
         await asyncio.gather(*[
-            _apply_lessons(b, f, strategy_id)
-            for (f, _, _, _), b in zip(items, bases)
+            _apply_lessons(b, f, strategy_id, asset_class=asset_class, bypass_roll=explore_rand())
+            for (f, _, asset_class, _), b in zip(items, bases)
         ])
     )

@@ -26,6 +26,7 @@ guessing on stale features.
 
 from __future__ import annotations
 
+import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -42,6 +43,11 @@ DEFAULT_STRATEGY_ID = "matrix_agent"
 LOOKBACK_HOURS = 24 * 7   # 7-day rolling window
 MIN_N_PER_BUCKET = 20      # below this we ignore — too noisy
 WIN_RATE_DEVIATION = Decimal("0.10")  # 50% ± 10% → either verdict
+# Lifecycle (docs/AUTONOMY_PLAN.md P2.1): a lesson that is not re-confirmed by
+# fresh outcomes expires; a lesson contradicted by exploration-corridor trades
+# (predictions.context.lesson_bypass) is retired early.
+LESSON_TTL_DAYS = int(os.environ.get("MATRIX_LESSON_TTL_DAYS", "14"))
+BYPASS_MIN_N = int(os.environ.get("MATRIX_LESSON_BYPASS_MIN_N", "10"))
 
 
 @dataclass(slots=True)
@@ -65,15 +71,28 @@ def _verdict_for(win_rate: Decimal) -> str | None:
     return None
 
 
-def _confidence(n: int) -> Decimal:
-    """Soft confidence curve: clamps n into [MIN_N_PER_BUCKET .. 200] →
-    [0.30 .. 0.95]. Below MIN_N → 0 (lesson won't fire)."""
+def _confidence(n: int, win_rate: Decimal | None = None) -> Decimal:
+    """Confidence = sample-size curve × effect-size significance.
+
+    Sample curve clamps n into [MIN_N_PER_BUCKET .. 200] → [0.30 .. 0.95].
+    Significance is the z-score of `win_rate` against 50% (binomial SE),
+    scaled so z ≥ 2.5 counts fully and z ≤ 1 contributes nothing. A 39% win
+    rate over 20 trades (z≈1.0) therefore stays below the 0.40 decision gate,
+    while 5% over 20 (z≈4) clears it — previously both scored 0.30.
+    Below MIN_N → 0 (lesson won't fire).
+    """
     if n < MIN_N_PER_BUCKET:
         return Decimal("0")
     capped = min(n, 200)
     span = Decimal(200 - MIN_N_PER_BUCKET)
     progress = Decimal(capped - MIN_N_PER_BUCKET) / span
-    return (Decimal("0.30") + progress * Decimal("0.65")).quantize(Decimal("0.0001"))
+    base = Decimal("0.30") + progress * Decimal("0.65")
+    if win_rate is None:
+        return base.quantize(Decimal("0.0001"))
+    se = (Decimal("0.25") / Decimal(n)).sqrt()
+    z = abs(Decimal(win_rate) - Decimal("0.5")) / se if se > 0 else Decimal("0")
+    sig = max(Decimal("0"), min(Decimal("1"), (z - Decimal("1")) / Decimal("1.5")))
+    return (base * sig).quantize(Decimal("0.0001"))
 
 
 async def _symbol_side_buckets(
@@ -191,7 +210,10 @@ async def synthesize(
         )
         if existing is not None and existing.win_rate is not None:
             if abs(Decimal(existing.win_rate) - s.win_rate) < Decimal("0.05"):
-                continue  # close enough — leave it
+                # Close enough — keep it, but record that fresh outcomes still
+                # confirm the pattern so the TTL sweep doesn't expire it.
+                await _touch_confirmed(existing.id, s.n, now)
+                continue
         new_id = await _insert_lesson(
             strategy_id=strategy_id,
             asset_class=asset_class,
@@ -259,7 +281,7 @@ async def _insert_lesson(
             avg_pnl_usd=stat.avg_pnl,
             total_pnl_usd=stat.total_pnl,
             verdict=verdict,
-            confidence=_confidence(stat.n),
+            confidence=_confidence(stat.n, stat.win_rate),
             observed_from=observed_from,
             observed_until=observed_until,
             generated_at=datetime.now(timezone.utc),
@@ -298,3 +320,67 @@ async def _supersede_if_active(
             .values(status="expired", updated_at=at)
         )
     logger.info(f"lesson {existing.id} expired (pattern returned to neutral)")
+
+
+async def _touch_confirmed(lesson_id: uuid.UUID, n: int, at: datetime) -> None:
+    async with shared_session_scope() as session:
+        await session.execute(
+            update(AgentLesson)
+            .where(AgentLesson.id == lesson_id)
+            .values(observed_until=at, n_observations=n, updated_at=at)
+        )
+
+
+async def expire_stale_lessons(*, now: datetime | None = None, ttl_days: int = LESSON_TTL_DAYS) -> int:
+    """Active lessons not re-confirmed for `ttl_days` → expired.
+
+    Closes the self-locking loop: an `avoid` lesson suppresses the very
+    trades that could refresh it, so without a TTL a false positive lived
+    forever.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=ttl_days)
+    async with shared_session_scope() as session:
+        result = await session.execute(
+            update(AgentLesson)
+            .where(AgentLesson.status == "active")
+            .where(AgentLesson.observed_until < cutoff)
+            .values(status="expired", updated_at=now)
+            .returning(AgentLesson.id)
+        )
+        ids = list(result.scalars())
+    if ids:
+        logger.info(f"expired {len(ids)} lesson(s) not re-confirmed within {ttl_days}d")
+    return len(ids)
+
+
+async def retire_contradicted_lessons(*, min_n: int = BYPASS_MIN_N) -> int:
+    """Lesson efficacy from the exploration corridor: trades that bypassed an
+    `avoid` lesson (context.lesson_bypass = lesson id) are the counterfactual.
+    If ≥ min_n of them were scored and they were profitable with a ≥ 50% win
+    rate, the lesson is wrong → expired."""
+    from sqlalchemy import text as _text
+    async with shared_session_scope() as session:
+        rows = (await session.execute(_text(
+            "SELECT l.id, count(o.id) AS n, "
+            "       avg(CASE WHEN o.pnl_usd > 0 THEN 1.0 ELSE 0.0 END) AS wr, "
+            "       sum(o.pnl_usd) AS pnl "
+            "FROM agent_lessons l "
+            "JOIN predictions p ON p.context->>'lesson_bypass' = l.id::text "
+            "JOIN outcomes o ON o.prediction_id = p.id "
+            "WHERE l.status = 'active' AND l.verdict = 'avoid' "
+            "GROUP BY l.id HAVING count(o.id) >= :min_n"
+        ), {"min_n": min_n})).all()
+        retired = 0
+        for lid, n, wr, pnl in rows:
+            if wr is not None and Decimal(wr) >= Decimal("0.5") and Decimal(pnl or 0) > 0:
+                await session.execute(
+                    update(AgentLesson).where(AgentLesson.id == lid)
+                    .values(status="expired", updated_at=datetime.now(timezone.utc))
+                )
+                retired += 1
+                logger.info(
+                    f"lesson {lid} retired: {n} corridor trades contradicted it "
+                    f"(win {float(wr)*100:.0f}%, pnl ${float(pnl):.2f})"
+                )
+    return retired

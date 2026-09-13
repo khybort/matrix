@@ -15,6 +15,8 @@ Lessons enter and leave automatically as the lessons feeder updates rows.
 
 from __future__ import annotations
 
+import os
+import random
 import time
 from collections.abc import Iterable
 
@@ -33,6 +35,12 @@ _cache: list[dict] | None = None
 _cache_ts: float = 0.0
 
 _RECOGNIZED_KEYS = ("symbol", "side", "asset_class")
+# Same gate as the agent (decide.LESSON_CONFIDENCE_GATE): a lesson below it
+# is a hint, not a veto.
+CONFIDENCE_GATE = 0.4
+# Exploration corridor for deterministic strategies: this share of drafts an
+# avoid lesson would drop are kept and tagged so the lesson can be re-tested.
+BYPASS_SHARE = float(os.environ.get("MATRIX_LESSON_STRATEGY_BYPASS", "0.10"))
 
 
 async def _load_avoid_filters() -> list[dict]:
@@ -51,18 +59,21 @@ async def _load_avoid_filters() -> list[dict]:
             (
                 await session.execute(
                     select(
+                        AgentLesson.id,
                         AgentLesson.strategy_id,
                         AgentLesson.asset_class,
                         AgentLesson.pattern_filter,
                     )
                     .where(AgentLesson.status == "active")
                     .where(AgentLesson.verdict == "avoid")
+                    .where(AgentLesson.confidence >= CONFIDENCE_GATE)
                 )
             ).all()
         )
 
     _cache = [
         {
+            "id": str(r.id),
             "strategy_id": r.strategy_id,
             "asset_class": r.asset_class,
             "filter": r.pattern_filter or {},
@@ -92,8 +103,11 @@ def _draft_matches(draft: PredictionDraft, lesson: dict) -> bool:
     return True
 
 
-async def filter_drafts(drafts: Iterable[PredictionDraft]) -> list[PredictionDraft]:
-    """Drop drafts that match any active 'avoid' lesson.
+async def filter_drafts(
+    drafts: Iterable[PredictionDraft], *, roll=random.random
+) -> list[PredictionDraft]:
+    """Drop drafts that match any active 'avoid' lesson, except a BYPASS_SHARE
+    corridor kept (tagged context.lesson_bypass) as the lesson's counterfactual.
 
     Returns the surviving list. Logs dropped counts per (strategy, symbol).
     """
@@ -104,7 +118,12 @@ async def filter_drafts(drafts: Iterable[PredictionDraft]) -> list[PredictionDra
     survivors: list[PredictionDraft] = []
     dropped: dict[tuple[str, str], int] = {}
     for d in drafts:
-        if any(_draft_matches(d, L) for L in lessons):
+        hit = next((L for L in lessons if _draft_matches(d, L)), None)
+        if hit is not None:
+            if roll() < BYPASS_SHARE:
+                d.context = {**(d.context or {}), "lesson_bypass": hit.get("id")}
+                survivors.append(d)
+                continue
             key = (d.strategy_id, d.symbol)
             dropped[key] = dropped.get(key, 0) + 1
             continue

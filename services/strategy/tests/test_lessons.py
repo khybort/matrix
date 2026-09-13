@@ -115,3 +115,18 @@ async def test_empty_filter_does_not_block(monkeypatch):
     drafts = [_draft("s1", "BTCUSDT"), _draft("s1", "ETHUSDT")]
     out = await lessons.filter_drafts(drafts)
     assert len(out) == 2
+
+
+@pytest.mark.asyncio
+async def test_bypass_corridor_keeps_and_tags_a_share(monkeypatch, _clear_cache):
+
+    async def _ls():
+        return [{"id": "L9", "strategy_id": "grid", "asset_class": "crypto", "filter": {"symbol": "BTCUSDT"}}]
+
+    monkeypatch.setattr(lessons, "_load_avoid_filters", _ls)
+    monkeypatch.setattr(lessons, "BYPASS_SHARE", 0.10)
+    drafts = [_draft("grid", "BTCUSDT") for _ in range(3)]
+    rolls = iter([0.05, 0.5, 0.95])
+    out = await lessons.filter_drafts(drafts, roll=lambda: next(rolls))
+    assert len(out) == 1
+    assert out[0].context["lesson_bypass"] == "L9"
