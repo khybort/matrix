@@ -166,7 +166,7 @@ efficacy → rollback        ❌     yok
 | 8 | LLM re-auth | Cursor/Bedrock oturumu düşer, fallback yok, alarm yok | backend_state() → alarm + otomatik fallback |
 | 9 | Disk / retention | 97 GB, büyüme sınırsız | time-partition + TTL job |
 | 10 | Wallet reset | Sadece `db-reset` (TRUNCATE CASCADE, öğrenme verisini de siler) | ayrı "reset capital" |
-| 11 | `weight_tune`/`llm_guide` onayı | Dashboard butonu; 7 günde süpürülüyor | efficacy-gated auto-apply veya Telegram onayı |
+| 11 | `weight_tune`/`llm_guide` onayı | Dashboard butonu; 7 günde süpürülüyor | ✅ 2026-09-13: challenger modunda LLM önerileri otomatik `shadow` config olur, efficacy karar verir; anahtar doğrulaması var |
 | 12 | `LIVE_EXECUTION_ENABLED`, capital cap, mainnet key | **Tasarım gereği manuel — kalacak** | — |
 
 Doc↔kod sapmaları (güvenlik): `risk_caps.yaml` hiç okunmuyor; circuit breaker UTC gün dönümünde

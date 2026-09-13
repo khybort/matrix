@@ -122,6 +122,38 @@ SAFE_PARAM_TUNE_STRATEGIES: frozenset[str] = frozenset({
 })
 
 
+# LLM-authored reflection proposals (source agent|llm). They used to need a
+# dashboard click and were swept after 7 days, so the LLM path never changed
+# anything. In challenger mode they are safe to apply automatically: the new
+# version runs as a `shadow` beside the champion and reflection.efficacy cuts
+# over only on measured PnL. Keys must already exist in the champion's params
+# (nested dicts included) — a hallucinated knob is skipped, not merged.
+LLM_PROPOSAL_TYPES: frozenset[str] = frozenset({"threshold_change", "weight_tune"})
+LLM_PROPOSAL_SOURCES: frozenset[str] = frozenset({"agent", "llm"})
+
+
+def _keys_within(after: dict[str, Any], current: dict[str, Any]) -> bool:
+    for k, v in after.items():
+        if k not in current:
+            return False
+        if isinstance(v, dict):
+            if not isinstance(current.get(k), dict) or not _keys_within(v, current[k]):
+                return False
+    return True
+
+
+async def _champion_params(strategy_id: str, asset_class: str) -> dict[str, Any] | None:
+    async with shared_session_scope() as session:
+        row = (await session.execute(
+            select(StrategyConfig.params)
+            .where(StrategyConfig.strategy_id == strategy_id)
+            .where(StrategyConfig.asset_class == asset_class)
+            .where(StrategyConfig.status == "active")
+            .order_by(desc(StrategyConfig.version)).limit(1)
+        )).scalar_one_or_none()
+    return dict(row or {}) if row is not None else None
+
+
 def _scrub_forbidden(params: dict[str, Any]) -> dict[str, Any]:
     """Recursively drop any forbidden_fields keys."""
     out = {}
@@ -581,7 +613,9 @@ async def apply_best_pending_safe(
       - lab_promotion: fitness >= per-strategy scan threshold
       - slot_adjustment (source=slot_scorer): all (updates strategy_slot_configs)
       - param_tune (source=rule): strategy in SAFE_PARAM_TUNE_STRATEGIES
-      - weight_tune, llm_guide, …: NOT eligible.
+      - threshold_change / weight_tune (source=agent|llm): challenger mode only,
+        keys must exist in the champion params → applied as a shadow config
+      - anything else: NOT eligible.
     """
     await finalize_pending_slot_proposals()
 
@@ -637,6 +671,26 @@ async def apply_best_pending_safe(
                     f"apply-safe: proposal {pid} param_tune for "
                     f"{proposal.strategy_id} not in SAFE_PARAM_TUNE_STRATEGIES; skipping"
                 )
+
+        elif ptype in LLM_PROPOSAL_TYPES and proposal.source in LLM_PROPOSAL_SOURCES:
+            if not challenger_mode():
+                logger.debug(f"apply-safe: proposal {pid} {ptype} from {proposal.source} needs review "
+                             "(challenger mode off); skipping")
+                continue
+            current = await _champion_params(proposal.strategy_id, proposal.asset_class)
+            after = _scrub_forbidden(proposal.after_params or {})
+            if current is None or not after:
+                logger.debug(f"apply-safe: proposal {pid} {ptype}: no champion or empty params; skipping")
+                continue
+            if not _keys_within(after, current):
+                logger.warning(
+                    f"apply-safe: proposal {pid} {ptype} for {proposal.strategy_id} touches keys "
+                    f"outside the champion params ({sorted(after)} vs {sorted(current)}); skipping"
+                )
+                continue
+            eligible_ids.append(pid)
+            logger.info(f"apply-safe: proposal {pid} {ptype} ({proposal.source}) → challenger for "
+                        f"{proposal.strategy_id}/{proposal.asset_class}")
 
         else:
             logger.debug(

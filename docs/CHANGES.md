@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — Reflection LLM önerileri otomatik challenger olur (insan onayı kalktı)
+- `labs.promote.apply_best_pending_safe`: `threshold_change` / `weight_tune` (source `agent`|`llm`) önerileri challenger modunda otomatik uygulanır → `shadow` config; efficacy ölçer, ancak kanıtla cutover. Anahtarlar şampiyon params'ında yoksa (hallucinated knob) atlanır ve uyarı loglanır; challenger modu kapalıysa pending kalır (insan). 7 pending LLM önerisi (18:10–18:17) bu yolla işlenir. AUTONOMY_PLAN §6 #11 kapandı.
+
 ## 2026-09-13 — Paper engine: challenger pozisyonları şampiyon cüzdanına yazılıyordu (−$343/gün); aday havuzu sıralı
 - `paper_trade._open_for_market(shadow=True)` pozisyon açarken cüzdanı `shadow` bayrağı olmadan çözüyordu → tüm shadow (challenger) pozisyonları DEFAULT cüzdana, per-strateji slot cap'i olmadan yazıldı. 2026-09-13'te funding_reversion v3 (shadow) 1.198 trade ile şampiyon cüzdanını $343 eritti; şampiyon v2 aynı günde 25 trade. Fix: doğru cüzdan + shadow pass şampiyonun `strategy_slot_configs`'unu ödünç alır (challenger aynı sermaye disipliniyle koşar; karşılaştırma parametreleri ölçer, slot sayısını değil).
 - Aday havuzu `ORDER BY confidence DESC, generated_at DESC` sonra LIMIT (önce sırasız LIMIT vardı; 764 açık prediction'lık kuyrukta en iyi/en yeni adaylar EV sıralamasına hiç ulaşmıyordu; `test_slot_enforcement` bu yüzden 0 pozisyon görüyordu).

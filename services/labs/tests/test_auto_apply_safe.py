@@ -55,6 +55,7 @@ async def _insert_proposal(
     metrics_window: dict,
     source: str = "labs",
     asset_class: str = "crypto",
+    after_params: dict | None = None,
 ) -> uuid.UUID:
     async with shared_session_scope() as session:
         p = MutationProposal(
@@ -64,7 +65,7 @@ async def _insert_proposal(
             to_version=2,
             proposal_type=proposal_type,
             before_params={},
-            after_params={"signal_threshold": 0.6},
+            after_params=after_params if after_params is not None else {"signal_threshold": 0.6},
             metrics_window=metrics_window,
             rationale="test",
             status="pending",
@@ -383,5 +384,65 @@ async def test_safe_apply_skips_param_tune_llm_source():
         applied = await apply_best_pending_safe(min_fitness=Decimal("0.10"))
         assert pid not in applied, "param_tune from llm source should not be auto-applied"
         assert await _get_proposal_status(pid) == "pending"
+    finally:
+        await _cleanup(sid)
+
+
+async def _configs(sid: str) -> dict[int, str]:
+    async with shared_session_scope() as session:
+        rows = (await session.execute(
+            select(StrategyConfig.version, StrategyConfig.status).where(StrategyConfig.strategy_id == sid)
+        )).all()
+    return {int(v): st for v, st in rows}
+
+
+@pytest.mark.asyncio
+async def test_safe_apply_turns_llm_threshold_change_into_challenger(test_wallet, monkeypatch):
+    """Reflection-agent proposals auto-apply as a shadow challenger in challenger
+    mode; the champion stays active and gets measured against it."""
+    from labs.promote import apply_best_pending_safe
+    monkeypatch.setenv("MATRIX_CHALLENGER_MODE", "true")
+    sid = _make_sid()
+    await _insert_strategy(sid)
+    pid = await _insert_proposal(sid, proposal_type="threshold_change", metrics_window={}, source="agent")
+    try:
+        applied = await apply_best_pending_safe(min_fitness=Decimal("0.10"))
+        assert pid in applied
+        assert await _get_proposal_status(pid) == "applied"
+        assert _configs_expected(await _configs(sid))
+    finally:
+        await _cleanup(sid)
+
+
+def _configs_expected(cfgs: dict[int, str]) -> bool:
+    return cfgs.get(1) == "active" and cfgs.get(2) == "shadow"
+
+
+@pytest.mark.asyncio
+async def test_safe_apply_skips_llm_proposal_with_unknown_keys(monkeypatch):
+    from labs.promote import apply_best_pending_safe
+    monkeypatch.setenv("MATRIX_CHALLENGER_MODE", "true")
+    sid = _make_sid()
+    await _insert_strategy(sid)
+    pid = await _insert_proposal(sid, proposal_type="weight_tune", metrics_window={}, source="agent",
+                                 after_params={"signal_threshold": 0.6, "hallucinated_knob": 3})
+    try:
+        applied = await apply_best_pending_safe(min_fitness=Decimal("0.10"))
+        assert pid not in applied and await _get_proposal_status(pid) == "pending"
+        assert (await _configs(sid)) == {1: "active"}
+    finally:
+        await _cleanup(sid)
+
+
+@pytest.mark.asyncio
+async def test_safe_apply_keeps_llm_proposal_pending_when_challenger_mode_off(monkeypatch):
+    from labs.promote import apply_best_pending_safe
+    monkeypatch.setenv("MATRIX_CHALLENGER_MODE", "false")
+    sid = _make_sid()
+    await _insert_strategy(sid)
+    pid = await _insert_proposal(sid, proposal_type="threshold_change", metrics_window={}, source="llm")
+    try:
+        applied = await apply_best_pending_safe(min_fitness=Decimal("0.10"))
+        assert pid not in applied and await _get_proposal_status(pid) == "pending"
     finally:
         await _cleanup(sid)
