@@ -17,9 +17,13 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _cleanup(sid: str) -> None:
+    from matrix_shared.models.slot_config import StrategySlotConfig
     async with shared_session_scope() as session:
         await session.execute(delete(MutationProposal).where(MutationProposal.strategy_id == sid))
         await session.execute(delete(StrategyConfig).where(StrategyConfig.strategy_id == sid))
+        # apply_proposal bootstraps a slot row in every wallet of the market;
+        # leaving them behind diluted the live slot shares (chal_* residue).
+        await session.execute(delete(StrategySlotConfig).where(StrategySlotConfig.strategy_id == sid))
 
 
 async def _proposal(sid: str, after: dict) -> uuid.UUID:

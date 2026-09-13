@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — labs challenger testi slot satırlarını da temizler
+- `test_challenger` `apply_proposal`'ın her cüzdana açtığı `strategy_slot_configs` satırlarını silmiyordu (canlıda 12 `chal_*` kalıntı). Teardown eklendi.
+
 ## 2026-09-13 — Slot payı yalnızca canlı stratejiler arasında bölünür
 - `strategy_slot_configs`'ta 15 hayalet satır (labs test kalıntısı `chal_*`, crypto cüzdanında BIST modülleri) bölen sayısını 22'ye çıkarıyordu: gerçek stratejilerin taban payı 80//22=3 yerine 80//9=8 olmalıydı. Kalıntılar silindi; scorer bölen olarak yalnızca `active`/`shadow` config'i olan stratejileri sayar.
 
