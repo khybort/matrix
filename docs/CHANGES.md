@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-09-12 — P4: dev_agent closes its loop (test → commit → merge) + guards
+
+- `dev_agent/integrate.py`: after a successful run — pytest for every touched service
+  (`uv run --project`, python-shared included) → commit on `dev-agent/task-N` → `git merge --no-ff`
+  into `base_branch` in the live repo, unless the repo has uncommitted edits to the same files or
+  the merge conflicts (then `awaiting_review` with the reason). Test failure → `failed/test_broke`.
+  Merged worktrees are removed. `DEV_AGENT_INTEGRATION=branch` disables merging. Previously
+  `merged` was only a DB label (9 tasks, 0 commits).
+- Guards that existed on paper now run: `reap_stuck_running` each worker iteration, heartbeat every
+  5 SDK events, per-task cost cap enforced from the SDK result cost, daily cap idles the picker,
+  worktree failure fails the task instead of running in `/workspace`.
+- `FORBIDDEN_PATHS` re-closed for exactly `trading_safety.py`, `exchange_shadow.py`,
+  `execution/safety.py` (everything else stays open). Prompt/README/tests updated.
+- Lessons: drafts whose topic recurs twice auto-activate (`auto-repeat`).
+- `reflection/efficacy.maybe_file_dev_task`: ≥3 negative efficacy verdicts (rollbacks / retired
+  challengers) for a strategy in 14 days → files one `dev_tasks` row (source `reflection`) asking
+  dev_agent to rework the strategy logic. First automatic task source besides the lessons feeder.
+- `make dev-agent-clean` now points at a real module (`dev_agent.clean`, DAYS=7).
+- Known pre-existing failures left alone: `test_codebase` (codebase index never wired) and
+  `test_cursor_runner_blocks_trading_path`.
+
 ## 2026-09-12 — P2.1: lesson lifecycle — TTL, effect-size confidence, exploration corridor
 
 - `agent_lessons/synthesizer`: `_confidence(n, win_rate)` = sample curve × binomial-z significance

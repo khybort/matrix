@@ -1,13 +1,18 @@
 """Lessons store. Phase 0: text-only retrieval. Phase 0+: embedding-based.
 
-All lessons enter as 'draft'. The operator promotes to 'active' explicitly.
+All lessons enter as 'draft'. They become 'active' either by operator
+approval or automatically once the same topic has been drafted
+AUTO_ACTIVATE_REPEATS times (the failure keeps recurring).
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import asyncpg
+
+AUTO_ACTIVATE_REPEATS = int(os.environ.get("DEV_AGENT_LESSON_AUTO_ACTIVATE_REPEATS", "2"))
 
 
 async def write_lesson_draft(
@@ -91,3 +96,20 @@ async def search_lessons_text(
             ids,
         )
     return [dict(r) for r in rows]
+
+
+async def auto_activate_repeated(pool: asyncpg.Pool, *, min_repeats: int = AUTO_ACTIVATE_REPEATS) -> int:
+    """Promote draft lessons whose topic recurred ≥ min_repeats times.
+
+    A lesson drafted once may be noise; the same topic twice is a pattern the
+    agent should see next run without waiting for a human."""
+    rows = await pool.fetch(
+        """
+        UPDATE dev_agent_lessons SET status='active', approved_at=NOW(), approved_by='auto-repeat'
+        WHERE status='draft'
+          AND topic IN (SELECT topic FROM dev_agent_lessons GROUP BY topic HAVING count(*) >= $1)
+        RETURNING id
+        """,
+        min_repeats,
+    )
+    return len(rows)

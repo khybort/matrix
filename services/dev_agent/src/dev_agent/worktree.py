@@ -1,8 +1,8 @@
 """Git worktree lifecycle for dev_agent tasks.
 
 Each task gets a worktree at <worktree_root>/task-<id>/ on a branch
-named dev-agent/task-<id>. Worktrees are NEVER auto-deleted; the operator
-runs `make dev-agent-clean` to apply the cleanup policy.
+named dev-agent/task-<id>. Merged worktrees are removed by integrate.py;
+`make dev-agent-clean` (dev_agent.clean) sweeps the rest by age.
 """
 
 from __future__ import annotations
@@ -97,14 +97,17 @@ class WorktreeManager:
         return r.stdout.strip()
 
 
-def assert_no_unauthorized_commits(wt: Worktree, *, auto_commit: bool) -> None:
+def assert_no_unauthorized_commits(
+    wt: Worktree, *, auto_commit: bool, base_branch: str = "main"
+) -> None:
     """Defense in depth. If auto_commit=False but the agent committed anyway,
-    soft-reset back to the base branch — work is preserved in the working tree.
+    soft-reset back to the base branch — work is preserved in the working tree
+    (and integrate.py commits it properly after tests).
     """
     if auto_commit:
         return
     r = subprocess.run(
-        ("git", "rev-list", "--count", "main..HEAD"),
+        ("git", "rev-list", "--count", f"{base_branch}..HEAD"),
         cwd=str(wt.path),
         capture_output=True,
         text=True,

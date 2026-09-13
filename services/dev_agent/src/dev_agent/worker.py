@@ -84,8 +84,14 @@ async def process_one_task(
         _ensure_test_repo(repo_root)
         wt_mgr = WorktreeManager(repo_root=repo_root, worktree_root=worktree_root)
         wt = wt_mgr.create(task_id=task_id, base_branch=task["base_branch"])
-    except Exception:
-        wt = None
+    except Exception as e:
+        # Never run an agent with Bash/Edit/Write against the live repo: no
+        # worktree → the task fails, loudly, instead of editing /workspace.
+        from loguru import logger
+        logger.exception(f"task #{task_id}: worktree creation failed: {e}")
+        await _finalize(pool, task_id, run_id, status="failed", failure_reason="worktree_failed",
+                        cost=0.0, tokens=0, events=0, worktree_path=None, notes=str(e)[:500])
+        return True
 
     await beat_heartbeat(pool, task_id)
 
@@ -136,55 +142,52 @@ async def process_one_task(
     except ImportError:
         pass
 
+    async def _beat() -> None:
+        await beat_heartbeat(pool, task_id)
+
     result = await run_task_with_query(
         pool=pool,
         task_id=task_id,
         run_id=run_id,
-        cwd=wt.path if wt else worktree_root,
+        cwd=wt.path,
         max_turns=task["max_turns"],
         cost_cap_usd=float(task["cost_cap_usd"]),
         scenario=None,
         query_fn=query_fn or _empty_query,
         prompt=task["description"],
         options=options,
+        heartbeat=_beat,
     )
 
-    if wt is not None:
-        try:
-            assert_no_unauthorized_commits(wt, auto_commit=task["auto_commit"])
-        except Exception:
-            pass
+    try:
+        assert_no_unauthorized_commits(wt, auto_commit=task["auto_commit"],
+                                       base_branch=task.get("base_branch") or "main")
+    except Exception:
+        pass
 
-    # review_mode picks the post-completion terminal state for successful runs:
-    #   auto   → 'merged' (reviewed_by='auto'), skipping human review queue
-    #   manual → 'awaiting_review' (today's behavior; needs POST /accept|/discard)
-    # Failed tasks ignore this — failure has its own queue, lesson_synth path,
-    # and a human probably wants to see what broke.
+    # Successful runs go through integration (test → commit → merge). The
+    # terminal status is whatever integration decides:
+    #   merged           work is on the base branch (or no changes were made)
+    #   awaiting_review  committed on dev-agent/task-N; a human merges
+    #   failed           tests broke (test_broke) or the run itself failed
+    review_mode = task.get("review_mode", "auto")
+    final_status, failure_reason, notes, tests = "failed", result.failure_reason, None, None
     if result.completed:
-        final_status = "merged" if task.get("review_mode", "auto") == "auto" else "awaiting_review"
-    else:
-        final_status = "failed"
-    auto_review = result.completed and task.get("review_mode", "auto") == "auto"
-    await pool.execute(
-        """UPDATE dev_tasks
-           SET status=$1, finished_at=NOW(),
-               failure_reason=$2, total_cost_usd=$3, total_tokens=$4,
-               worktree_path=$5,
-               reviewed_at = CASE WHEN $7::bool THEN NOW() ELSE reviewed_at END,
-               reviewed_by = CASE WHEN $7::bool THEN 'auto'  ELSE reviewed_by END
-           WHERE id=$6""",
-        final_status, result.failure_reason, result.total_cost_usd, result.total_tokens,
-        str(wt.path) if wt else None, task_id, auto_review,
-    )
-    await pool.execute(
-        """UPDATE dev_task_runs
-           SET status=$1, finished_at=NOW(),
-               failure_reason=$2, cost_usd=$3, tokens=$4,
-               event_count=$5
-           WHERE id=$6""",
-        final_status, result.failure_reason, result.total_cost_usd, result.total_tokens,
-        result.event_count, run_id,
-    )
+        from dev_agent.integrate import integrate
+        try:
+            integ = await integrate(wt=wt, repo_root=repo_root, worktree_root=worktree_root,
+                                    task=task, review_mode=review_mode)
+            final_status, failure_reason, notes, tests = (
+                integ.status, integ.failure_reason, integ.notes, integ.tests,
+            )
+        except Exception as e:
+            from loguru import logger
+            logger.exception(f"task #{task_id}: integration failed: {e}")
+            final_status, failure_reason, notes = "awaiting_review", None, f"integration error: {e}"[:500]
+
+    await _finalize(pool, task_id, run_id, status=final_status, failure_reason=failure_reason,
+                    cost=result.total_cost_usd, tokens=result.total_tokens, events=result.event_count,
+                    worktree_path=str(wt.path), notes=notes, tests=tests)
 
     if final_status == "failed":
         try:
@@ -192,14 +195,46 @@ async def process_one_task(
                 maybe_synthesize_lesson_for_failure,
                 real_haiku_llm,
             )
+            from dev_agent.memory import auto_activate_repeated
             await maybe_synthesize_lesson_for_failure(
                 pool, task_id=task_id, llm=real_haiku_llm,
             )
+            await auto_activate_repeated(pool)
         except Exception:
             from loguru import logger
             logger.exception("lesson synth failed (non-fatal)")
 
     return True
+
+
+async def _finalize(
+    pool: asyncpg.Pool, task_id: int, run_id: int, *, status: str, failure_reason: str | None,
+    cost: float, tokens: int, events: int, worktree_path: str | None,
+    notes: str | None = None, tests: dict | None = None,
+) -> None:
+    import json
+    auto_review = status == "merged"
+    await pool.execute(
+        """UPDATE dev_tasks
+           SET status=$1, finished_at=NOW(),
+               failure_reason=$2, total_cost_usd=$3, total_tokens=$4,
+               worktree_path=$5,
+               reviewed_at = CASE WHEN $7::bool THEN NOW() ELSE reviewed_at END,
+               reviewed_by = CASE WHEN $7::bool THEN 'auto'  ELSE reviewed_by END,
+               review_notes = COALESCE($8, review_notes),
+               test_results = COALESCE($9::jsonb, test_results)
+           WHERE id=$6""",
+        status, failure_reason, cost, tokens, worktree_path, task_id, auto_review,
+        notes, json.dumps(tests) if tests is not None else None,
+    )
+    await pool.execute(
+        """UPDATE dev_task_runs
+           SET status=$1, finished_at=NOW(),
+               failure_reason=$2, cost_usd=$3, tokens=$4,
+               event_count=$5
+           WHERE id=$6""",
+        status, failure_reason, cost, tokens, events, run_id,
+    )
 
 
 async def _empty_query(prompt, options, **_):

@@ -3,14 +3,10 @@
 FORBIDDEN_PATHS is intentionally a top-level tuple. It is NOT loaded from
 env vars or a YAML file. Changing it requires a code edit and a commit.
 
-2026-05-26: opened by operator directive. The autonomous learning loop
-needs dev_agent to be able to mutate strategy / agent / execution code
-based on its own outcome feedback. Live capital safety lives in
-services/execution (order submission + matrix_shared.trading_safety:
-certificate gates, kill switch) — independent of this path gate.
-
-Rollback path: re-populate the tuple with the three service prefixes
-(services/strategy/, services/agent/, services/execution/), commit, redeploy.
+2026-05-26: opened by operator directive so the learning loop can mutate
+strategy / agent / execution code. 2026-09-12: re-closed for exactly the
+live-capital gate files (see FORBIDDEN_PATHS) — the agent can improve how
+we trade, never whether a real order is allowed.
 """
 
 from __future__ import annotations
@@ -18,10 +14,15 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-# Empty since 2026-05-26 — dev_agent may Edit/Write anywhere in the worktree.
-# Live capital safety is NOT gated here; enforced in services/execution at order
-# submission (paper_trade_certificate, kill switch via matrix_shared.trading_safety).
-FORBIDDEN_PATHS: tuple[str, ...] = ()
+# 2026-09-12 (docs/AUTONOMY_PLAN.md P4.6): dev_agent may edit strategies,
+# the agent and execution adapters, but NOT the three files that stand
+# between the paper engine and real money. Those change only via a human
+# commit. Everything else in the worktree is open.
+FORBIDDEN_PATHS: tuple[str, ...] = (
+    "packages/python-shared/src/matrix_shared/trading_safety.py",
+    "packages/python-shared/src/matrix_shared/exchange_shadow.py",
+    "services/execution/src/execution/safety.py",
+)
 
 
 @dataclass(frozen=True)

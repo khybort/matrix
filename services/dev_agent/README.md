@@ -1,10 +1,19 @@
 # matrix-dev_agent
 
 Self-improving development agent. Drives Claude Code via the Claude Agent SDK
-in isolated git worktrees. `FORBIDDEN_PATHS` in `config.py` is empty (since
-2026-05-26): autonomous Edit/Write is allowed everywhere, including
-`services/strategy/`, `services/agent/`, and `services/execution/`. Live capital
-safety is enforced separately in `services/execution` at order-submission time.
+in isolated git worktrees. `FORBIDDEN_PATHS` in `config.py` protects exactly the
+three live-capital gate files (`matrix_shared/trading_safety.py`,
+`matrix_shared/exchange_shadow.py`, `execution/safety.py`); everything else —
+strategies, agent, execution adapters — is open to autonomous edits.
+
+Since 2026-09-12 a completed task is **integrated**, not just labelled: the
+runner runs pytest for every touched service in the worktree, commits, and
+merges `dev-agent/task-N` into `main` (`DEV_AGENT_INTEGRATION=merge`, default)
+unless the live repo has uncommitted edits to the same files or the merge
+conflicts — then the branch is left `awaiting_review`. Failing tests fail the
+task (`test_broke`) and feed the lesson synthesizer. Merged worktrees are
+removed automatically. Merging into the bind-mounted repo is the deploy:
+watchfiles reloads the touched services.
 
 ## Quick start
 
@@ -58,8 +67,9 @@ git diff main
 
 ## Lessons (the learning loop)
 
-Failed tasks generate **draft** lessons. They do not influence future runs until
-you approve them:
+Failed tasks generate **draft** lessons. A lesson becomes active when you approve
+it, or automatically once the same topic has recurred twice
+(`DEV_AGENT_LESSON_AUTO_ACTIVATE_REPEATS`):
 
 ```bash
 curl localhost:8009/lessons?status=draft | jq
@@ -91,17 +101,20 @@ cd services/dev_agent && uv run pytest -v -m live
 
 Hard rules — none of them can be turned off via config:
 
-- **Path edits**: `FORBIDDEN_PATHS` in `config.py` is `()` — Edit/Write to
-  strategy/agent/execution is permitted (`safety.py` only blocks prefixes listed
-  in that tuple). Repopulate the tuple to restore default-deny and
-  `failure_reason='trading_path_violation'`.
+- **Path edits**: `FORBIDDEN_PATHS` in `config.py` lists the three live-capital
+  gate files; Edit/Write to them fails the task with
+  `failure_reason='trading_path_violation'`. Everything else is permitted.
 - **Live capital**: enforced in `services/execution` (paper-trade certificate,
   kill switch via `matrix_shared.trading_safety`) — independent of dev_agent
   path policy.
 - **`dev-agent/*` branches** cannot be pushed (`infra/hooks/pre-push`).
   Install with `make install-hooks`.
-- **Per-task cost cap** defaults to $5; daily cap to $50. Env vars:
+- **Per-task cost cap** defaults to $5 (enforced from the SDK's final result
+  cost); **daily cap** $50 pauses picking for the rest of the UTC day. Env vars:
   `DEV_AGENT_TASK_COST_CAP_USD`, `DEV_AGENT_DAILY_COST_CAP_USD`.
+- **Heartbeat reaper** runs every worker iteration; tasks silent > 120s are
+  marked `failed/worker_crash`. Tasks whose worktree can't be created fail
+  (`worktree_failed`) instead of running against the live repo.
 - **All new lessons** enter as `draft` and only influence future tasks after
   explicit `/dev-task lesson-approve <id>`.
 - **Tool loop guard**: 5 consecutive identical tool calls fails the task.

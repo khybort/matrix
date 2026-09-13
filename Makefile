@@ -426,8 +426,8 @@ dev-agent-resume: ## Global kill switch OFF
 	$(PSQL) -c "UPDATE dev_agent_runtime SET paused=false, pause_reason=NULL, paused_at=NULL, paused_by=NULL WHERE id=true;"
 
 .PHONY: dev-agent-clean
-dev-agent-clean: ## Apply worktree cleanup policy (manual; cron is intentionally absent)
-	$(DC) $(DC_DEV) exec dev_agent uv run python -m dev_agent.tools.clean
+dev-agent-clean: ## Remove worktrees of terminal tasks older than DAYS (default 7); merged ones are removed automatically
+	$(DC) $(DC_DEV) exec dev-agent uv run python -m dev_agent.clean $(or $(DAYS),7)
 
 .PHONY: dev-agent-index
 dev-agent-index: ## Rebuild dev_codebase_nodes index (POST /codebase/reindex)

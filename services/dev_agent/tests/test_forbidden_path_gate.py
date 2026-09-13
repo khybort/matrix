@@ -1,11 +1,8 @@
 """tests/test_forbidden_path_gate.py
 
-FORBIDDEN_PATHS was opened on 2026-05-26 — these tests now assert the
-new policy: dev_agent's autonomous edits are permitted everywhere,
-including services/strategy, services/agent, services/execution.
-
-If you re-close the gate (repopulate the tuple in dev_agent.config),
-flip these expectations back to assert pytest.raises(ForbiddenPathError).
+Policy since 2026-09-12: dev_agent may edit anywhere EXCEPT the three
+live-capital gate files (trading_safety, exchange_shadow, execution.safety).
+services/strategy, services/agent and the rest of services/execution stay open.
 The runtime live-execution wall (paper_trade_certificate) is enforced
 separately in matrix_shared.trading_safety and is not exercised here.
 """
@@ -18,9 +15,26 @@ from dev_agent.config import FORBIDDEN_PATHS
 from dev_agent.safety import check_tool_call
 
 
-def test_forbidden_paths_is_empty():
-    """Policy invariant — gate is open. Inverting this needs an operator decision."""
-    assert FORBIDDEN_PATHS == ()
+def test_forbidden_paths_protect_only_live_capital_gates():
+    """Policy invariant (2026-09-12): exactly the three live-capital gate
+    files are closed; everything else is open."""
+    assert FORBIDDEN_PATHS == (
+        "packages/python-shared/src/matrix_shared/trading_safety.py",
+        "packages/python-shared/src/matrix_shared/exchange_shadow.py",
+        "services/execution/src/execution/safety.py",
+    )
+
+
+@pytest.mark.parametrize("path", [
+    "services/execution/src/execution/safety.py",
+    "/workspace/worktrees/dev-agent/task-3/services/execution/src/execution/safety.py",
+    "packages/python-shared/src/matrix_shared/trading_safety.py",
+    "/workspace/worktrees/dev-agent/task-3/packages/python-shared/src/matrix_shared/exchange_shadow.py",
+])
+def test_edit_to_live_gate_file_is_refused(path):
+    from dev_agent.safety import ForbiddenPathError
+    with pytest.raises(ForbiddenPathError):
+        check_tool_call(tool_name="Edit", params={"file_path": path})
 
 
 @pytest.mark.parametrize("path", [

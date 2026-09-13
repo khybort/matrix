@@ -13,11 +13,15 @@ from loguru import logger
 from dev_agent.api import build_app
 from dev_agent.config import load_config
 from dev_agent.db import make_pool
-from dev_agent.runtime import is_paused
+from dev_agent.runtime import daily_spend_usd, is_paused, reap_stuck_running
 from dev_agent.worker import process_one_task
 
+REAP_SILENCE_S = 120
+_daily_cap_logged = False
 
-async def _worker_loop(pool, repo_root: Path, worktree_root: Path) -> None:
+
+async def _worker_loop(pool, repo_root: Path, worktree_root: Path, daily_cap_usd: float = 50.0) -> None:
+    global _daily_cap_logged
     # Lazy import so tests with fake_sdk don't need the real SDK installed.
     try:
         from claude_agent_sdk import query as real_query
@@ -28,9 +32,20 @@ async def _worker_loop(pool, repo_root: Path, worktree_root: Path) -> None:
 
     while True:
         try:
+            reaped = await reap_stuck_running(pool, max_silence_seconds=REAP_SILENCE_S)
+            if reaped:
+                logger.warning(f"reaped {reaped} stuck running task(s) (heartbeat > {REAP_SILENCE_S}s)")
             if await is_paused(pool):
                 await asyncio.sleep(5)
                 continue
+            spent = await daily_spend_usd(pool)
+            if spent >= daily_cap_usd:
+                if not _daily_cap_logged:
+                    logger.warning(f"daily cost cap reached (${spent:.2f} >= ${daily_cap_usd:.2f}); idling")
+                    _daily_cap_logged = True
+                await asyncio.sleep(300)
+                continue
+            _daily_cap_logged = False
             handled = await process_one_task(
                 pool=pool,
                 repo_root=repo_root,
@@ -57,7 +72,7 @@ async def lifespan(app: FastAPI):
     app.state.cfg = cfg
     logger.info("dev_agent starting on port {}", cfg.port)
     worker_task = asyncio.create_task(
-        _worker_loop(pool, Path(cfg.repo_root), Path(cfg.worktree_root))
+        _worker_loop(pool, Path(cfg.repo_root), Path(cfg.worktree_root), cfg.daily_cost_cap_usd)
     )
     try:
         yield

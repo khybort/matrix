@@ -55,6 +55,12 @@ AUTO_ROLLBACK = os.environ.get("MATRIX_EFFICACY_AUTO_ROLLBACK", "true").strip().
 # Bound the per-tick work: the June-2026 backlog is ~2,700 applied proposals and
 # the outcome join has no version index; 25/tick drains it in a day.
 MAX_PER_TICK = int(os.environ.get("MATRIX_EFFICACY_MAX_PER_TICK", "25"))
+# When parameter tuning keeps failing, escalate to code: after this many
+# negative verdicts (rollbacks / retired challengers) for one strategy within
+# DEV_TASK_WINDOW_DAYS, file a dev_agent task to rework the strategy logic.
+DEV_TASK_NEGATIVE_THRESHOLD = int(os.environ.get("MATRIX_EFFICACY_DEV_TASK_NEGATIVES", "3"))
+DEV_TASK_WINDOW_DAYS = float(os.environ.get("MATRIX_EFFICACY_DEV_TASK_WINDOW_DAYS", "14"))
+DEV_TASK_ENABLED = os.environ.get("MATRIX_EFFICACY_DEV_TASKS", "true").strip().lower() != "false"
 
 _SKIP_TYPES = frozenset({"slot_adjustment", "rollback"})
 
@@ -194,6 +200,7 @@ async def evaluate_applied_proposals(
     now = now or datetime.now(UTC)
     counts: dict[str, int] = {}
     evaluated = 0
+    escalate: list[tuple[str, str]] = []
     async with shared_session_scope() as session:
         stmt = (
             select(MutationProposal)
@@ -261,6 +268,7 @@ async def evaluate_applied_proposals(
                         efficacy["rollback_version"] = new_v
                         row.status = "reverted"
                         counts["rolled_back"] = counts.get("rolled_back", 0) + 1
+                        escalate.append((p.strategy_id, p.asset_class))
                         logger.warning(
                             f"efficacy: ROLLED BACK {p.strategy_id}/{p.asset_class} "
                             f"v{after_version} → v{new_v} (proposal {p.id}, z={efficacy['z']})"
@@ -273,6 +281,11 @@ async def evaluate_applied_proposals(
         except Exception as e:  # noqa: BLE001 — one proposal must not break the pass
             logger.exception(f"efficacy: proposal {p.id} evaluation failed: {e}")
 
+    for sid, ac in dict.fromkeys(escalate):
+        try:
+            await maybe_file_dev_task(sid, ac, now=now)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"efficacy: dev task escalation failed for {sid}/{ac}: {e}")
     if counts:
         logger.info("efficacy: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
     return counts
@@ -307,6 +320,7 @@ async def evaluate_challengers(*, now: datetime | None = None, strategy_id: str 
     challenger started; cut over or retire it. Returns counts by verdict."""
     now = now or datetime.now(UTC)
     counts: dict[str, int] = {}
+    retired_for: list[tuple[str, str]] = []
     async with shared_session_scope() as session:
         stmt = select(StrategyConfig).where(StrategyConfig.status == "shadow")
         if strategy_id is not None:
@@ -357,6 +371,7 @@ async def evaluate_challengers(*, now: datetime | None = None, strategy_id: str 
                 else:
                     sh_row.status = "retired"
                     ptype, pstatus = "challenger_retired", "rejected"
+                    retired_for.append((sh.strategy_id, sh.asset_class))
                     logger.info(
                         f"efficacy: retired challenger {sh.strategy_id}/{sh.asset_class} v{sh.version} "
                         f"(n={s_s.n}, mean {s_s.mean:.4f} vs champion {c_s.mean:.4f}, age {age_h:.0f}h)"
@@ -372,6 +387,75 @@ async def evaluate_challengers(*, now: datetime | None = None, strategy_id: str 
                 ))
         except Exception as e:  # noqa: BLE001
             logger.exception(f"efficacy: challenger {sh.strategy_id} v{sh.version} evaluation failed: {e}")
+    for sid, ac in dict.fromkeys(retired_for):
+        try:
+            await maybe_file_dev_task(sid, ac, now=now)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"efficacy: dev task escalation failed for {sid}/{ac}: {e}")
     if counts:
         logger.info("challengers: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
     return counts
+
+
+# ------------------------------------------------------- escalate to dev_agent
+
+async def maybe_file_dev_task(strategy_id: str, asset_class: str, *, now: datetime | None = None) -> int | None:
+    """Parameter tuning has failed repeatedly → ask dev_agent to rework the code.
+
+    Counts `reverted` proposals + `challenger_retired` rows for the strategy in
+    the window; at DEV_TASK_NEGATIVE_THRESHOLD files ONE `dev_tasks` row
+    (source `reflection`, marker `[efficacy:<sid>/<ac>]`, deduped for the
+    window). Returns the new task id or None.
+    """
+    if not DEV_TASK_ENABLED:
+        return None
+    from sqlalchemy import text as _text
+    now = now or datetime.now(UTC)
+    since = now - timedelta(days=DEV_TASK_WINDOW_DAYS)
+    marker = f"[efficacy:{strategy_id}/{asset_class}]"
+    async with shared_session_scope() as session:
+        negatives = (await session.execute(
+            select(func.count(MutationProposal.id))
+            .where(MutationProposal.strategy_id == strategy_id)
+            .where(MutationProposal.asset_class == asset_class)
+            .where(MutationProposal.updated_at >= since)
+            .where(
+                (MutationProposal.status == "reverted")
+                | (MutationProposal.proposal_type == "challenger_retired")
+            )
+        )).scalar_one()
+        if int(negatives or 0) < DEV_TASK_NEGATIVE_THRESHOLD:
+            return None
+        dup = (await session.execute(_text(
+            "SELECT id FROM dev_tasks WHERE description LIKE :m AND created_at >= :since LIMIT 1"
+        ), {"m": f"%{marker}%", "since": since})).scalar()
+        if dup is not None:
+            return None
+        recent = (await session.execute(
+            select(MutationProposal.proposal_type, MutationProposal.rationale, MutationProposal.metrics_window)
+            .where(MutationProposal.strategy_id == strategy_id)
+            .where(MutationProposal.asset_class == asset_class)
+            .where(MutationProposal.updated_at >= since)
+            .order_by(desc(MutationProposal.updated_at)).limit(5)
+        )).all()
+        evidence = "\n".join(
+            f"- {ptype}: {str(rat)[:160]} | efficacy={json.dumps((mw or {}).get('efficacy') or (mw or {}).get('challenger'), default=str)[:200]}"
+            for ptype, rat, mw in recent
+        )
+        description = (
+            f"{marker} Strategy `{strategy_id}` ({asset_class}) keeps losing after parameter "
+            f"mutations: {negatives} negative efficacy verdicts in {DEV_TASK_WINDOW_DAYS:.0f} days "
+            f"(rollbacks / retired challengers). Parameter tuning is exhausted — review the signal "
+            f"logic itself. Read the strategy module under services/strategy/src/strategy/modules/"
+            f"{asset_class}/ (or services/agent for matrix_agent), the recent outcomes for it, and "
+            f"either fix a concrete defect in how the signal is computed or add a guard that stops "
+            f"it trading in the regime where it loses. Keep the change small and covered by tests; "
+            f"do not touch risk caps or the live-capital gate files.\n\nRecent evidence:\n{evidence}"
+        )
+        task_id = (await session.execute(_text(
+            "INSERT INTO dev_tasks (source, description, priority, touches_files, run_tests, "
+            " review_mode, auto_commit) "
+            "VALUES ('reflection', :d, 3, :tf, TRUE, 'auto', FALSE) RETURNING id"
+        ), {"d": description, "tf": [f"services/strategy/src/strategy/modules/{asset_class}/"]})).scalar()
+    logger.warning(f"efficacy: filed dev task #{task_id} for {strategy_id}/{asset_class} ({negatives} negatives)")
+    return int(task_id) if task_id is not None else None

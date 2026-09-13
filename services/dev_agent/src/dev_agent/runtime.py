@@ -82,3 +82,12 @@ async def reap_stuck_running(pool: asyncpg.Pool, max_silence_seconds: int = 120)
         max_silence_seconds,
     )
     return len(rows)
+
+
+async def daily_spend_usd(pool: asyncpg.Pool) -> float:
+    """Sum of total_cost_usd for tasks finished in the current UTC day."""
+    val = await pool.fetchval(
+        "SELECT COALESCE(SUM(total_cost_usd), 0) FROM dev_tasks "
+        "WHERE finished_at >= date_trunc('day', NOW() AT TIME ZONE 'utc') AT TIME ZONE 'utc'"
+    )
+    return float(val or 0)

@@ -24,6 +24,9 @@ from dev_agent.safety import (
 )
 
 
+HEARTBEAT_EVERY = 5
+
+
 @dataclass
 class RunResult:
     completed: bool
@@ -129,8 +132,12 @@ async def run_task_with_query(
     scenario: Any | None = None,
     prompt: str = "",
     options: Any = None,
+    heartbeat: Callable[[], Any] | None = None,
 ) -> RunResult:
-    """Drive a Claude Agent SDK run; record events; enforce gates."""
+    """Drive a Claude Agent SDK run; record events; enforce gates.
+
+    `heartbeat` (async) is awaited every HEARTBEAT_EVERY events so the reaper
+    can tell a long-running task from a wedged one."""
     cost = CostCap(per_task_cap_usd=cost_cap_usd)
     loops = ToolLoopDetector(threshold=5)
     files_modified: set[str] = set()
@@ -200,11 +207,22 @@ async def run_task_with_query(
             ev_payload = ev.payload
 
             if ev_type == "result":
-                # Real-SDK final summary. Carries authoritative total_cost_usd.
+                # Real-SDK final summary. Carries authoritative total_cost_usd —
+                # the only place the real SDK reports cost, so the cap is
+                # enforced here (per-event cost_usd only exists in fake_sdk).
                 final_cost = ev_payload.get("total_cost_usd")
                 if final_cost is not None:
                     cost.total = max(cost.total, float(final_cost))
+                    if cost.total > cost.cap:
+                        failure_reason = "cost_cap_task"
+                        break
                 continue
+
+            if heartbeat is not None and seq % HEARTBEAT_EVERY == 0:
+                try:
+                    await heartbeat()
+                except Exception:  # noqa: BLE001 — heartbeat must never kill the run
+                    pass
 
             if ev_type == "tool_use":
                 turns += 1
