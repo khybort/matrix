@@ -109,3 +109,12 @@ async def test_branch_integration_mode_never_merges(repo, tmp_path, monkeypatch)
     res = await I.integrate(wt=wt, repo_root=repo, worktree_root=tmp_path / "wt",
                             task=_task(), review_mode="auto")
     assert res.status == "awaiting_review" and "integration=branch" in res.notes
+
+
+def test_test_env_never_points_uv_at_the_dev_agent_venv(monkeypatch):
+    """uv run --project must build the worktree project's own .venv, not sync
+    it into dev_agent's (UV_PROJECT_ENVIRONMENT is exported by the image)."""
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", "/workspace/services/dev_agent/.venv")
+    monkeypatch.setenv("VIRTUAL_ENV", "/workspace/services/dev_agent/.venv")
+    env = I._test_env()
+    assert "UV_PROJECT_ENVIRONMENT" not in env and "VIRTUAL_ENV" not in env

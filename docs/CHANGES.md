@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — dev_agent worktree testleri kendi venv'ini siliyordu
+- `integrate._test_env` artık `UV_PROJECT_ENVIRONMENT`/`VIRTUAL_ENV`'i düşürür: image'ın ihraç ettiği değer yüzünden `uv run --project <worktree>/services/<svc>` hedef projeyi dev_agent venv'ine senkronluyor, dev_agent paketi kayboluyordu (reload'da `No module named 'dev_agent'`). Venv `uv sync` ile onarıldı, servis yeniden başlatıldı. Regresyon testi eklendi.
+
 ## 2026-09-13 — dev_agent reaper etiketi `worker_crash` → `stale_heartbeat`
 - Reaper'ın damgası gerçek çökmeden ayrılamıyordu; Director bunu bug diye okuyup görev açtı (#13). Artık `stale_heartbeat`. README/test güncellendi.
 

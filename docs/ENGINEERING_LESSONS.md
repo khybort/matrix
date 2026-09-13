@@ -13,6 +13,10 @@
 - **2026-09-13 — Test fixture'ı CANLI tabloya yazmaz.** dev_agent conftest `dev_tasks`'ı TRUNCATE etti; 9 görev gitti,
   canlı worker test görevini aldı, yedekten restore gerekti. Kural: her servis testi `<db>_devagent_test` gibi izole
   DB kullanır (AGE + `vector SCHEMA ag_catalog` + gerekli tablolar orada yaratılır). TRUNCATE/DELETE-all fixture = red.
+- **2026-09-13 — `UV_PROJECT_ENVIRONMENT` miras kalır.** Image `UV_PROJECT_ENVIRONMENT=/workspace/services/dev_agent/.venv`
+  ihraç eder; dev_agent worktree'de `uv run --project <svc>` çalıştırınca uv o projeyi dev_agent'ın venv'ine SENKRONLADI —
+  her test koşusu dev_agent'ın kendi paketlerini sildi, hata bir sonraki reload'da çıktı ("No module named 'dev_agent'").
+  Alt süreçlere env geçirirken `UV_PROJECT_ENVIRONMENT` ve `VIRTUAL_ENV`'i düşür (`integrate._test_env`).
 - **2026-09-13 — Engine testleri canlı cüzdana dokunmaz.** `test_slot_enforcement` `_open_for_market("crypto")`'yi canlı
   default cüzdana karşı koşuyordu: canlı prediction'lara gerçek pozisyon açtı, engine ile yarışıp
   `paper_positions_prediction_id_key` ihlaliyle canlı tick'i düşürdü, assert'leri kuyruk derinliğine bağlıydı. Artık

@@ -87,6 +87,13 @@ def test_targets(files: list[str]) -> list[str]:
 
 def _test_env() -> dict[str, str]:
     env = dict(os.environ)
+    # The container exports UV_PROJECT_ENVIRONMENT=/workspace/services/dev_agent/.venv.
+    # Inherited by `uv run --project <worktree>/services/<svc>`, uv SYNCS THAT
+    # PROJECT INTO THE DEV_AGENT VENV — every worktree test run silently
+    # replaced dev_agent's own packages (found 2026-09-13 when a reload died with
+    # "No module named 'dev_agent'"). Each worktree project gets its own .venv.
+    for key in ("UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
+        env.pop(key, None)
     shared = env.get("SHARED_DATABASE_URL", "")
     local = env.get("LOCAL_DATABASE_URL", "")
     # Service conftests default to localhost DSNs; inside the container the
