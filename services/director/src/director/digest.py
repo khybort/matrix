@@ -48,7 +48,7 @@ def _age(now: datetime, ts: datetime | None) -> float | None:
         return None
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=UTC)
-    return round((now - ts).total_seconds(), 1)
+    return round(max(0.0, (now - ts).total_seconds()), 1)  # exchange clocks can run ahead
 
 
 async def collect_digest(now: datetime | None = None) -> SystemDigest:

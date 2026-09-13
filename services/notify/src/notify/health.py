@@ -71,7 +71,7 @@ def _age(now: datetime, ts: datetime | None) -> float | None:
         return None
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
-    return (now - ts).total_seconds()
+    return max(0.0, (now - ts).total_seconds())  # exchange clocks can run ahead
 
 
 def llm_configured() -> bool:
