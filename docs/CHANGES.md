@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13 — LLM defteri süre ve timeout kaydeder
+- Tek-atış çağrılarda 45 s timeout'lar deftere hiç düşmüyordu; 2 saatte agent 74 timeout / 274 başarı (%21), synthesis 11/11. `duration_s` ve `reason=timeout|<Exception>` satırları eklendi; `summary()` servis başına `timeouts`, `p50_s`, `p95_s` verir. `agent.usage` log satırına `dur_s`.
+
 ## 2026-09-13 — Retention prune bar tick'ini bloklamıyor
 - bars-aggregator prune'u tick döngüsünün içinde çalıştırıyordu; 90 GB `market_trades` üzerinde tek 50k satırlık soğuk DELETE batch'i 45 s+ DataFileRead sürüp bar üretimini durduruyordu ("bars stale"). Prune artık ayrı asyncio task (`MATRIX_RETENTION_INTERVAL_S`), batch 50k → 10k (`MATRIX_RETENTION_BATCH`) ki 45 s bütçe gerçekten uygulansın.
 

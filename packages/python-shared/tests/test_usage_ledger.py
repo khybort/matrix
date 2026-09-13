@@ -8,12 +8,17 @@ def test_record_and_summary_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("MATRIX_SERVICE", "agent")
     UL.record(session="single_shot", backend="subscription", model="haiku", turns=1, cost_usd=0.02, is_error=False)
     UL.record(session="reflection", backend="subscription", model="sonnet", turns=7, cost_usd=0.03, is_error=True,
-              reason="max_turns")
+              reason="max_turns", duration_s=12.4)
+    UL.record(session="single_shot", backend="subscription", model="haiku", turns=None, cost_usd=None, is_error=True,
+              reason="timeout", duration_s=45.0)
     monkeypatch.setenv("MATRIX_SERVICE", "director")
     UL.record(session="director", backend="openrouter", model="x", turns=None, cost_usd=None, is_error=None)
     s = UL.summary(datetime.now(UTC))
-    assert s["calls"] == 3 and s["cost_usd"] == 0.05
-    assert s["by_service"]["agent"] == {"calls": 2, "turns": 8, "cost_usd": 0.05, "errors": 1}
+    assert s["calls"] == 4 and s["cost_usd"] == 0.05
+    agent = s["by_service"]["agent"]
+    assert agent["calls"] == 3 and agent["turns"] == 8 and agent["cost_usd"] == 0.05
+    assert agent["errors"] == 2 and agent["timeouts"] == 1
+    assert agent["p50_s"] == 45.0 and agent["p95_s"] == 45.0
     assert s["by_service"]["director"]["calls"] == 1
     files = list(tmp_path.glob("*.jsonl"))
     assert len(files) == 1 and files[0].name == f"{datetime.now(UTC):%Y-%m-%d}.jsonl"

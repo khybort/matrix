@@ -391,24 +391,31 @@ async def _single_shot_once(
             elif isinstance(content, str):
                 chunks.append(content)
 
+    t0 = time.monotonic()
     try:
         await asyncio.wait_for(_drive(), timeout=_CALL_TIMEOUT_S)
     except TimeoutError:
         logger.warning(f"subscription_llm[{backend}]: timed out after {_CALL_TIMEOUT_S:.0f}s")
+        # Timeouts were invisible to the ledger — 21% of agent single-shots on
+        # 2026-09-13 — so error rates and p95 latency looked healthy.
+        usage_ledger.record(session="single_shot", backend=backend, model=resolved, turns=None,
+                            cost_usd=None, is_error=True, reason="timeout", duration_s=time.monotonic() - t0)
         return None, True
     except Exception as e:
         logger.warning(f"subscription_llm[{backend}]: {e}")
+        usage_ledger.record(session="single_shot", backend=backend, model=resolved, turns=None,
+                            cost_usd=None, is_error=True, reason=type(e).__name__, duration_s=time.monotonic() - t0)
         return None, True
 
     text = "".join(chunks).strip()
     logger.info(
-        "agent.usage session=single_shot backend={b} model={m} turns=1 cost_usd={c} is_error={e}",
+        "agent.usage session=single_shot backend={b} model={m} turns=1 cost_usd={c} is_error={e} dur_s={d:.1f}",
         b=backend, m=resolved,
         c=f"{result_cost:.6f}" if result_cost is not None else None,
-        e=result_is_err,
+        e=result_is_err, d=time.monotonic() - t0,
     )
     usage_ledger.record(session="single_shot", backend=backend, model=resolved, turns=1,
-                        cost_usd=result_cost, is_error=bool(result_is_err))
+                        cost_usd=result_cost, is_error=bool(result_is_err), duration_s=time.monotonic() - t0)
     return (text or None), bool(result_is_err)
 
 

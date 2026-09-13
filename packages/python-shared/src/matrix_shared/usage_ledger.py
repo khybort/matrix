@@ -39,12 +39,14 @@ def service_name() -> str:
 
 
 def record(*, session: str | None, backend: str | None, model: str | None, turns: int | None,
-           cost_usd: float | None, is_error: bool | None, reason: str | None = None) -> None:
+           cost_usd: float | None, is_error: bool | None, reason: str | None = None,
+           duration_s: float | None = None) -> None:
     now = datetime.now(UTC)
     row: dict[str, Any] = {
         "ts": now.isoformat(timespec="seconds"), "service": service_name(), "session": session,
         "backend": backend, "model": model, "turns": turns, "cost_usd": cost_usd,
         "is_error": is_error, "reason": reason,
+        "duration_s": round(duration_s, 2) if isinstance(duration_s, (int, float)) else None,
     }
     try:
         d = ledger_dir()
@@ -78,14 +80,20 @@ def summary(day: datetime | None = None, *, days: int = 1) -> dict[str, Any]:
     """Per-service calls / turns / cost / errors over `days` ending at `day` (UTC)."""
     end = day or datetime.now(UTC)
     by: dict[str, dict[str, float]] = {}
+    durations: dict[str, list[float]] = {}
     total_cost = 0.0
     calls = 0
     for i in range(days):
         for r in _iter_rows(end - timedelta(days=i)):
             svc = str(r.get("service") or "unknown")
-            b = by.setdefault(svc, {"calls": 0, "turns": 0, "cost_usd": 0.0, "errors": 0})
+            b = by.setdefault(svc, {"calls": 0, "turns": 0, "cost_usd": 0.0, "errors": 0, "timeouts": 0})
             b["calls"] += 1
             calls += 1
+            if r.get("reason") == "timeout":
+                b["timeouts"] += 1
+            d = r.get("duration_s")
+            if isinstance(d, (int, float)):
+                durations.setdefault(svc, []).append(float(d))
             try:
                 b["turns"] += int(r.get("turns") or 0)
             except (TypeError, ValueError):
@@ -98,7 +106,11 @@ def summary(day: datetime | None = None, *, days: int = 1) -> dict[str, Any]:
             total_cost += c
             if r.get("is_error"):
                 b["errors"] += 1
-    for b in by.values():
+    for svc, b in by.items():
         b["cost_usd"] = round(b["cost_usd"], 4)
+        ds = sorted(durations.get(svc, []))
+        if ds:
+            b["p50_s"] = round(ds[len(ds) // 2], 1)
+            b["p95_s"] = round(ds[min(len(ds) - 1, int(len(ds) * 0.95))], 1)
     return {"days": days, "calls": calls, "cost_usd": round(total_cost, 4),
             "by_service": dict(sorted(by.items(), key=lambda kv: -kv[1]["cost_usd"]))}
