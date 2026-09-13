@@ -153,8 +153,17 @@ def _bedrock_primary() -> bool:
     return bool(os.environ.get("CLAUDE_CODE_USE_BEDROCK"))
 
 
+def _credentials_file() -> str:
+    return os.path.join(
+        os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), ".credentials.json"
+    )
+
+
 def _subscription_ready() -> bool:
-    return bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
+    """Subscription auth is available either as a long-lived token in env or as
+    the host's synced OAuth session file (scripts/claude_creds_sync.sh →
+    docker volume mounted at /root/.claude)."""
+    return bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")) or os.path.exists(_credentials_file())
 
 
 def _cursor_ready() -> bool:
@@ -316,7 +325,7 @@ def subscription_enabled() -> bool:
     if _cursor_primary():
         return _cursor_ready() or openrouter_enabled()
     return bool(
-        os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+        _subscription_ready()
         or os.environ.get("CLAUDE_CODE_USE_BEDROCK")
         or os.environ.get("CLAUDE_CODE_USE_VERTEX")
         or openrouter_enabled()

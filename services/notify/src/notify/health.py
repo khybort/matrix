@@ -82,6 +82,8 @@ def llm_configured() -> bool:
         return True
     if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
         return True
+    if os.path.exists(os.path.join(os.path.expanduser("~/.claude"), ".credentials.json")):
+        return True
     if os.environ.get("CLAUDE_CODE_USE_BEDROCK", "").strip() in ("1", "true"):
         return True
     if os.environ.get("CLAUDE_CODE_USE_VERTEX", "").strip() in ("1", "true"):

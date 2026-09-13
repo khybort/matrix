@@ -160,3 +160,13 @@ async def test_agent_stream_denies_tools_outside_can_use(monkeypatch):
             prompt="p", tool_registry=reg, can_use_tool=lambda n, a: False, client=c)]
     tr = next(e for e in events if e.type == "tool_result")
     assert tr.payload["is_error"] is True and "not permitted" in tr.payload["content"]
+
+
+def test_subscription_ready_via_credentials_file(monkeypatch, tmp_path):
+    from matrix_shared import subscription_llm as S
+    _clear(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    assert S._subscription_ready() is False and S.subscription_enabled() is False
+    (tmp_path / ".credentials.json").write_text('{"claudeAiOauth": {"accessToken": "x"}}')
+    assert S._subscription_ready() is True and S.subscription_enabled() is True
+    assert _plan_backends() == ["subscription"]

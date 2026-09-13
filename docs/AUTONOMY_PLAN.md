@@ -369,6 +369,11 @@ Emir gönderen tek kod yolu bu.
 23. ✅ §5.11 Web `apply` route'u Python `apply_proposal` ile hizalandı: gerçek sonraki versiyon,
     params merge, tam forbidden listesi, challenger (shadow) modu, `metrics_window.applied_version`.
 
+24. ✅ LLM yolu canlı (2026-09-13 18:08 UTC): `claude setup-token` token'ları 401 verdiği için host'un
+    claude.ai OAuth oturumu (refresh token'sız, yalnızca access token) `matrix_claude_config`
+    volume'una saatlik senkronlanıyor (`scripts/claude_creds_sync.sh`, launchd). Container'dan
+    tek-atış `OK`, Director ilk LLM tick'ini attı.
+
 Sıradaki: P2.5 embedding/benzer-setup, `agent_usage` persist (migration zinciri açılınca — 0038 WIP
 commit'lendiğinde 0039+ eklenebilir), Telegram'dan `awaiting_review` dev task onayı.
 

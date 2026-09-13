@@ -45,7 +45,7 @@ that remain (docs/AUTONOMY_PLAN.md):
 | `make method-ab [DAYS=7]` | Realised PnL by decision method (rule / llm / llm+rule / conflict) |
 | `make circuit-reset ASSET=crypto [WALLET=default]` or Telegram `/circuit_reset crypto` | Re-arm a tripped daily-loss circuit while `LIVE_EXECUTION_ENABLED=true` (paper mode re-arms itself at the UTC day roll) |
 | Telegram free text: "stop trading DOGE" | Brain stores an operator directive (`remember_directive`); every agent honours it immediately |
-| `make llm-subscription` / `make llm-openrouter` / `make llm-status` | LLM backend. Subscription needs `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`); OpenRouter needs `OPENROUTER_API_KEY`. Plans fall back subscription → openrouter → rule-only |
+| `make llm-subscription` / `make llm-openrouter` / `make llm-status` | LLM backend. Subscription auth = the host's Claude Code login synced hourly into the `matrix_claude_config` volume (`make claude-creds-sync`, launchd job via `make claude-creds-install`; `claude setup-token` tokens returned 401 on this account) or `CLAUDE_CODE_OAUTH_TOKEN`; OpenRouter needs `OPENROUTER_API_KEY`. Plans fall back subscription → openrouter → rule-only |
 | `make openrouter-models` | Current free OpenRouter models (tool-calling first) when a default vanishes |
 | `make retention-drain` / `make db-compact TABLE=market_trades` | Force the retention backlog through / return disk to the OS (locks the table) |
 | `make backup-now` | Extra backup before risky work (sidecar dumps daily) |

@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-09-13 — Subscription LLM path live via synced host credentials
+
+- Two `claude setup-token` tokens returned `401 OAuth access token is invalid` on host and in
+  containers while the host's claude.ai login worked. New path: `scripts/claude_creds_sync.sh` reads
+  the keychain item "Claude Code-credentials", strips the refresh token (containers must never rotate
+  the host session), and writes `.credentials.json` into the `matrix_claude_config` volume mounted at
+  `/root/.claude` in all 11 LLM services. Hourly launchd job `com.matrix.claude-creds`
+  (`make claude-creds-install`) refreshes it, poking the host CLI first when < 90 min remain.
+- `subscription_llm._subscription_ready()` and notify `llm_configured()` accept the credentials file
+  as auth (env token still works and takes precedence). Verified: agent container single-shot → "OK";
+  Director ran its first LLM review with tools.
+
 ## 2026-09-13 — Web `apply` route aligned with the Python apply path
 
 - `apps/web/.../proposals/[id]/apply/route.ts`: computes `max(version)+1` (the verbatim `to_version`

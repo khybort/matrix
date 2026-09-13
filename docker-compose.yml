@@ -240,6 +240,8 @@ services:
       GRAPH_CHUNK_SIM_THRESHOLD: ${GRAPH_CHUNK_SIM_THRESHOLD:-0.25}
       GRAPH_MAX_CHUNKS_PER_DOC: ${GRAPH_MAX_CHUNKS_PER_DOC:-6}
     command: ["graph.main", "--interval", "20"]
+    volumes:
+      - matrix_claude_config:/root/.claude
     restart: unless-stopped
     logging: *default_logging
 
@@ -257,6 +259,8 @@ services:
     environment:
       <<: *python-env
     command: ["agent.main", "--interval", "15"]
+    volumes:
+      - matrix_claude_config:/root/.claude
     restart: unless-stopped
 
   # Continuous lesson synthesizer. Reads matrix_agent's past decisions +
@@ -277,6 +281,8 @@ services:
     environment:
       <<: *python-env
     command: ["agent_lessons.main"]
+    volumes:
+      - matrix_claude_config:/root/.claude
     restart: unless-stopped
     logging: *default_logging
 
@@ -299,6 +305,8 @@ services:
       <<: *python-env
       BULLETIN_AUTO_PUBLISH: ${BULLETIN_AUTO_PUBLISH:-false}
     command: ["bulletin.main"]
+    volumes:
+      - matrix_claude_config:/root/.claude
     restart: unless-stopped
     # Bulletin is the Phase 6+ deferred product (CLAUDE.md). Until then the
     # weekly compose call is pure idle cost. Bring it up explicitly with
@@ -392,6 +400,8 @@ services:
     environment:
       <<: *python-env
     command: ["backtest.main", "--interval", "5"]
+    volumes:
+      - matrix_claude_config:/root/.claude
     restart: unless-stopped
     logging: *default_logging
 
@@ -409,6 +419,8 @@ services:
     environment:
       <<: *python-env
     command: ["backtest.api"]
+    volumes:
+      - matrix_claude_config:/root/.claude
     restart: unless-stopped
     logging: *default_logging
 
@@ -429,6 +441,8 @@ services:
     # strategies, not marginally-negative ones. Stops the matrix_agent version
     # thrash (v6→v20 in 2 days, never converging) that re-tuned on -0.057 noise.
     command: ["reflection.main", "--interval", "600", "--score-trigger", "-0.20"]
+    volumes:
+      - matrix_claude_config:/root/.claude
     restart: unless-stopped
     logging: *default_logging
 
@@ -472,6 +486,8 @@ services:
     environment:
       <<: *python-env
     command: ["synthesis.main", "--interval", "3600", "--hours", "6"]
+    volumes:
+      - matrix_claude_config:/root/.claude
     restart: unless-stopped
     # Always on (operator 2026-09-13: "agents always run"): hourly theme
     # synthesis feeds Concept nodes into matrix_agent's graph features.
@@ -497,6 +513,8 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
     command: ["director.main", "--interval", "3600"]
+    volumes:
+      - matrix_claude_config:/root/.claude
     restart: unless-stopped
     logging: *default_logging
 
@@ -533,6 +551,7 @@ services:
       dev.orbstack.domains: "agent.matrix.local"
       dev.orbstack.http-port: "8009"
     volumes:
+      - matrix_claude_config:/root/.claude
       # Repo root RW-mounted so dev_agent can create worktrees on the host filesystem.
       - .:/workspace
       - ./worktrees:/workspace/worktrees
@@ -570,6 +589,8 @@ services:
       dev.orbstack.domains: "brain.matrix.local"
       dev.orbstack.http-port: "3032"
     command: ["brain.main"]
+    volumes:
+      - matrix_claude_config:/root/.claude
     restart: unless-stopped
     logging: *default_logging
 
@@ -604,6 +625,10 @@ services:
 volumes:
   matrix_pgdata:
     name: matrix_pgdata
+  # Host Claude Code OAuth session (access token only) synced by
+  # scripts/claude_creds_sync.sh; mounted at /root/.claude in LLM containers.
+  matrix_claude_config:
+    name: matrix_claude_config
 
 networks:
   default:

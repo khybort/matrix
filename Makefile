@@ -505,6 +505,14 @@ llm-subscription: ## Route LLM back through Claude Code subscription (OAuth)
 llm-cursor: ## Route all LLM calls through Cursor Auto (`cursor agent login` or API key)
 	@./scripts/llm_backend.sh cursor
 
+.PHONY: claude-creds-sync
+claude-creds-sync: ## Copy the host Claude Code OAuth session (access token only) into the matrix_claude_config volume
+	@./scripts/claude_creds_sync.sh
+
+.PHONY: claude-creds-install
+claude-creds-install: ## Install the hourly launchd job that keeps container Claude auth fresh
+	@cp infra/launchd/com.matrix.claude-creds.plist ~/Library/LaunchAgents/ && launchctl unload ~/Library/LaunchAgents/com.matrix.claude-creds.plist 2>/dev/null; launchctl load ~/Library/LaunchAgents/com.matrix.claude-creds.plist && echo "✓ com.matrix.claude-creds loaded (hourly)"
+
 .PHONY: llm-openrouter
 llm-openrouter: ## Make OpenRouter (free models) the primary LLM backend; subscription stays as fallback
 	@./scripts/llm_backend.sh openrouter
