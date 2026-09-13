@@ -32,13 +32,14 @@ class SystemDigest:
     wallets: list[dict[str, Any]] = field(default_factory=list)
     by_method: list[dict[str, Any]] = field(default_factory=list)  # matrix_agent PnL by decision method
     regime: dict[str, Any] = field(default_factory=dict)  # asset_class → regime key
+    ranker: list[dict[str, Any]] = field(default_factory=list)  # traded vs untraded (virtual) pnl% per market
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "now": self.now.isoformat(), "health": self.health, "pnl": self.pnl,
             "challengers": self.challengers, "efficacy": self.efficacy, "proposals": self.proposals,
             "dev": self.dev, "lessons": self.lessons, "certs": self.certs, "wallets": self.wallets,
-            "by_method": self.by_method, "regime": self.regime,
+            "by_method": self.by_method, "regime": self.regime, "ranker": self.ranker,
         }
 
 
@@ -132,6 +133,17 @@ async def collect_digest(now: datetime | None = None) -> SystemDigest:
                 "WHERE p.strategy_id='matrix_agent' AND o.observed_at >= now()-interval '7 days' "
                 "  AND o.reason <> 'orphan_flat_close' GROUP BY 1 ORDER BY pnl"))).mappings().all()]
 
+            d.ranker = [dict(r) for r in (await s.execute(text(
+                "SELECT p.asset_class, "
+                "  count(*) FILTER (WHERE o.id IS NOT NULL) AS n_traded, "
+                "  round(avg(o.pnl_pct) FILTER (WHERE o.id IS NOT NULL) * 10000, 2) AS traded_bps, "
+                "  count(*) FILTER (WHERE p.context->'virtual_outcome' IS NOT NULL) AS n_untraded, "
+                "  round(avg((p.context->'virtual_outcome'->>'pnl_pct')::numeric) "
+                "        FILTER (WHERE p.context->'virtual_outcome' IS NOT NULL) * 10000, 2) AS untraded_bps "
+                "FROM predictions p LEFT JOIN outcomes o ON o.prediction_id = p.id AND o.reason <> 'orphan_flat_close' "
+                "WHERE p.created_at >= now()-interval '7 days' AND p.side IN ('long','short') "
+                "  AND coalesce(p.context->>'is_shadow','false') <> 'true' GROUP BY 1"))).mappings().all()]
+
             d.lessons = {f"{ac}/{v}": int(n) for ac, v, n in (await s.execute(text(
                 "SELECT asset_class, verdict, count(*) FROM agent_lessons WHERE status='active' "
                 "GROUP BY 1,2 ORDER BY 1,2"))).all()}
@@ -206,6 +218,10 @@ def render_brief(d: SystemDigest) -> str:
     dv = d.dev
     lines.append(f"dev_agent 7d: {dv.get('by_status_7d', {})} pending={dv.get('pending', 0)} "
                  f"spend_today=${dv.get('spend_today_usd', 0):.2f}")
+    for r in d.ranker:
+        if r.get("n_untraded"):
+            lines.append(f"ranker {r['asset_class']}: traded {r['traded_bps']} bps (n={r['n_traded']}) vs "
+                         f"skipped-would-have {r['untraded_bps']} bps (n={r['n_untraded']})")
     if d.by_method:
         lines.append("matrix_agent by method 7d: " + ", ".join(
             f"{m['method']} n={m['n']} pnl={m['pnl']} wr={m['win_rate']}" for m in d.by_method))

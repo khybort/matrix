@@ -380,6 +380,10 @@ cert-scan: ## Scan active strategies; auto-grant paper_trade_certificate where e
 method-ab: ## Realised PnL by decision method (rule / llm / llm+rule / conflict / +explore / +lesson), last DAYS (default 7)
 	$(PSQL_SHARED) -c "SELECT coalesce(p.context->>'method','(none)') AS method, count(*) AS n, round(sum(o.pnl_usd),2) AS pnl_usd, round(avg((o.pnl_usd>0)::int),3) AS win_rate, round(avg(o.pnl_usd),4) AS avg_pnl FROM outcomes o JOIN predictions p ON p.id=o.prediction_id WHERE p.strategy_id='matrix_agent' AND o.observed_at >= now() - make_interval(days => $(or $(DAYS),7)) AND o.reason <> 'orphan_flat_close' GROUP BY 1 ORDER BY pnl_usd;"
 
+.PHONY: ranker-ab
+ranker-ab: ## Counterfactual: realised pnl% of traded signals vs virtual pnl% of signals the ranker skipped (last DAYS, default 7)
+	$(PSQL_SHARED) -c "SELECT p.strategy_id, p.asset_class, count(o.id) AS n_traded, round(avg(o.pnl_pct)*10000,2) AS traded_bps, count(*) FILTER (WHERE p.context->'virtual_outcome' IS NOT NULL) AS n_skipped, round(avg((p.context->'virtual_outcome'->>'pnl_pct')::numeric) FILTER (WHERE p.context->'virtual_outcome' IS NOT NULL)*10000,2) AS skipped_bps FROM predictions p LEFT JOIN outcomes o ON o.prediction_id=p.id AND o.reason<>'orphan_flat_close' WHERE p.created_at >= now() - make_interval(days => $(or $(DAYS),7)) AND p.side IN ('long','short') GROUP BY 1,2 ORDER BY 2,1;"
+
 .PHONY: director-once
 director-once: ## Run one Director tick now (digest + LLM review + brief)
 	$(DC) $(DC_BASE) exec director uv run python -m director.main --once

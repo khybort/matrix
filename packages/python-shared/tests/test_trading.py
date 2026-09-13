@@ -59,3 +59,17 @@ def test_funding_pnl_sign_and_magnitude():
     assert funding_pnl_usd("short", Decimal("1000"), Decimal("0.0001"), Decimal("8")) == Decimal("0.1")
     assert funding_pnl_usd("long", Decimal("1000"), None, Decimal("8")) == 0
     assert funding_pnl_usd("delta_neutral", Decimal("1000"), Decimal("0.0001"), Decimal("8")) == 0
+
+
+def test_virtual_pnl_pct_mirrors_real_costs():
+    from matrix_shared.trading import virtual_pnl_pct
+
+    flat_long = virtual_pnl_pct(entry_ref=Decimal("100"), exit_mark=Decimal("100"), side="long",
+                                asset_class="crypto", symbol="BTCUSDT")
+    assert flat_long is not None and flat_long < 0  # pays the 15 bps round trip
+    assert abs(flat_long + Decimal("0.0015")) < Decimal("0.0001")
+    up_short = virtual_pnl_pct(entry_ref=Decimal("100"), exit_mark=Decimal("101"), side="short",
+                               asset_class="crypto", symbol=None)
+    assert up_short is not None and up_short < Decimal("-0.01")
+    assert virtual_pnl_pct(entry_ref=Decimal("100"), exit_mark=Decimal("99"), side="delta_neutral",
+                           asset_class="crypto", symbol=None) is None

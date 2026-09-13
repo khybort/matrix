@@ -55,6 +55,9 @@ x-python-env: &python-env
   # optional CURSOR_API_KEY. All calls use model=auto (tier pins ignored).
   MATRIX_LLM_BACKEND: ${MATRIX_LLM_BACKEND:-}
   CURSOR_API_KEY: ${CURSOR_API_KEY:-}
+  # Cross-container LLM concurrency: advisory-lock slots on the SHARED DB
+  # (matrix_shared.agent_runtime.ratelimit). 0 = per-container semaphores only.
+  MATRIX_LLM_GLOBAL_SLOTS: ${MATRIX_LLM_GLOBAL_SLOTS:-4}
   # OpenRouter (free models): last LLM fallback before the rule path, or primary
   # when MATRIX_LLM_BACKEND=openrouter. `make llm-openrouter`, `make openrouter-models`.
   OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}

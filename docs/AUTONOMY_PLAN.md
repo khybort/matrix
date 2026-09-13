@@ -359,8 +359,15 @@ Emir gönderen tek kod yolu bu.
 20. ✅ P4.3 dev_agent: `codebase_ctx` gerçekten prompt'a giriyor (any-token retrieval), indeks saatlik
     yenileniyor, `POST /codebase/reindex` (`make dev-agent-index`) var.
 
-Sıradaki: P2.5 embedding/benzer-setup (embedding sağlayıcısı gerekir), P1.8 counterfactual (reddedilen
-prediction'lar için virtual outcome), P3.3 process-arası rate limiter + `agent_usage` tablosu.
+21. ✅ P1.8 Counterfactual: süresi dolan (hiç işlem açılmamış) prediction'lar için horizon çıkışlı,
+    maliyetli sanal PnL `context.virtual_outcome`'a yazılır (`outcomes` kirlenmez). `make ranker-ab`
+    ve Director brief'i "traded vs skipped-would-have" karşılaştırır → EV ranker'ın kendisi ölçülür.
+22. ✅ P3.3 Process-arası LLM rate limiti: `MATRIX_LLM_GLOBAL_SLOTS` (4) Postgres advisory-lock
+    slotu; container başına 3 lokal slot artık 3N eşzamanlı loop olmuyor. `agent_usage` tablosu
+    migration gerektirdiği için (0038 commit'lenmemiş) ertelendi; usage hâlâ log-only.
+
+Sıradaki: P2.5 embedding/benzer-setup, `agent_usage` persist (migration zinciri açılınca), Web apply
+route'unun Python `apply_proposal` ile hizalanması (P5 §5.11).
 
 Bu 10'dan sonra sistem "çalışıyor gibi görünen" değil, **gerçekten kendini ölçen** hale gelir.
 Director (P3) ancak ölçüm altyapısı varken anlamlı; ondan önce yazılırsa gürültüyü orkestre eder.

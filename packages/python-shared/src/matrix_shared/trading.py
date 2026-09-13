@@ -68,3 +68,18 @@ def funding_pnl_usd(
         return Decimal("0")
     accrued = notional_usd * (elapsed_hours / Decimal("8")) * Decimal(funding_rate_8h)
     return -accrued if side == "long" else accrued
+
+
+def virtual_pnl_pct(
+    *, entry_ref: Decimal, exit_mark: Decimal, side: str, asset_class: str | None, symbol: str | None
+) -> Decimal | None:
+    """Counterfactual PnL% for a prediction that was never traded, priced as if
+    it had been filled at `entry_ref` and closed at `exit_mark` with the same
+    market costs as a real paper trade (horizon exit only, no TP/SL)."""
+    if side not in ("long", "short") or entry_ref <= 0 or exit_mark <= 0:
+        return None
+    entry = apply_slippage(entry_ref, side, opening=True, asset_class=asset_class, symbol=symbol)
+    exit_ = apply_slippage(exit_mark, side, opening=False, asset_class=asset_class, symbol=symbol)
+    if side == "long":
+        return (exit_ - entry) / entry
+    return (entry - exit_) / entry

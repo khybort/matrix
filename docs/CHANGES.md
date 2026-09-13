@@ -5,6 +5,17 @@
 
 ---
 
+## 2026-09-13 — P1.8 counterfactual virtual outcomes + P3.3 cross-container LLM slots
+
+- `paper_trade.expire_stale_predictions` → `_record_virtual_outcomes`: every untraded prediction
+  gets `context.virtual_outcome` (horizon-exit mark ±120s, same taker+slippage costs via
+  `trading.virtual_pnl_pct`). Stored on the prediction, never in `outcomes`, so realised metrics,
+  lessons and certs are untouched. `make ranker-ab [DAYS]` and the Director brief compare traded vs
+  skipped-would-have bps per market — the EV ranker's own report card.
+- `agent_runtime.ratelimit`: with `MATRIX_LLM_GLOBAL_SLOTS` (compose default 4) each tool loop also
+  takes a Postgres advisory-lock slot on the shared tier; waits cap at `MATRIX_LLM_GLOBAL_WAIT_S`
+  (30s) then proceed rather than deadlock. Per-container semaphores stay as the inner layer.
+
 ## 2026-09-13 — P1.4 labs sampling/fitness + P4.3 dev_agent codebase context
 
 - `labs/evaluate.emit_signals`: no new evaluation while the (experiment, symbol) pair still has an

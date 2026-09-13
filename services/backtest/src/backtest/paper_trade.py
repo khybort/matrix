@@ -27,7 +27,7 @@ from matrix_shared.allocation import expected_value, load_pair_edges, risk_multi
 from matrix_shared.exchange_shadow import shadow_close_position, shadow_open_position
 from matrix_shared.graph_overlay import link_outcome_node
 from matrix_shared.markets import all_markets
-from matrix_shared.trading import apply_slippage, funding_pnl_usd
+from matrix_shared.trading import apply_slippage, funding_pnl_usd, virtual_pnl_pct
 from matrix_shared.models import (
     MarketBar,
     MarketTrade,
@@ -455,7 +455,67 @@ async def expire_stale_predictions() -> int:
         ids = list(result.scalars())
     if ids:
         logger.info(f"expired {len(ids)} stale predictions (never traded)")
+        try:
+            await _record_virtual_outcomes(ids)
+        except Exception as e:  # noqa: BLE001 — counterfactuals are advisory
+            logger.warning(f"virtual outcomes skipped: {e}")
     return len(ids)
+
+
+async def _mark_near(symbol: str, asset_class: str, at: datetime) -> Decimal | None:
+    """Historical mark closest to `at` (±120s): tick prints for crypto, 1m bar
+    close for bar-priced markets."""
+    lo, hi = at - timedelta(seconds=120), at + timedelta(seconds=120)
+    async with local_session_scope() as session:
+        if asset_class in _BAR_PRICE_CLASSES:
+            row = (await session.execute(
+                select(MarketBar.close).where(MarketBar.symbol == symbol)
+                .where(MarketBar.asset_class == asset_class).where(MarketBar.interval == "1m")
+                .where(MarketBar.ts >= lo - timedelta(minutes=30)).where(MarketBar.ts <= hi)
+                .order_by(MarketBar.ts.desc()).limit(1)
+            )).first()
+        else:
+            row = (await session.execute(
+                select(MarketTrade.price).where(MarketTrade.symbol == symbol)
+                .where(MarketTrade.trade_ts >= lo).where(MarketTrade.trade_ts <= hi)
+                .order_by(func.abs(func.extract("epoch", MarketTrade.trade_ts) - func.extract("epoch", at)))
+                .limit(1)
+            )).first()
+    return Decimal(row[0]) if row else None
+
+
+async def _record_virtual_outcomes(pred_ids: list) -> int:
+    """Counterfactual for signals the EV ranker never filled: what would the
+    horizon exit have paid? Stored in predictions.context.virtual_outcome —
+    NOT in `outcomes`, so metrics/lessons/certs stay realised-only. The
+    Director digest compares it against realised PnL to grade the ranker
+    (docs/AUTONOMY_PLAN.md P1.8)."""
+    written = 0
+    async with shared_session_scope() as session:
+        preds = list((await session.execute(
+            select(Prediction).where(Prediction.id.in_(pred_ids[:500]))
+        )).scalars())
+        for p in preds:
+            if p.side not in ("long", "short"):
+                continue
+            close_by = p.close_by if p.close_by.tzinfo else p.close_by.replace(tzinfo=UTC)
+            mark = await _mark_near(p.symbol, p.asset_class, close_by)
+            if mark is None:
+                continue
+            pnl_pct = virtual_pnl_pct(entry_ref=Decimal(p.entry_price_ref), exit_mark=mark, side=p.side,
+                                      asset_class=p.asset_class, symbol=p.symbol)
+            if pnl_pct is None:
+                continue
+            ctx = dict(p.context or {})
+            ctx["virtual_outcome"] = {
+                "exit_price": str(mark), "pnl_pct": str(pnl_pct.quantize(Decimal("0.000001"))),
+                "at": close_by.isoformat(), "basis": "horizon_exit_with_costs",
+            }
+            p.context = ctx
+            written += 1
+    if written:
+        logger.info(f"virtual outcomes recorded for {written} untraded predictions")
+    return written
 
 
 async def open_due_positions() -> int:
