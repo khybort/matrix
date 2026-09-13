@@ -21,7 +21,7 @@ from matrix_shared.agent_lessons import lessons_relevant_to
 
 from agent.config import FALLBACK, AgentConfig
 from agent.features import SymbolFeatures
-from agent.llm import call_llm_decision, call_llm_decisions_batch, llm_enabled
+from agent.llm import LLMDecision, call_llm_decision, call_llm_decisions_batch, llm_enabled
 
 # Lessons with confidence at or above this threshold change behavior.
 # 0.4 captures buckets at ~25+ observations on the synthesizer's confidence
@@ -261,10 +261,20 @@ def _feature_dump(f: SymbolFeatures) -> dict[str, Any]:
     }
 
 
-def _llm_prompt(f: SymbolFeatures) -> str:
+def _llm_prompt(
+    f: SymbolFeatures,
+    *,
+    rule: "Decision | None" = None,
+    lessons: list | None = None,
+    symbol_edge: float | None = None,
+) -> str:
+    """Everything the quant side knows, so the model reasons over the same
+    evidence instead of a bare price/flow snapshot (docs/AUTONOMY_PLAN.md §3.4):
+    graph polarity + related entities, the rule model's own verdict, active
+    lessons for this symbol and its realised edge."""
     parts = [
         f"Symbol: {f.symbol}",
-        f"Last price: {f.last_price}",
+        f"Last price: {f.last_price}  Δ5m={f.price_change_pct_5m}",
         f"Trade flow 60s: n={f.n_trades_60s} buy_share={f.buy_share_60s:.3f} "
         f"notional_usd={f.notional_60s_usd}",
         f"Orderbook: spread_bps={f.spread_bps} top5_bid_share={f.bid_ask_imbalance_top5}",
@@ -276,6 +286,31 @@ def _llm_prompt(f: SymbolFeatures) -> str:
         parts.append("Recent titles:")
         for t in f.news_titles_sample:
             parts.append(f"- {t}")
+    if f.graph_mention_count:
+        parts.append(
+            f"Knowledge graph (24h): mentions={f.graph_mention_count} "
+            f"recency={f.graph_recency_weight} direct_polarity={f.graph_direct_polarity} "
+            f"contextual_polarity={f.graph_contextual_polarity}"
+        )
+        if f.graph_related_companies:
+            parts.append(f"  related companies: {', '.join(f.graph_related_companies[:5])}")
+        if f.graph_co_mentioned_assets:
+            parts.append(f"  co-mentioned assets: {', '.join(f.graph_co_mentioned_assets[:5])}")
+    if rule is not None:
+        total = rule.feature_dump.get("total")
+        parts.append(
+            f"Quant model verdict: {rule.side.upper()} conf={rule.confidence:.3f} "
+            f"weighted_total={total}"
+        )
+    if symbol_edge is not None:
+        parts.append(f"Realised edge for this symbol (0.5 = neutral): {symbol_edge:.2f}")
+    if lessons:
+        parts.append("Lessons from past outcomes on this symbol:")
+        for h in lessons[:4]:
+            parts.append(
+                f"- {h.verdict.upper()} {h.pattern_description} "
+                f"(n={h.n_observations}, win_rate={h.win_rate}, conf={h.confidence:.2f})"
+            )
     return "\n".join(parts)
 
 
@@ -343,6 +378,61 @@ def maybe_explore(
     )
 
 
+BLEND_MODE = __import__("os").environ.get("MATRIX_LLM_BLEND_MODE", "blend").strip().lower()
+# Confidence multiplier when only one side wants to trade.
+_SOLO_DAMPEN = Decimal("0.6")
+
+
+def blend_decisions(rule: Decision, llm: "LLMDecision | None", f: SymbolFeatures) -> Decision:
+    """Combine the rule model and the LLM instead of letting the LLM override.
+
+    blend (default):
+      agree (same non-hold side)  → trade, conf = mean(rule, llm), method "llm+rule"
+      only LLM trades             → LLM side, conf × 0.6, method "llm"
+      only rule trades            → rule side, conf × 0.6, method "rule"
+      opposite sides              → HOLD, method "conflict"
+    llm_overrides: legacy behaviour (LLM wins whenever it parses).
+    rule_only:     ignore the LLM (A/B control arm).
+    Every branch records both verdicts in feature_dump for the method A/B.
+    """
+    if llm is None or BLEND_MODE == "rule_only":
+        return rule
+    llm_conf = Decimal(str(llm.confidence))
+    audit = {
+        **rule.feature_dump,
+        "rule_side": rule.side,
+        "rule_confidence": str(rule.confidence),
+        "llm_side": llm.side,
+        "llm_confidence": llm.confidence,
+    }
+    if BLEND_MODE == "llm_overrides":
+        return Decision(
+            symbol=f.symbol, side=llm.side, confidence=llm_conf,
+            thesis=f"LLM: {llm.reasoning} || rule: {rule.thesis}", method="llm",
+            feature_dump=audit, last_price=f.last_price,
+        )
+    if llm.side == "hold" and rule.side == "hold":
+        return Decision(symbol=f.symbol, side="hold", confidence=Decimal("0"),
+                        thesis=f"both hold || LLM: {llm.reasoning}"[:1000], method="llm+rule",
+                        feature_dump=audit, last_price=f.last_price)
+    if llm.side == rule.side:
+        conf = min(Decimal("1"), (rule.confidence + llm_conf) / Decimal("2"))
+        return Decision(symbol=f.symbol, side=rule.side, confidence=conf,
+                        thesis=f"AGREE {rule.side} | LLM: {llm.reasoning} || rule: {rule.thesis}"[:1000],
+                        method="llm+rule", feature_dump=audit, last_price=f.last_price)
+    if rule.side == "hold":
+        return Decision(symbol=f.symbol, side=llm.side, confidence=min(Decimal("1"), llm_conf * _SOLO_DAMPEN),
+                        thesis=f"LLM-only {llm.side}: {llm.reasoning} || rule held"[:1000], method="llm",
+                        feature_dump=audit, last_price=f.last_price)
+    if llm.side == "hold":
+        return Decision(symbol=f.symbol, side=rule.side, confidence=min(Decimal("1"), rule.confidence * _SOLO_DAMPEN),
+                        thesis=f"rule-only {rule.side} (LLM held: {llm.reasoning}) || {rule.thesis}"[:1000], method="rule",
+                        feature_dump=audit, last_price=f.last_price)
+    return Decision(symbol=f.symbol, side="hold", confidence=Decimal("0"),
+                    thesis=f"CONFLICT rule={rule.side} llm={llm.side}: {llm.reasoning}"[:1000], method="conflict",
+                    feature_dump=audit, last_price=f.last_price)
+
+
 async def decide(
     f: SymbolFeatures,
     cfg: AgentConfig | None = None,
@@ -367,20 +457,14 @@ async def decide(
         rule = rule_decide(f, asset_class=asset_class)
 
     if llm_enabled():
-        llm = await call_llm_decision(_llm_prompt(f))
-        if llm is not None:
-            base = Decision(
-                symbol=f.symbol,
-                side=llm.side,
-                confidence=Decimal(str(llm.confidence)),
-                thesis=f"LLM: {llm.reasoning} || rule: {rule.thesis}",
-                method="llm",
-                feature_dump={**rule.feature_dump, "llm_confidence": llm.confidence},
-                last_price=f.last_price,
-            )
-        else:
+        try:
+            hits = await lessons_relevant_to(f, strategy_id, asset_class=asset_class)
+        except Exception:  # noqa: BLE001
+            hits = []
+        llm = await call_llm_decision(_llm_prompt(f, rule=rule, lessons=hits, symbol_edge=symbol_edge))
+        if llm is None:
             logger.debug(f"llm fell back to rule for {f.symbol}")
-            base = rule
+        base = blend_decisions(rule, llm, f)
     else:
         base = rule
 
@@ -507,25 +591,25 @@ async def decide_batch(
 
     llm_map: dict[str, LLMDecision] = {}
     if llm_enabled():
-        prompts = [(f.symbol, _llm_prompt(f)) for f, _, _, _ in items]
+        async def _hits(f: SymbolFeatures, ac: str):
+            try:
+                return await lessons_relevant_to(f, strategy_id, asset_class=ac)
+            except Exception:  # noqa: BLE001
+                return []
+
+        lesson_hits = await asyncio.gather(*[_hits(f, ac) for f, _, ac, _ in items])
+        prompts = [
+            (f.symbol, _llm_prompt(f, rule=rule, lessons=hits, symbol_edge=edge))
+            for (f, _, _, edge), rule, hits in zip(items, rules, lesson_hits)
+        ]
         llm_map = await call_llm_decisions_batch(prompts)
 
     bases: list[Decision] = []
     for (f, cfg, asset_class, symbol_edge), rule in zip(items, rules):
         llm = llm_map.get(f.symbol)
-        if llm is not None:
-            base = Decision(
-                symbol=f.symbol,
-                side=llm.side,
-                confidence=Decimal(str(llm.confidence)),
-                thesis=f"LLM: {llm.reasoning} || rule: {rule.thesis}",
-                method="llm",
-                feature_dump={**rule.feature_dump, "llm_confidence": llm.confidence},
-                last_price=f.last_price,
-            )
-        else:
+        if llm is None and llm_enabled():
             logger.debug(f"llm batch missed {f.symbol}, falling back to rule")
-            base = rule
+        base = blend_decisions(rule, llm, f)
         epsilon = float(cfg.explore_epsilon) if cfg else EXPLORE_EPSILON_DEFAULT
         bases.append(
             maybe_explore(

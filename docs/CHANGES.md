@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-09-13 — P3.2: LLM decisions blended with the rule model + method A/B
+
+- `agent/decide.blend_decisions`: agreement → trade at mean confidence (`llm+rule`); only the LLM
+  wants to trade → its side at 0.6× (`llm`); only the rule → 0.6× (`rule`); opposite sides → HOLD
+  (`conflict`). `MATRIX_LLM_BLEND_MODE=llm_overrides` restores the old unconditional override,
+  `rule_only` is the control arm. Both verdicts land in `predictions.context` (`rule_side`,
+  `llm_side`, confidences) — the material for the method-level A/B.
+- `_llm_prompt` now includes knowledge-graph polarity/related entities, the rule verdict and
+  weighted total, the symbol's realised edge and active lessons; batch system prompt explains the
+  blend so the model states real confidence.
+- `make method-ab [DAYS=7]` and a "matrix_agent by method" line in the Director brief.
+
 ## 2026-09-13 — Test hygiene: every suite green; engine cache reset after sync bridge
 
 - `matrix_shared.db.reset_engines()` + call from `crypto_universe()`'s sync bridge: the

@@ -30,12 +30,14 @@ class SystemDigest:
     lessons: dict[str, Any] = field(default_factory=dict)
     certs: list[dict[str, Any]] = field(default_factory=list)
     wallets: list[dict[str, Any]] = field(default_factory=list)
+    by_method: list[dict[str, Any]] = field(default_factory=list)  # matrix_agent PnL by decision method
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "now": self.now.isoformat(), "health": self.health, "pnl": self.pnl,
             "challengers": self.challengers, "efficacy": self.efficacy, "proposals": self.proposals,
             "dev": self.dev, "lessons": self.lessons, "certs": self.certs, "wallets": self.wallets,
+            "by_method": self.by_method,
         }
 
 
@@ -122,6 +124,13 @@ async def collect_digest(now: datetime | None = None) -> SystemDigest:
                     "ORDER BY finished_at DESC LIMIT 5"))).mappings().all()],
             }
 
+            d.by_method = [dict(r) for r in (await s.execute(text(
+                "SELECT coalesce(p.context->>'method','(none)') AS method, count(*) AS n, "
+                "       round(sum(o.pnl_usd),2) AS pnl, round(avg((o.pnl_usd>0)::int),3) AS win_rate "
+                "FROM outcomes o JOIN predictions p ON p.id=o.prediction_id "
+                "WHERE p.strategy_id='matrix_agent' AND o.observed_at >= now()-interval '7 days' "
+                "  AND o.reason <> 'orphan_flat_close' GROUP BY 1 ORDER BY pnl"))).mappings().all()]
+
             d.lessons = {f"{ac}/{v}": int(n) for ac, v, n in (await s.execute(text(
                 "SELECT asset_class, verdict, count(*) FROM agent_lessons WHERE status='active' "
                 "GROUP BY 1,2 ORDER BY 1,2"))).all()}
@@ -185,6 +194,9 @@ def render_brief(d: SystemDigest) -> str:
     dv = d.dev
     lines.append(f"dev_agent 7d: {dv.get('by_status_7d', {})} pending={dv.get('pending', 0)} "
                  f"spend_today=${dv.get('spend_today_usd', 0):.2f}")
+    if d.by_method:
+        lines.append("matrix_agent by method 7d: " + ", ".join(
+            f"{m['method']} n={m['n']} pnl={m['pnl']} wr={m['win_rate']}" for m in d.by_method))
     if d.lessons:
         lines.append(f"lessons active: {d.lessons}")
     relaxed = sum(1 for c in d.certs if str(c.get('granted_by') or '').endswith('+relaxed'))

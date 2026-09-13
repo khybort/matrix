@@ -37,6 +37,11 @@ _BATCH_SYSTEM = (
     "For each symbol below, decide LONG, SHORT, or HOLD. "
     'Return ONLY a JSON array: [{"symbol":"BTCUSDT","side":"long|short|hold",'
     '"confidence":0.0-1.0,"reasoning":"..."}]. '
+    "Each symbol block includes the quant model's own verdict, knowledge-graph polarity, "
+    "and lessons distilled from past outcomes on that symbol — weigh them; a high-confidence "
+    "AVOID lesson or a graph polarity opposing your view should make you HOLD. "
+    "Your answer is blended with the quant verdict (agreement raises confidence, "
+    "disagreement forces HOLD), so state a real confidence, not politeness. "
     "Be cautious — bias toward HOLD when signals conflict. One object per symbol, "
     "in the same order they appear."
 )

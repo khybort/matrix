@@ -333,8 +333,13 @@ Emir gönderen tek kod yolu bu.
 14. ✅ P0.8 Circuit trip → `flatten_wallet` tüm pozisyonları kapatır; paper modda gün dönümünde
     re-arm, live modda operatör resetler (`make circuit-reset`, Telegram `/circuit_reset`).
 
-P0 tamamı kapandı. Sıradaki: P2.3 regime memory, P2.4 overlay Outcome/Lesson, P2.6 operatör
-direktifleri, P3.2 decision agent tool belt + LLM/rule blend.
+15. ✅ P3.2 (kısmi) LLM/rule blend: LLM artık rule kararını ezmiyor — uyum → ortalama confidence,
+    tek taraf → 0.6× sönümleme, çelişki → hold (`MATRIX_LLM_BLEND_MODE=blend|llm_overrides|rule_only`).
+    LLM prompt'u graph polaritesi, rule verdict'i, sembol edge'i ve aktif lesson'ları içeriyor.
+    Method bazlı A/B: `make method-ab`, Director brief'inde "by method" satırı. Tool loop bilerek
+    yok: 25 sembol × 15s'de tool turn'leri rate bütçesini yer; aynı bilgi prompt'a gömüldü.
+
+P0 tamamı kapandı. Sıradaki: P2.4 overlay Outcome/Lesson, P2.6 operatör direktifleri, P2.3 regime memory.
 
 Bu 10'dan sonra sistem "çalışıyor gibi görünen" değil, **gerçekten kendini ölçen** hale gelir.
 Director (P3) ancak ölçüm altyapısı varken anlamlı; ondan önce yazılırsa gürültüyü orkestre eder.
