@@ -304,6 +304,25 @@ async def _tick_symbols() -> list[str] | None:
         return None
 
 
+STARTUP_SKIP_IF_FRESH_S = float(os.environ.get("BARS_STARTUP_SKIP_IF_FRESH_S", "300"))
+
+
+async def _newest_bar_age_s() -> float | None:
+    try:
+        async with session_scope() as session:
+            ts = (await session.execute(text(
+                "SELECT ts FROM market_bars WHERE asset_class = 'crypto' AND interval = '1m' "
+                "ORDER BY ts DESC LIMIT 1"))).scalar_one_or_none()
+        if ts is None:
+            return None
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - ts).total_seconds()
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"newest bar probe failed ({e})")
+        return None
+
+
 async def tick(lookback_minutes: int) -> int:
     """Re-aggregate the last `lookback_minutes` worth of bars. Idempotent."""
     until = datetime.now(timezone.utc)
@@ -337,7 +356,17 @@ async def run(
 
     # Recover missed bars during container downtime. Runs FIRST so trade-based
     # aggregation (next) can overwrite kline-derived bars with higher-fidelity
-    # values for any minutes the connector did cover.
+    # values for any minutes the connector did cover. Skipped entirely when the
+    # newest 1m bar is fresh: a hot reload (watchfiles) is not downtime, and
+    # re-fetching 48h of klines for every symbol on each code save delayed the
+    # incremental loop by minutes.
+    age = await _newest_bar_age_s()
+    if age is not None and age < STARTUP_SKIP_IF_FRESH_S:
+        logger.info(f"startup: newest 1m bar is {age:.0f}s old (< {STARTUP_SKIP_IF_FRESH_S:.0f}s); skipping backfill")
+        rest_backfill_symbols = []
+        skip_trade_backfill = True
+    else:
+        skip_trade_backfill = False
     if rest_backfill_symbols:
         try:
             await rest_backfill_missing(
@@ -348,10 +377,11 @@ async def run(
 
     # One-shot trade-aggregation backfill so the table is current before the
     # loop settles into incremental mode. Idempotent; safe to repeat.
-    try:
-        await backfill_all()
-    except Exception as e:
-        logger.exception(f"startup trade backfill failed: {e}")
+    if not skip_trade_backfill:
+        try:
+            await backfill_all()
+        except Exception as e:
+            logger.exception(f"startup trade backfill failed: {e}")
 
     # Retention owner: this daemon already touches every market table and
     # has both DB URLs, so it prunes raw telemetry on a slow cadence
