@@ -21,6 +21,7 @@ from decimal import Decimal
 
 from loguru import logger
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 
 from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.allocation import expected_value, load_pair_edges, risk_multiplier
@@ -573,13 +574,22 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
         ).all()
         strategy_open: dict[str, int] = {sid: cnt for sid, cnt in strategy_open_rows}
 
-        # Pre-fetch slot configs for this wallet
+        # Pre-fetch slot configs. The shadow (challenger) pass borrows the
+        # CHAMPION wallet's per-strategy slots so a challenger runs under the
+        # same capital discipline as the config it is being compared to —
+        # otherwise it trades with no per-strategy cap and the champion/shadow
+        # PnL comparison measures slot count, not parameters.
+        slot_wallet_id = wallet.id
+        if shadow:
+            champion = await _resolve_wallet(session, asset_class)
+            if champion is not None:
+                slot_wallet_id = champion.id
         slot_configs: dict[str, StrategySlotConfig] = {
             cfg.strategy_id: cfg
             for cfg in (
                 await session.execute(
                     select(StrategySlotConfig).where(
-                        StrategySlotConfig.wallet_id == wallet.id
+                        StrategySlotConfig.wallet_id == slot_wallet_id
                     )
                 )
             ).scalars()
@@ -609,6 +619,11 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             .where(
                 text("coalesce(predictions.context->>'is_shadow', 'false') = :is_shadow")
             )
+            # Deterministic pool: highest-conviction, freshest first. Without an
+            # ORDER BY the LIMIT took an arbitrary slice of the open queue, so
+            # when a strategy floods predictions the best candidates (and any
+            # fresh one) could be cut before the EV sort ever saw them.
+            .order_by(Prediction.confidence.desc(), Prediction.generated_at.desc())
             .limit(wallet_slots_left * 5)
         )
         candidates_raw = list((await session.execute(
@@ -707,12 +722,51 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
         )
         notional = (max_notional * risk).quantize(Decimal("0.01"))
 
-        async with shared_session_scope() as session:
-            wallet = await _resolve_wallet(session, p.asset_class)
+        try:
+            booked = await _book_position(p, notional=notional, entry=entry, shadow=shadow)
+        except IntegrityError:
+            # Another opener (a second engine tick, a test process) filled this
+            # prediction between our candidate query and the insert. The
+            # session rolled the debit back with the insert; skip, don't abort
+            # the whole tick for the remaining candidates.
+            logger.debug(f"skip {p.id}: position already booked by a concurrent opener")
+            continue
+        if not booked:
+            continue
+        wallet_id = booked
+        newly_opened[p.strategy_id] = newly_opened.get(p.strategy_id, 0) + 1
+        symbol_open_count[p.symbol] = symbol_open_count.get(p.symbol, 0) + 1
+        opened += 1
+        logger.info(
+            f"opened {p.side} {p.symbol} [{p.asset_class}] notional={notional:.2f} "
+            f"entry={entry:.4f} (pred={p.id}, strat={p.strategy_id}v{p.strategy_version})"
+        )
+        try:
+            await shadow_open_position(
+                prediction=p,
+                wallet_id=wallet_id,
+                entry_price=entry,
+                notional_usd=notional,
+            )
+        except Exception as e:  # noqa: BLE001 — shadow must not break paper
+            logger.warning(f"shadow open error pred={p.id}: {e}")
+    return opened
+
+
+async def _book_position(p: Prediction, *, notional: Decimal, entry: Decimal, shadow: bool):
+    """Debit the wallet and insert the position in one transaction. Returns the
+    wallet id, or None when the wallet is missing/tripped/underfunded. Raises
+    IntegrityError if the prediction already has a position."""
+    async with shared_session_scope() as session:
+            # Same wallet the candidate pool was built for. Resolving without
+            # `shadow` here booked every challenger position — with no
+            # per-strategy cap — into the champion wallet (2026-09-13:
+            # 1,198 shadow funding_reversion trades drained it by $343 in a day).
+            wallet = await _resolve_wallet(session, p.asset_class, shadow=shadow)
             if wallet is None:
-                continue
+                return None
             if wallet.circuit_tripped_at is not None:
-                continue
+                return None
             # Atomic debit: a single conditional UPDATE (not read-modify-write)
             # so concurrent opens/closes can't lose each other's updates — the DB
             # serializes the row write. The `cash_usd >= :n` guard both enforces
@@ -729,7 +783,7 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             )
             if res.rowcount == 0:
                 logger.info(f"skip {p.id}: insufficient cash for notional {notional}")
-                continue
+                return None
             session.add(
                 PaperPosition(
                     wallet_id=wallet.id,
@@ -744,23 +798,8 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
                     status="open",
                 )
             )
-        newly_opened[p.strategy_id] = newly_opened.get(p.strategy_id, 0) + 1
-        symbol_open_count[p.symbol] = symbol_open_count.get(p.symbol, 0) + 1
-        opened += 1
-        logger.info(
-            f"opened {p.side} {p.symbol} [{p.asset_class}] notional={notional:.2f} "
-            f"entry={entry:.4f} (pred={p.id}, strat={p.strategy_id}v{p.strategy_version})"
-        )
-        try:
-            await shadow_open_position(
-                prediction=p,
-                wallet_id=wallet.id,
-                entry_price=entry,
-                notional_usd=notional,
-            )
-        except Exception as e:  # noqa: BLE001 — shadow must not break paper
-            logger.warning(f"shadow open error pred={p.id}: {e}")
-    return opened
+            wallet_id = wallet.id
+    return wallet_id
 
 
 def _tp_sl_reason(pos: PaperPosition, pred: Prediction, mark: Decimal) -> str | None:

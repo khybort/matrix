@@ -384,6 +384,9 @@ LLM prompt'una iki yönün komşu istatistikleri eklenir. pgvector kolonu migrat
 httpx); `awaiting_review`'a düşen görev için 🧩 push. dev_agent `/tasks/{id}/accept` artık gerçekten merge eder (dirty-tree
 guard, worktree temizliği), merge olmadıysa 409 + review_notes. Bug fix: notify dev_tasks probe'ları SHARED tier'da
 boş kopyayı okuyordu → LOCAL tier. notify dev overlay'e eklendi (hot reload; önceden image'daki eski kodu çalıştırıyordu).
+2026-09-13: KRİTİK bug — challenger (shadow) pozisyonları şampiyon cüzdanına slot cap'siz yazılıyordu; funding_reversion v3
+tek günde 1.198 trade / −$343 (şampiyon v2: 25 trade). Düzeltildi + aday havuzu sıralı + regresyon testi. Bu, G3 (paper pozitif EV)
+ölçümünü de kirletiyordu: şampiyon/challenger PnL'i aynı cüzdanda karışıktı; 2026-09-13 öncesi champion/challenger karşılaştırmaları geçersiz.
 Sıradaki: `agent_usage` persist (migration zinciri açılınca — 0038 WIP
 commit'lendiğinde 0039+ eklenebilir), Telegram'dan `awaiting_review` dev task onayı.
 

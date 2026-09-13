@@ -27,25 +27,11 @@ from matrix_shared.models import MarketTrade, PaperPosition, Prediction, Wallet
 from matrix_shared.models.slot_config import StrategySlotConfig
 
 SYM = "TEST_BTCUSDT"
-ASSET = "crypto"
+from tests.isolated_market import TEST_ASSET as ASSET, isolated_wallets  # noqa: E402
 
 
 _TRADE_TAG = f"slot-test-{uuid.uuid4().hex[:8]}"
 _seeded_trade_ids: list[str] = []
-
-
-async def _resolve_active_wallet() -> uuid.UUID:
-    """Return the wallet ID that _open_for_market will actually use."""
-    async with shared_session_scope() as session:
-        row = (await session.execute(
-            select(Wallet)
-            .where(Wallet.asset_class == ASSET)
-            .order_by(Wallet.created_at.asc())
-            .limit(1)
-        )).scalar_one_or_none()
-    if row is None:
-        raise RuntimeError("No crypto wallet found; run `make migrate`")
-    return row.id
 
 
 async def _seed_trade(price: str = "50000") -> None:
@@ -88,52 +74,42 @@ async def _seed_prediction(strategy_id: str, close_secs: int = 300) -> uuid.UUID
 
 @pytest_asyncio.fixture
 async def slotted_wallet():
-    """Attach per-strategy slot configs to the wallet _open_for_market resolves,
-    so the enforcement logic finds them. Cleans up after."""
-    wallet_id = await _resolve_active_wallet()
-    # Unique strategy IDs to avoid interfering with production slot configs
+    """Per-strategy slot configs on an isolated TEST_ASSET wallet (see
+    tests/isolated_market.py) so the live engine and live wallets are never
+    touched. Cleans up after."""
     suffix = uuid.uuid4().hex[:8]
     strat_a = f"TEST_strat_a_{suffix}"
     strat_b = f"TEST_strat_b_{suffix}"
-
-    async with shared_session_scope() as session:
-        # strat_a gets 2 slots, strat_b gets 1 slot
-        session.add(StrategySlotConfig(
-            strategy_id=strat_a, asset_class=ASSET, wallet_id=wallet_id,
-            allocated_slots=2, perf_score=0.7, consecutive_losses=0,
-        ))
-        session.add(StrategySlotConfig(
-            strategy_id=strat_b, asset_class=ASSET, wallet_id=wallet_id,
-            allocated_slots=1, perf_score=0.3, consecutive_losses=0,
-        ))
-
-    yield wallet_id, strat_a, strat_b
-
-    # Cleanup: positions → predictions → slot configs
-    async with shared_session_scope() as session:
-        # Remove positions linked to our test predictions
-        pred_ids = (await session.execute(
-            select(Prediction.id).where(Prediction.strategy_id.in_([strat_a, strat_b]))
-        )).scalars().all()
-        if pred_ids:
-            await session.execute(
-                delete(PaperPosition).where(PaperPosition.prediction_id.in_(pred_ids))
-            )
-        await session.execute(
-            delete(Prediction).where(Prediction.strategy_id.in_([strat_a, strat_b]))
-        )
-        await session.execute(
-            delete(StrategySlotConfig).where(
-                StrategySlotConfig.strategy_id.in_([strat_a, strat_b])
-            )
-        )
-    if _seeded_trade_ids:
-        async with local_session_scope() as session:
-            await session.execute(
-                delete(MarketTrade).where(
-                    MarketTrade.exchange_trade_id.in_(_seeded_trade_ids)
+    async with isolated_wallets() as (wallet_id, _shadow_id):
+        async with shared_session_scope() as session:
+            # strat_a gets 2 slots, strat_b gets 1 slot
+            session.add(StrategySlotConfig(
+                strategy_id=strat_a, asset_class=ASSET, wallet_id=wallet_id,
+                allocated_slots=2, perf_score=0.7, consecutive_losses=0,
+            ))
+            session.add(StrategySlotConfig(
+                strategy_id=strat_b, asset_class=ASSET, wallet_id=wallet_id,
+                allocated_slots=1, perf_score=0.3, consecutive_losses=0,
+            ))
+        try:
+            yield wallet_id, strat_a, strat_b
+        finally:
+            async with shared_session_scope() as session:
+                await session.execute(
+                    delete(Prediction).where(Prediction.strategy_id.in_([strat_a, strat_b]))
                 )
-            )
+                await session.execute(
+                    delete(StrategySlotConfig).where(
+                        StrategySlotConfig.strategy_id.in_([strat_a, strat_b])
+                    )
+                )
+            if _seeded_trade_ids:
+                async with local_session_scope() as session:
+                    await session.execute(
+                        delete(MarketTrade).where(MarketTrade.exchange == "bybit").where(
+                            MarketTrade.exchange_trade_id.in_(_seeded_trade_ids)
+                        )
+                    )
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-09-13 — Paper engine: challenger pozisyonları şampiyon cüzdanına yazılıyordu (−$343/gün); aday havuzu sıralı
+- `paper_trade._open_for_market(shadow=True)` pozisyon açarken cüzdanı `shadow` bayrağı olmadan çözüyordu → tüm shadow (challenger) pozisyonları DEFAULT cüzdana, per-strateji slot cap'i olmadan yazıldı. 2026-09-13'te funding_reversion v3 (shadow) 1.198 trade ile şampiyon cüzdanını $343 eritti; şampiyon v2 aynı günde 25 trade. Fix: doğru cüzdan + shadow pass şampiyonun `strategy_slot_configs`'unu ödünç alır (challenger aynı sermaye disipliniyle koşar; karşılaştırma parametreleri ölçer, slot sayısını değil).
+- Aday havuzu `ORDER BY confidence DESC, generated_at DESC` sonra LIMIT (önce sırasız LIMIT vardı; 764 açık prediction'lık kuyrukta en iyi/en yeni adaylar EV sıralamasına hiç ulaşmıyordu; `test_slot_enforcement` bu yüzden 0 pozisyon görüyordu).
+- Testler: `test_shadow_wallet_booking.py` (regresyon); `market_trades` test temizlikleri `(exchange, exchange_trade_id)` indeksini kullanır (yalnızca `exchange_trade_id IN` 300M satırı tarıyor, suite 10+ dk asılıyordu — backtest ve strategy conftest'leri).
+
 ## 2026-09-13 — Telegram'dan dev task onayı; accept gerçekten merge eder; notify dev_agent probe tier fix
 - notify: `/dev_tasks`, `/dev_accept <id>`, `/dev_discard <id>`, `/dev_revise <id> <notes>` (yeni `notify/dev_client.py`, dev_agent REST `DEV_AGENT_API_URL`, vars. `http://dev_agent:8009`); `awaiting_review`'a düşen görev için 🧩 push (komutlarla). Health: `dev_tasks` probe'ları SHARED yerine LOCAL tier'dan (shared kopya boş migration artefaktı → failed/stuck alarmları hiç çalmıyordu).
 - dev_agent `POST /tasks/{id}/accept`: `merge_reviewed_task` — branch'i base'e merge eder (dirty-tree guard, worktree temizliği); başarısızsa 409 + `review_notes`, status `awaiting_review` kalır. Önceden yalnızca status'u `merged` yapıyor, branch askıda kalıyordu.

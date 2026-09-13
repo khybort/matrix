@@ -167,7 +167,7 @@ async def seed_recent_trades():
     if inserted:
         async with local_session_scope() as session:
             await session.execute(
-                delete(MarketTrade).where(MarketTrade.exchange_trade_id.in_(inserted))
+                delete(MarketTrade).where(MarketTrade.exchange == "bybit").where(MarketTrade.exchange_trade_id.in_(inserted))
             )
 
 
