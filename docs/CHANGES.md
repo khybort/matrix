@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-13/14 — OrbStack VM OOM: bellek sınırları
+- ~23:30 UTC'de 10 GiB OrbStack VM'i kernel OOM'a girdi ("VM_FAULT_OOM leaked"), Docker soketi saatlerce askıda kaldı; `orb restart docker` "stopping container docker"da takıldı. `docker-compose.limits.yml` artık tier başına `mem_limit` verir (db 2g, heavy 1g, worker 768m, light 512m; env ile ayarlanır) — kaçak servis VM yerine kendi container'ında OOM-kill olur. VM belleği 12 GiB'a çıkarıldı (`orb config set memory_mib 12288`, OrbStack yeniden başlatılınca geçerli). Operatör: OrbStack'i yeniden başlat (`orb stop && orb start`), sonra `make up-dev` (limits overlay ile recreate).
+
 ## 2026-09-13 — Slot scorer: pass ortasında silinen satır tüm pass'i düşürmez
 - Her config savepoint içinde flush edilir; `StaleDataError` (labs/test temizliği veya operatör SQL'i satırı sildi) yalnızca o config'i atlar. Bugün iki kez saatlik pass tamamen iptal olmuştu.
 
