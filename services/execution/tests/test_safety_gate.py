@@ -271,3 +271,32 @@ async def test_legacy_cert_with_weak_evidence_rejected_on_mainnet(wallet_id, gra
     )
     assert denied.allowed is False
     assert any("certificate" in r for r in denied.reasons), denied.reasons
+
+
+async def test_closing_bypasses_caps_but_not_flag_or_cert(wallet_id, grant_cert, monkeypatch):
+    """Reduce-only exits must never be capped (stranded exposure), but still
+    obey posture/flag/cert."""
+    sid, ac, ver = await grant_cert(validity_hours=24)
+    monkeypatch.setenv("LIVE_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("LIVE_CAPITAL_CAP_USD", "1")  # would fail an open
+    monkeypatch.setenv("BYBIT_TESTNET", "true")
+    for key in ("MATRIX_CERT_MIN_OBSERVATION_DAYS", "MATRIX_CERT_MIN_OUTCOMES",
+                "MATRIX_CERT_MIN_WIN_RATE", "MATRIX_CERT_MIN_TOTAL_PNL_USD",
+                "MATRIX_CERT_MAX_DRAWDOWN_PCT"):
+        monkeypatch.delenv(key, raising=False)
+    opening = await should_submit_live(
+        strategy_id=sid, asset_class=ac, strategy_version=ver,
+        intended_notional_usd=Decimal("5000"), wallet_id=wallet_id,
+    )
+    assert opening.allowed is False
+    closing = await should_submit_live(
+        strategy_id=sid, asset_class=ac, strategy_version=ver,
+        intended_notional_usd=Decimal("5000"), wallet_id=wallet_id, closing=True,
+    )
+    assert closing.allowed is True, closing.reasons
+    monkeypatch.setenv("LIVE_EXECUTION_ENABLED", "false")
+    denied = await should_submit_live(
+        strategy_id=sid, asset_class=ac, strategy_version=ver,
+        intended_notional_usd=Decimal("5000"), wallet_id=wallet_id, closing=True,
+    )
+    assert denied.allowed is False

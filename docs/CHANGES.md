@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-09-13 — P0.7 single live gate + P0.8 circuit trip flattens positions
+
+- `matrix_shared/live_gate.py` is now THE composite gate (posture, flag, cert, circuit, per-trade
+  cap, LIVE_CAPITAL_CAP_USD, concurrent cap, slot cap). `execution.safety.should_submit_live`
+  delegates to it; `exchange_shadow._per_trade_allowed` calls it too (previously skipped the capital,
+  concurrent and slot caps). `closing=True` for reduce-only exits evaluates posture/flag/cert/circuit
+  only — a held position must always be closable. exchange_shadow keeps one `BybitV5Client` per
+  network so its TokenBucket limits across orders.
+- `backtest/paper_trade`: close logic extracted into `_close_position(force=)`; `flatten_wallet()`
+  closes every open position (no-price → flat at entry). A daily-loss / trailing-stop trip now
+  flattens the wallet (TRADING.md #2 "all positions close"). Auto re-arm at the UTC day roll only
+  in paper mode; with `LIVE_EXECUTION_ENABLED=true` the circuit stays tripped until
+  `make circuit-reset ASSET=…` or Telegram `/circuit_reset <asset_class> [wallet]`.
+
 ## 2026-09-13 — OpenRouter backend (free models) in the LLM failover chain
 
 - `matrix_shared/openrouter_llm.py`: OpenAI-compatible chat completions with tool calling.

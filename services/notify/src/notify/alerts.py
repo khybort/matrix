@@ -206,6 +206,7 @@ def format_help() -> str:
         "/status       — wallet, open positions, recent P&L\n"
         "/strategies   — active strategy configs + cert state\n"
         "/circuit      — daily-loss circuit breaker state\n"
+        "/circuit_reset <asset_class> [wallet] — operator reset of a tripped circuit\n"
         "/help         — this message\n\n"
         "Push alerts you'll get automatically:\n"
         "  ⚠️ circuit tripped\n"

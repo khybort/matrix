@@ -150,6 +150,34 @@ async def cmd_ask(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(answer, disable_web_page_preview=True)
 
 
+async def cmd_circuit_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Operator-only reset of a tripped daily-loss circuit (docs/TRADING.md #2:
+    with live execution enabled the circuit never auto-resets). Usage:
+    /circuit_reset <asset_class> [wallet_name]"""
+    if not _authorized(update, get_allowed_chat_ids()):
+        return
+    args = list(ctx.args or [])
+    if not args:
+        await update.message.reply_text("Usage: /circuit_reset <asset_class> [wallet_name]")
+        return
+    asset_class = args[0].strip().lower()
+    name = args[1].strip() if len(args) > 1 else "default"
+    from sqlalchemy import text as _text
+    from matrix_shared import shared_session_scope
+    async with shared_session_scope() as session:
+        rows = (await session.execute(_text(
+            "UPDATE wallets SET circuit_tripped_at = NULL, day_start_equity = cash_usd + locked_usd, "
+            "day_start_at = now(), updated_at = now() "
+            "WHERE asset_class = :ac AND name = :n AND circuit_tripped_at IS NOT NULL RETURNING name"
+        ), {"ac": asset_class, "n": name})).all()
+    chat = update.effective_chat
+    if rows:
+        logger.warning(f"circuit reset by operator chat_id={chat.id}: {name}/{asset_class}")
+        await update.message.reply_text(f"🟢 Circuit reset for {name}/{asset_class}. New day baseline = current equity.")
+    else:
+        await update.message.reply_text(f"Nothing to reset: {name}/{asset_class} is not tripped (or not found).")
+
+
 # ----------------------------------------------------------------- builder
 
 
@@ -159,6 +187,7 @@ def build_application(token: str) -> Application:
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("strategies", cmd_strategies))
     app.add_handler(CommandHandler("circuit", cmd_circuit))
+    app.add_handler(CommandHandler("circuit_reset", cmd_circuit_reset))
     app.add_handler(CommandHandler("help", cmd_help))
     # Any non-command text becomes a question for the Brain.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cmd_ask))

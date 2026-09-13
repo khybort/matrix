@@ -212,7 +212,15 @@ def _unrealized_pnl(
     return pos.notional_usd * pnl_pct
 
 
+def _live_enabled() -> bool:
+    return os.environ.get("LIVE_EXECUTION_ENABLED", "false").strip().lower() == "true"
+
+
 async def _check_and_maybe_reset_day(wallet: Wallet, equity_now: Decimal) -> None:
+    """Roll the trading day. The daily-loss circuit auto-resets at the roll ONLY
+    while the system is paper-only; with LIVE_EXECUTION_ENABLED=true a tripped
+    circuit stays tripped until an operator resets it (`make circuit-reset`,
+    Telegram /circuit_reset) — docs/TRADING.md hard limit #2."""
     now = datetime.now(UTC)
     day_start = wallet.day_start_at
     if day_start.tzinfo is None:
@@ -221,8 +229,14 @@ async def _check_and_maybe_reset_day(wallet: Wallet, equity_now: Decimal) -> Non
         wallet.day_start_at = now
         wallet.day_start_equity = equity_now
         if wallet.circuit_tripped_at is not None:
-            logger.info(f"wallet {wallet.name}: daily reset; circuit untripped")
-            wallet.circuit_tripped_at = None
+            if _live_enabled():
+                logger.warning(
+                    f"wallet {wallet.name}/{wallet.asset_class}: day rolled but circuit stays "
+                    "TRIPPED (live enabled) — manual reset required"
+                )
+            else:
+                logger.info(f"wallet {wallet.name}: daily reset; circuit untripped (paper mode)")
+                wallet.circuit_tripped_at = None
 
 
 def _circuit_should_trip(wallet: Wallet, equity_now: Decimal) -> bool:
@@ -359,6 +373,7 @@ async def _snapshot_one(wallet_id: uuid.UUID) -> None:
         wallet = await session.get(Wallet, wallet_id)
         if wallet is None:
             return
+        tripped_now = False
 
         equity, unrealized, n_open = await _current_equity(session, wallet)
         await _check_and_maybe_reset_day(wallet, equity)
@@ -391,6 +406,7 @@ async def _snapshot_one(wallet_id: uuid.UUID) -> None:
         if wallet.circuit_tripped_at is None:
             if _circuit_should_trip(wallet, equity):
                 wallet.circuit_tripped_at = datetime.now(UTC)
+                tripped_now = True
                 logger.warning(
                     f"DAILY LOSS CIRCUIT TRIPPED for wallet {wallet.name}: "
                     f"day_start={wallet.day_start_equity:.2f} equity={equity:.2f}"
@@ -399,11 +415,18 @@ async def _snapshot_one(wallet_id: uuid.UUID) -> None:
                 peak = await _peak_equity_today(session, wallet)
                 if _trailing_stop_should_trip(wallet, peak, equity):
                     wallet.circuit_tripped_at = datetime.now(UTC)
+                    tripped_now = True
                     logger.warning(
                         f"EQUITY TRAILING STOP TRIPPED for wallet {wallet.name}: "
                         f"peak={peak:.2f} equity={equity:.2f} "
                         f"stop_pct={wallet.equity_trailing_stop_pct}"
                     )
+    # TRADING.md hard limit #2: a trip closes every open position, not just
+    # blocks new ones. Done after the wallet row committed so the flatten sees
+    # the tripped state and its own session.
+    if tripped_now:
+        n = await flatten_wallet(wallet_id, reason="circuit_trip")
+        logger.warning(f"circuit trip: flattened {n} open position(s) for wallet {wallet_id}")
 
 
 async def expire_stale_predictions() -> int:
@@ -704,6 +727,109 @@ def _tp_sl_reason(pos: PaperPosition, pred: Prediction, mark: Decimal) -> str | 
     return None
 
 
+async def _close_position(pos: PaperPosition, pred: Prediction, reason: str, now: datetime, *, force: bool = False) -> bool:
+    """Close one open paper position at the current mark (with market costs),
+    write its Outcome and release wallet capital atomically. Returns False when
+    no fresh price exists and `force` is off (the caller retries next tick);
+    with `force=True` (circuit trip) it flat-closes at entry instead.
+    """
+    if pos.side == "delta_neutral":
+        # PnL is funding accrual over actual hold duration; no price-based
+        # slippage. opened_at is the anchor; fr read live for correctness.
+        fr = await _latest_funding_rate(pos.symbol)
+        pnl_usd = _unrealized_pnl(pos, pos.opened_price, funding_rate_8h=fr)
+        # For scoring: express PnL as % of notional (analogous to pnl_pct
+        # for directional positions).
+        pnl_pct = pnl_usd / pos.notional_usd if pos.notional_usd else Decimal("0")
+        # Score is capped at ±1 relative to SCORE_CAP_PCT.
+        capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
+        score = capped / SCORE_CAP_PCT
+        exit_px = pos.opened_price  # synthetic — no actual sell
+    else:
+        last_px = await _latest_price(pos.symbol, pos.asset_class)
+        if last_px is None:
+            # Orphan-close: position's close_by is ORPHAN_STALE_THRESHOLD_S
+            # past due AND we still have no price. Flat-close at entry to
+            # prevent indefinite accumulation (the KONYA BIST 72h bug).
+            close_by = pred.close_by
+            if close_by.tzinfo is None:
+                close_by = close_by.replace(tzinfo=UTC)
+            age_past_close = (now - close_by).total_seconds()
+            if force or (reason == "hit_horizon" and age_past_close > ORPHAN_STALE_THRESHOLD_S):
+                exit_px = pos.opened_price  # flat — no real exit price available
+                pnl_pct = Decimal("0")
+                pnl_usd = Decimal("0")
+                score = Decimal("0")
+                reason = reason if force else "orphan_flat_close"
+            else:
+                return False
+        else:
+            exit_px = _apply_slippage(
+                last_px, pos.side, opening=False,
+                asset_class=pos.asset_class, symbol=pos.symbol,
+            )
+            if pos.side == "long":
+                pnl_pct = (exit_px - pos.opened_price) / pos.opened_price
+            else:
+                pnl_pct = (pos.opened_price - exit_px) / pos.opened_price
+            pnl_usd = pos.notional_usd * pnl_pct
+            # Perp funding over the hold: longs pay a positive rate, shorts
+            # receive it. Uses the latest 8h rate as the hold-average proxy.
+            if pos.asset_class == "crypto":
+                opened = pos.opened_at if pos.opened_at.tzinfo else pos.opened_at.replace(tzinfo=UTC)
+                elapsed_h = Decimal(str((now - opened).total_seconds() / 3600.0))
+                fr = await _latest_funding_rate(pos.symbol)
+                pnl_usd += funding_pnl_usd(pos.side, pos.notional_usd, fr, elapsed_h)
+                pnl_pct = pnl_usd / pos.notional_usd if pos.notional_usd else pnl_pct
+            capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
+            score = capped / SCORE_CAP_PCT
+
+    async with shared_session_scope() as session:
+        pos_db = await session.get(PaperPosition, pos.id)
+        pos_db.closed_at = now
+        pos_db.closed_price = exit_px
+        pos_db.pnl_usd = pnl_usd
+        pos_db.status = "closed"
+
+        pred_db = await session.get(Prediction, pred.id)
+        pred_db.status = "closed"
+
+        # Atomic release: single UPDATE so a concurrent open can't clobber the
+        # decrement (the lost-update that caused phantom-locked capital). The
+        # status flip, prediction close, wallet release and Outcome all commit
+        # together in this one transaction.
+        await session.execute(
+            text(
+                "UPDATE wallets SET locked_usd = locked_usd - :n, "
+                "cash_usd = cash_usd + :n + :pnl "
+                "WHERE id = :wid"
+            ),
+            {"n": pos_db.notional_usd, "pnl": pnl_usd, "wid": pos_db.wallet_id},
+        )
+
+        session.add(
+            Outcome(
+                prediction_id=pred.id,
+                asset_class=pos.asset_class,
+                observed_at=now,
+                pnl_usd=pnl_usd,
+                pnl_pct=pnl_pct,
+                score=score,
+                reason=reason,
+            )
+        )
+    logger.info(
+        f"closed[{reason}] {pos.side} {pos.symbol} entry={pos.opened_price:.4f} "
+        f"exit={exit_px:.4f} pnl={pnl_usd:.4f}USD ({pnl_pct*100:.3f}%) "
+        f"score={score:.3f}"
+    )
+    try:
+        await shadow_close_position(prediction=pred, position=pos)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"shadow close error pos={pos.id}: {e}")
+    return True
+
+
 async def close_due_positions() -> int:
     now = datetime.now(UTC)
     async with shared_session_scope() as session:
@@ -776,99 +902,31 @@ async def close_due_positions() -> int:
 
     closed = 0
     for pos, pred, reason in work:
-        if pos.side == "delta_neutral":
-            # PnL is funding accrual over actual hold duration; no price-based
-            # slippage. opened_at is the anchor; fr read live for correctness.
-            fr = await _latest_funding_rate(pos.symbol)
-            pnl_usd = _unrealized_pnl(pos, pos.opened_price, funding_rate_8h=fr)
-            # For scoring: express PnL as % of notional (analogous to pnl_pct
-            # for directional positions).
-            pnl_pct = pnl_usd / pos.notional_usd if pos.notional_usd else Decimal("0")
-            # Score is capped at ±1 relative to SCORE_CAP_PCT.
-            capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
-            score = capped / SCORE_CAP_PCT
-            exit_px = pos.opened_price  # synthetic — no actual sell
-        else:
-            last_px = await _latest_price(pos.symbol, pos.asset_class)
-            if last_px is None:
-                # Orphan-close: position's close_by is ORPHAN_STALE_THRESHOLD_S
-                # past due AND we still have no price. Flat-close at entry to
-                # prevent indefinite accumulation (the KONYA BIST 72h bug).
-                close_by = pred.close_by
-                if close_by.tzinfo is None:
-                    close_by = close_by.replace(tzinfo=UTC)
-                age_past_close = (now - close_by).total_seconds()
-                if reason == "hit_horizon" and age_past_close > ORPHAN_STALE_THRESHOLD_S:
-                    exit_px = pos.opened_price  # flat — no real exit price available
-                    pnl_pct = Decimal("0")
-                    pnl_usd = Decimal("0")
-                    score = Decimal("0")
-                    reason = "orphan_flat_close"
-                else:
-                    continue
-            else:
-                exit_px = _apply_slippage(
-                    last_px, pos.side, opening=False,
-                    asset_class=pos.asset_class, symbol=pos.symbol,
-                )
-                if pos.side == "long":
-                    pnl_pct = (exit_px - pos.opened_price) / pos.opened_price
-                else:
-                    pnl_pct = (pos.opened_price - exit_px) / pos.opened_price
-                pnl_usd = pos.notional_usd * pnl_pct
-                # Perp funding over the hold: longs pay a positive rate, shorts
-                # receive it. Uses the latest 8h rate as the hold-average proxy.
-                if pos.asset_class == "crypto":
-                    opened = pos.opened_at if pos.opened_at.tzinfo else pos.opened_at.replace(tzinfo=UTC)
-                    elapsed_h = Decimal(str((now - opened).total_seconds() / 3600.0))
-                    fr = await _latest_funding_rate(pos.symbol)
-                    pnl_usd += funding_pnl_usd(pos.side, pos.notional_usd, fr, elapsed_h)
-                    pnl_pct = pnl_usd / pos.notional_usd if pos.notional_usd else pnl_pct
-                capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
-                score = capped / SCORE_CAP_PCT
+        if await _close_position(pos, pred, reason, now):
+            closed += 1
+    return closed
 
-        async with shared_session_scope() as session:
-            pos_db = await session.get(PaperPosition, pos.id)
-            pos_db.closed_at = now
-            pos_db.closed_price = exit_px
-            pos_db.pnl_usd = pnl_usd
-            pos_db.status = "closed"
 
-            pred_db = await session.get(Prediction, pred.id)
-            pred_db.status = "closed"
-
-            # Atomic release: single UPDATE so a concurrent open can't clobber the
-            # decrement (the lost-update that caused phantom-locked capital). The
-            # status flip, prediction close, wallet release and Outcome all commit
-            # together in this one transaction.
-            await session.execute(
-                text(
-                    "UPDATE wallets SET locked_usd = locked_usd - :n, "
-                    "cash_usd = cash_usd + :n + :pnl "
-                    "WHERE id = :wid"
-                ),
-                {"n": pos_db.notional_usd, "pnl": pnl_usd, "wid": pos_db.wallet_id},
-            )
-
-            session.add(
-                Outcome(
-                    prediction_id=pred.id,
-                    asset_class=pos.asset_class,
-                    observed_at=now,
-                    pnl_usd=pnl_usd,
-                    pnl_pct=pnl_pct,
-                    score=score,
-                    reason=reason,
-                )
-            )
-        closed += 1
-        logger.info(
-            f"closed[{reason}] {pos.side} {pos.symbol} entry={pos.opened_price:.4f} "
-            f"exit={exit_px:.4f} pnl={pnl_usd:.4f}USD ({pnl_pct*100:.3f}%) "
-            f"score={score:.3f}"
-        )
+async def flatten_wallet(wallet_id: uuid.UUID, *, reason: str = "circuit_trip") -> int:
+    """Close EVERY open position of a wallet now (circuit trip / operator kill).
+    Uses the normal close path (mark price + costs + Outcome + capital release);
+    positions without a fresh mark are flat-closed at entry so nothing stays open."""
+    now = datetime.now(UTC)
+    async with shared_session_scope() as session:
+        rows = (await session.execute(
+            select(PaperPosition, Prediction)
+            .join(Prediction, Prediction.id == PaperPosition.prediction_id)
+            .where(PaperPosition.wallet_id == wallet_id)
+            .where(PaperPosition.status == "open")
+        )).all()
+        for pos, pred in rows:
+            session.expunge(pos)
+            session.expunge(pred)
+    closed = 0
+    for pos, pred in rows:
         try:
-            await shadow_close_position(prediction=pred, position=pos)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"shadow close error pos={pos.id}: {e}")
+            if await _close_position(pos, pred, reason, now, force=True):
+                closed += 1
+        except Exception as e:  # noqa: BLE001 — keep flattening the rest
+            logger.exception(f"flatten: close failed for {pos.id}: {e}")
     return closed

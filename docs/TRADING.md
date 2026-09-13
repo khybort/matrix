@@ -27,10 +27,10 @@ The user defines "lose-it-all-OK" before any mainnet key enters the system. That
 
 ## Hard limits enforced in code (not config best-practices, code)
 
-These live in `services/execution` (or wherever order submission happens) and **cannot be overridden by a strategy module**:
+These live in `matrix_shared.live_gate.should_submit_live` — the single gate used by `services/execution` and by the paper engine's `exchange_shadow` mirror (the only code that currently places exchange orders) — and **cannot be overridden by a strategy module**:
 
 1. **`MAX_POSITION_PCT`** — single trade can never exceed N% of current account equity (default 2%)
-2. **`DAILY_LOSS_CIRCUIT_PCT`** — if today's PnL < -N% of starting-of-day equity, all positions close + new orders blocked until manual reset (default 5%)
+2. **`DAILY_LOSS_CIRCUIT_PCT`** — if today's PnL < -N% of starting-of-day equity, **all open positions are flattened** (`paper_trade.flatten_wallet`, reason `circuit_trip`) and new orders are blocked. Reset: while paper-only the circuit re-arms at the UTC day roll; with `LIVE_EXECUTION_ENABLED=true` it stays tripped until an operator resets it (`make circuit-reset ASSET=…` or Telegram `/circuit_reset`). Default 5%.
 3. **`LIVE_CAPITAL_CAP_USD`** — total capital deployed across the system cannot exceed this; new orders that would breach it are rejected
 4. **`LIVE_EXECUTION_ENABLED`** — global kill flag. Default `false`. Setting `true` requires manual edit of `.env.local` on the execution node.
 5. **Per-strategy lifecycle gate** — a strategy cannot graduate to live execution without `paper_trade_certificate` row in DB showing 60+ days of monitored runs.

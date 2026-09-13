@@ -169,6 +169,11 @@ backup: ## pg_dumpall LOCAL + SHARED to ./backups/<ts>/
 	@echo "→ backup at $(BACKUP_DIR)/$(BACKUP_TS)/"
 	@ls -lh $(BACKUP_DIR)/$(BACKUP_TS)/
 
+.PHONY: circuit-reset
+circuit-reset: ## Operator reset of a tripped daily-loss circuit: make circuit-reset ASSET=crypto [WALLET=default]
+	@if [ -z "$(ASSET)" ]; then echo "Usage: make circuit-reset ASSET=<asset_class> [WALLET=default]" && exit 1; fi
+	$(PSQL_SHARED) -c "UPDATE wallets SET circuit_tripped_at = NULL, day_start_equity = cash_usd + locked_usd, day_start_at = now() WHERE asset_class='$(ASSET)' AND name='$(or $(WALLET),default)' AND circuit_tripped_at IS NOT NULL RETURNING name, asset_class;"
+
 .PHONY: backup-now
 backup-now: ## Run one scheduled-style backup now (pg_dump -Fc, market streams schema-only) → ./backups/<ts>/
 	$(DC) $(DC_BASE) run --rm backup once

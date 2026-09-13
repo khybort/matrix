@@ -16,7 +16,6 @@ from loguru import logger
 from matrix_shared.bybit_v5 import BybitOrder, BybitV5Client
 from matrix_shared.db import shared_session_scope
 from matrix_shared.models import PaperPosition, Prediction, Wallet
-from matrix_shared.trading_safety import has_valid_certificate, mainnet_refusal_reasons
 
 _SHADOW_CTX_KEY = "bybit_shadow"
 _QTY_STEP = Decimal("0.001")
@@ -65,29 +64,33 @@ async def _per_trade_allowed(
     asset_class: str,
     strategy_version: int,
     notional_usd: Decimal,
+    closing: bool = False,
 ) -> tuple[bool, list[str]]:
-    reasons: list[str] = list(mainnet_refusal_reasons())
-    if os.environ.get("LIVE_EXECUTION_ENABLED", "false").strip().lower() != "true":
-        reasons.append("LIVE_EXECUTION_ENABLED is not 'true'")
-    if not await has_valid_certificate(strategy_id, asset_class, strategy_version):
-        reasons.append(
-            f"no valid paper_trade_certificate for "
-            f"{strategy_id}/{asset_class}/v{strategy_version}"
-        )
-    async with shared_session_scope() as session:
-        wallet = await session.get(Wallet, wallet_id)
-        if wallet is None:
-            reasons.append(f"wallet {wallet_id} not found")
-            return False, reasons
-        if wallet.circuit_tripped_at is not None:
-            reasons.append("wallet daily-loss circuit is tripped")
-        equity = Decimal(wallet.cash_usd) + Decimal(wallet.locked_usd)
-        max_notional = equity * Decimal(wallet.max_position_pct)
-        if notional_usd > max_notional:
-            reasons.append(
-                f"notional_usd={notional_usd} > max_position_pct*equity={max_notional}"
-            )
-    return len(reasons) == 0, reasons
+    """The full docs/TRADING.md gate (matrix_shared.live_gate) — identical to
+    services/execution. Closes evaluate posture/flag/cert/circuit only."""
+    from matrix_shared.live_gate import should_submit_live
+
+    decision = await should_submit_live(
+        strategy_id=strategy_id,
+        asset_class=asset_class,
+        strategy_version=strategy_version,
+        intended_notional_usd=notional_usd,
+        wallet_id=wallet_id,
+        closing=closing,
+    )
+    return decision.allowed, decision.reasons
+
+
+_clients: dict[bool, BybitV5Client] = {}
+
+
+def _client() -> BybitV5Client:
+    """One client per network for the process so its TokenBucket actually
+    limits across orders (a per-call client reset the bucket every time)."""
+    key = _testnet()
+    if key not in _clients:
+        _clients[key] = BybitV5Client(testnet=key)
+    return _clients[key]
 
 
 async def _store_shadow_meta(prediction_id: UUID, patch: dict[str, Any]) -> None:
@@ -139,19 +142,15 @@ async def shadow_open_position(
         return
 
     qty = _qty_from_notional(notional_usd, entry_price)
-    client = BybitV5Client(testnet=_testnet())
-    try:
-        result = await client.place_order(
-            BybitOrder(
-                category="linear",
-                symbol=prediction.symbol,
-                side=side,
-                order_type="Market",
-                qty=qty,
-            )
+    result = await _client().place_order(
+        BybitOrder(
+            category="linear",
+            symbol=prediction.symbol,
+            side=side,
+            order_type="Market",
+            qty=qty,
         )
-    finally:
-        await client.aclose()
+    )
 
     if result.dry_run or not result.ok:
         logger.warning(
@@ -212,6 +211,7 @@ async def shadow_close_position(
         asset_class=pred.asset_class,
         strategy_version=pred.strategy_version,
         notional_usd=position.notional_usd,
+        closing=True,
     )
     if not allowed:
         logger.warning(
@@ -222,20 +222,16 @@ async def shadow_close_position(
         )
         return
 
-    client = BybitV5Client(testnet=_testnet())
-    try:
-        result = await client.place_order(
-            BybitOrder(
-                category="linear",
-                symbol=position.symbol,
-                side=side,
-                order_type="Market",
-                qty=qty,
-                reduce_only=True,
-            )
+    result = await _client().place_order(
+        BybitOrder(
+            category="linear",
+            symbol=position.symbol,
+            side=side,
+            order_type="Market",
+            qty=qty,
+            reduce_only=True,
         )
-    finally:
-        await client.aclose()
+    )
 
     if result.dry_run or not result.ok:
         logger.warning(

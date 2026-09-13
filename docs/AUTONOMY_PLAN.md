@@ -327,8 +327,14 @@ Emir gönderen tek kod yolu bu.
     main agent yönetsin; ajanlar hep çalışsın" → `synthesis` ve `execution` profile kapıları kaldırıldı,
     LLM backend Cursor → Claude subscription (token bekleniyor).
 
-Açık kalan P0 maddeleri: P0.7 (`exchange_shadow` tam gate — mainnet refuse eklendi, capital/slot cap
-henüz değil), P0.8 (circuit breaker trip'te pozisyon kapatma + manuel reset).
+13. ✅ P0.7 `matrix_shared/live_gate.py`: tek gate; `execution.safety` ve `exchange_shadow` aynı
+    fonksiyonu kullanır (closing=True exit'lerde cap'ler atlanır); shadow client process-başına
+    cache'li → TokenBucket gerçekten sınırlar.
+14. ✅ P0.8 Circuit trip → `flatten_wallet` tüm pozisyonları kapatır; paper modda gün dönümünde
+    re-arm, live modda operatör resetler (`make circuit-reset`, Telegram `/circuit_reset`).
+
+P0 tamamı kapandı. Sıradaki: P2.3 regime memory, P2.4 overlay Outcome/Lesson, P2.6 operatör
+direktifleri, P3.2 decision agent tool belt + LLM/rule blend.
 
 Bu 10'dan sonra sistem "çalışıyor gibi görünen" değil, **gerçekten kendini ölçen** hale gelir.
 Director (P3) ancak ölçüm altyapısı varken anlamlı; ondan önce yazılırsa gürültüyü orkestre eder.
