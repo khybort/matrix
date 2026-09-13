@@ -282,7 +282,7 @@ async def backfill_all(max_hours: float | None = None) -> int:
         logger.info("backfill: no trades, nothing to do")
         return 0
     logger.info(f"backfill: aggregating {earliest.isoformat()} → {until.isoformat()}")
-    n = await aggregate_window(earliest, until)
+    n = await aggregate_window(earliest, until, symbols=await _tick_symbols())
     h = await rollup_1h_bars(earliest, until)
     logger.info(f"backfill: wrote/updated {n} 1m bar rows, {h} 1h rollup rows")
     return n
