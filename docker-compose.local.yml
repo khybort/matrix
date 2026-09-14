@@ -28,6 +28,10 @@ x-cpu-shared-db: &cpu_shared_db
 
 services:
   postgres-shared:
+    # Same caps as the LOCAL postgres (docker-compose.limits.yml x-cpu-db);
+    # an uncapped Postgres was part of the 2026-09-13 OrbStack VM OOM.
+    cpus: ${MATRIX_CPU_DB:-0.75}
+    mem_limit: ${MATRIX_MEM_DB:-2g}
     <<: *cpu_shared_db
     build:
       context: ./infra/db

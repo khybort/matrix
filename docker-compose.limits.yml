@@ -39,9 +39,6 @@ services:
   postgres:
     <<: *cpu_db
 
-  postgres-shared:
-    <<: *cpu_db
-
   ingestion-market:
     <<: *cpu_heavy
 
