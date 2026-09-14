@@ -34,7 +34,7 @@ services:
   ingestion-market:
     <<: *matrix-dev-watch
     command:
-      - "python -m ingestion.main --markets crypto bist --mainnet"
+      - "python -m ingestion.main --markets crypto bist us --mainnet"
       - "/workspace/services/ingestion/src"
       - "/workspace/packages/python-shared/src"
     volumes:
