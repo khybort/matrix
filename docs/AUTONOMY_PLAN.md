@@ -16,7 +16,7 @@ bir kâr motoru.
 
 | Gate | Ölçüt | Şu an |
 |---|---|---|
-| G1 Sürekli çalışma | 30 gün kesintisiz tick; ingestion gap < %5; hiçbir servis 1 saatten uzun sessiz kalmaz | ❌ 10 Haz → 12 Eyl arası ~3 ay kapalı kalmış |
+| G1 Sürekli çalışma | 30 gün kesintisiz tick; ingestion gap < %5; hiçbir servis 1 saatten uzun sessiz kalmaz | ❌ 10 Haz → 12 Eyl arası ~3 ay kapalı kalmış; 2026-09-13 23:30 → 09-14 10:23 UTC OrbStack VM OOM ile ~11 saat kesinti (container mem_limit + 12 GiB VM ile önlem) |
 | G2 Öğrenme döngüsü kapalı | Uygulanan her mutasyonun 7 gün sonrası PnL etkisi ölçülür; efficacy < 0 olanlar otomatik geri alınır | ❌ efficacy takibi yok, rollback yok |
 | G3 Paper pozitif EV | En az 1 strateji, 60 gün, ücret+slippage sonrası PnL > 0, DD < %15, n ≥ 200, %95 CI alt sınırı > 0 | ❌ 36k trade, toplam **−$421**; tüm stratejiler negatif (oi_breakout +$6 hariç) |
 | G4 Kendi kodunu düzeltir | dev_agent'ın ürettiği patch test edilir, main'e merge olur, sonucu ölçülür | 🟡 2026-09-13: test→commit→merge zinciri var; ilk gerçek Director görevi (#10) yamayı üretti, ilgisiz env-bağımlı test yüzünden `test_broke`, yama elle alındı (d690ad0). Tam otomatik merge henüz gözlenmedi |
