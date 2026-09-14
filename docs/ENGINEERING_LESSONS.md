@@ -44,6 +44,9 @@
   full scan (300M satır) → test temizliği 10+ dk. Her zaman `exchange = 'bybit' AND exchange_trade_id IN (...)`.
 
 ## Altyapı (OrbStack)
+- **2026-09-14 — Kapak kapalı = sistem yok.** `pmset -g log` "Entering DarkWake state due to 'Clamshell Sleep'": kapak kapalıyken
+  macOS AC'de ve caffeinate/Amphetamine açıkken bile uyur; OrbStack VM'i de uyur (`vmgr.log: msg=sleep`), `docker ps` askıda kalır.
+  Bunu kodla çözemezsin: kapak açık / harici ekran / `sudo pmset -a disablesleep 1`. `docker` askıdaysa OOM'dan önce `pmset -g log`'a bak.
 - **2026-09-13 — Sınırsız container'lar VM'i öldürür.** 10 GiB OrbStack VM'i kernel OOM'a girdi ("VM_FAULT_OOM leaked", `~/.orbstack/log/vmgr.log`),
   Docker soketi ~11 saat askıda kaldı, `orb restart docker` "stopping container docker"da takıldı. Kural: her servise
   `mem_limit` (docker-compose.limits.yml tier'ları; postgres-shared için docker-compose.local.yml), VM belleği yükün
