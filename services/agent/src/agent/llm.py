@@ -30,7 +30,11 @@ def llm_enabled() -> bool:
     return _llm_enabled()
 
 
-_BATCH_CHUNK = 4  # symbols per LLM call — keeps prompts within 45s timeout
+# Symbols per LLM call. Each subscription-CLI call carries ~20k tokens of
+# harness overhead regardless of content (ledger: ~$0.02/call, p50 26 s), so
+# fewer, larger batches are strictly cheaper; per-symbol prompts are ~700
+# chars. 12 keeps a two-market tick to one call per market.
+_BATCH_CHUNK = int(__import__("os").environ.get("MATRIX_AGENT_BATCH_CHUNK", "12"))
 
 _BATCH_SYSTEM = (
     "You are a quantitative trading agent for short-horizon crypto perpetual trades. "

@@ -42,7 +42,7 @@ AGENT_STRATEGY_ID = "matrix_agent"
 # 15 s loop the same 6 symbols were re-decided every tick (one ~30 s, ~20k-token
 # CLI call each) and answered HOLD again. Features barely move inside 5 min in
 # a low-vol regime; exploration probes and rule decisions are unaffected.
-HOLD_COOLDOWN_S = float(__import__("os").environ.get("MATRIX_AGENT_HOLD_COOLDOWN_S", "300"))
+HOLD_COOLDOWN_S = float(__import__("os").environ.get("MATRIX_AGENT_HOLD_COOLDOWN_S", "600"))
 # Per-market cap on how many symbols the LLM strategy considers per tick. The
 # US universe is the S&P 500 + Nasdaq-100 (503 names): unbounded, the agent
 # would page through it 10 symbols per 15 s tick (~600 CLI calls/hour) and

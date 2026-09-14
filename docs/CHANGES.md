@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-14 — Agent LLM çağrı sayısı: batch 4 → 12, HOLD cooldown 5 → 10 dk
+- US açılınca agent 10 dk'da 43 CLI çağrısı yapıyordu (~260/saat). Her çağrının maliyeti içerikten bağımsız ~20k token harness overhead'i olduğu için batch büyütüldü (`MATRIX_AGENT_BATCH_CHUNK`, market başına tek çağrı) ve HOLD sonrası bekleme 600 s (`MATRIX_AGENT_HOLD_COOLDOWN_S`). Hedef ≤ 60 çağrı/saat.
+
 ## 2026-09-14 — Regime referansı için yedek semboller
 - US referansı SPY ingest edilmiyor (universe endeks bileşenleri); 1h geçmişi yetersizse QQQ→AAPL→MSFT→NVDA denenir (BIST: GARAN/AKBNK, crypto: ETH). Böylece US/BIST regime `unknown` kalmaz.
 
