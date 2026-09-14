@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-14 — Kesintinin kök nedeni: kapak kapalı uyku
+- `pmset -g log`: 02:09 ve 13:26 (yerel) "Entering DarkWake state due to 'Clamshell Sleep'". Mac AC'de ve caffeinate/Amphetamine açık olsa da kapak kapalıyken uyuyor; OrbStack VM birlikte uyuyor, Docker soketi askıda kalıyor. VM OOM ikincil bulguydu. Kod çözümü yok; operatör: kapak açık / harici ekran / `sudo pmset -a disablesleep 1`. OPS_HARDENING ve ENGINEERING_LESSONS güncellendi.
+
 ## 2026-09-14 — Agent: HOLD sonrası sembol başına soğuma
 - LLM bir sembol için HOLD dediyse aynı sembol `MATRIX_AGENT_HOLD_COOLDOWN_S` (vars. 300 s) boyunca tekrar sorulmaz; 15 s döngüde aynı 6 sembol her tick ~30 s / ~20k token'lık CLI çağrısıyla yeniden HOLD'a karar ediliyordu. Exploration ve kural kararları etkilenmez.
 
