@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-14 — Bybit WS ölü soket bekçisi
+- Host uykudan dönünce WebSocket 5 saat "açık" ama sessiz kaldı (`ping_interval=None`, ConnectionClosed hiç gelmedi); yalnız restart tick getirdi. Connector artık 60 s frame gelmezse soketi kapatıp yeniden bağlanır (`STALE_AFTER_S`). Aynı uykudan bars-aggregator da askıda kaldı; restart edildi.
+
 ## 2026-09-14 — Agent tick'i bir marketin universe hatasıyla ölmez
 - US adapter'ın `us_symbols` tablosu henüz migrate edilmemiş (0038 yabancı WIP); ABD seansında `_resolve_targets` patlıyor, crypto dahil hiçbir karar alınmıyordu. Market başına try/except: universe alınamayan market uyarıyla atlanır.
 

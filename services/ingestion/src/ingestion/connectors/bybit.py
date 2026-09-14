@@ -31,10 +31,18 @@ import websockets
 from loguru import logger
 
 PING_INTERVAL_S = 20
+# No frame (data or pong) for this long → the socket is dead even if the OS
+# never reported it. After the host slept (2026-09-14) the connection stayed
+# 'open' for 5 h without a byte; only a restart brought ticks back.
+STALE_AFTER_S = 60.0
 
 # How often we emit a top-of-book snapshot per symbol, regardless of delta frequency.
 ORDERBOOK_PERSIST_INTERVAL_S = 2.0
 ORDERBOOK_PERSIST_DEPTH = 25
+
+
+def is_stale(last_rx_mono: float, now_mono: float, limit_s: float) -> bool:
+    return (now_mono - last_rx_mono) > limit_s
 
 # Throttle ticker emissions. Funding-rate changes always emit, ignoring throttle.
 TICKER_PERSIST_INTERVAL_S = 5.0
@@ -149,10 +157,12 @@ class BybitConnector:
             logger.info(f"bybit ws connected ({self.url})")
             await self._subscribe(ws)
 
+            self._last_rx = time.monotonic()
             tasks = [
                 asyncio.create_task(self._reader(ws, queue), name="bybit-reader"),
                 asyncio.create_task(self._book_ticker(queue), name="bybit-book-ticker"),
                 asyncio.create_task(self._app_ping(ws), name="bybit-ping"),
+                asyncio.create_task(self._stale_watch(ws, queue), name="bybit-stale-watch"),
             ]
             try:
                 while True:
@@ -184,6 +194,23 @@ class BybitConnector:
             except websockets.ConnectionClosed:
                 return
 
+    async def _stale_watch(
+        self,
+        ws: websockets.WebSocketClientProtocol,
+        queue: asyncio.Queue[MarketEvent | None],
+    ) -> None:
+        """Force a reconnect when nothing has been received for STALE_AFTER_S."""
+        while True:
+            await asyncio.sleep(STALE_AFTER_S / 2)
+            if is_stale(self._last_rx, time.monotonic(), STALE_AFTER_S):
+                logger.warning(f"bybit ws: no frames for {STALE_AFTER_S:.0f}s; forcing reconnect")
+                try:
+                    await ws.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                await queue.put(None)
+                return
+
     async def _reader(
         self,
         ws: websockets.WebSocketClientProtocol,
@@ -191,6 +218,7 @@ class BybitConnector:
     ) -> None:
         try:
             async for raw in ws:
+                self._last_rx = time.monotonic()
                 msg = orjson.loads(raw)
                 for ev in self._handle_message(msg):
                     await queue.put(ev)
