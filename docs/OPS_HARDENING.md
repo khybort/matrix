@@ -49,6 +49,7 @@ that remain (docs/AUTONOMY_PLAN.md):
 | `make openrouter-models` | Current free OpenRouter models (tool-calling first) when a default vanishes |
 | `make retention-drain` / `make db-compact TABLE=market_trades` | Force the retention backlog through / return disk to the OS (locks the table) |
 | `make backup-now` | Extra backup before risky work (sidecar dumps daily) |
+| `docker stats --no-stream`, `orb config show \| grep memory_mib`, `tail ~/.orbstack/log/vmgr.log` | Memory caps per tier (`MATRIX_MEM_DB/HEAVY/WORKER/LIGHT`, defaults 2g/1g/768m/512m) keep a runaway service inside its own container; the VM must be sized above the sum (12 GiB). A hung `docker ps` after "VM_FAULT_OOM" in vmgr.log means the VM is wedged: `orb stop && orb start`, then `make up-dev` |
 | `launchctl list \| grep matrix.claude` (last column must be 0), `tail /tmp/matrix-claude-creds.log` | The credentials sync runs from `~/.matrix/bin` every 30 min; launchd cannot execute scripts under `~/Documents` (exit 126) — re-run `make claude-creds-install` after moving the repo |
 | `MATRIX_BACKLOG_SLOTS_MULT` / `MATRIX_BACKLOG_MIN` (env) | Prediction emission cap per strategy = champion slots × mult (default 5, floor 3); logs `backpressure:` lines when trimming. Lower it if LLM volume must drop, raise it if the paper engine starves for candidates |
 | `~/.claude/matrix_usage/YYYY-MM-DD.jsonl` (in the `matrix_claude_config` volume), `MATRIX_LLM_DAILY_BUDGET_USD` (default 25) | Per-call LLM usage ledger read by the Director brief and by notify's daily budget alert |

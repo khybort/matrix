@@ -43,6 +43,13 @@
 - **2026-09-13 — `market_trades` silmede indeks.** Tek indeks `(exchange, exchange_trade_id)`; `WHERE exchange_trade_id IN (...)`
   full scan (300M satır) → test temizliği 10+ dk. Her zaman `exchange = 'bybit' AND exchange_trade_id IN (...)`.
 
+## Altyapı (OrbStack)
+- **2026-09-13 — Sınırsız container'lar VM'i öldürür.** 10 GiB OrbStack VM'i kernel OOM'a girdi ("VM_FAULT_OOM leaked", `~/.orbstack/log/vmgr.log`),
+  Docker soketi ~11 saat askıda kaldı, `orb restart docker` "stopping container docker"da takıldı. Kural: her servise
+  `mem_limit` (docker-compose.limits.yml tier'ları; postgres-shared için docker-compose.local.yml), VM belleği yükün
+  toplam cap'inin üstünde (`orb config set memory_mib 12288`). Belirti: `docker ps` 20 s+ → önce vmgr.log'a bak.
+  `docker-compose.limits.yml` yalnız base compose'daki servisleri içerebilir; overlay'e olmayan servis eklemek projeyi geçersiz kılar.
+
 ## Git ve migration
 - **Sadece kendi hunk'larını stage et.** Ağaçta başka bir node'un uncommitted WIP'i durabilir (US-market adapter, 0038).
   `git add -A` yasak; ortak dosyalarda HEAD + kendi patch'in (`git hash-object` + `update-index`). CHANGES.md'ye
