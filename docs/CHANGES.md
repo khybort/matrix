@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-14 — Bar fiyatlı marketler (US/BIST) için agent feature'ları
+- `extract_symbol_features` yalnızca trade/orderbook/ticker (crypto) okuyordu; US/BIST sembolleri LLM'e `last_price=None` ile gidip boş prompt'la HOLD alıyordu. Şimdi 1m `market_bars`'tan last_price, Δ5m ve notional türetilir (`apply_bar_features`). Agent tick'i fiyatı olmayan sembolleri LLM'e hiç göndermez.
+
 ## 2026-09-14 — Agent market başına universe sınırı
 - US universe 503 sembol; agent 15 s'de 10 sembol sorarak tüm listeyi dolaşacaktı (~600 CLI çağrısı/saat). `MATRIX_AGENT_UNIVERSE_CAP` (vars. 60): market başına en iyi realised edge'li N sembol; HOLD cooldown ile birlikte 5 dk'da ≤ 6 batch.
 

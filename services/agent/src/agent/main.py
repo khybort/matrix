@@ -275,7 +275,12 @@ async def _tick(symbols: list[str]) -> int:
             return sym, ac, None
 
     feat_results = await asyncio.gather(*[_safe_features(s, ac) for s, ac in fresh_targets])
-    valid = [(sym, ac, feat) for sym, ac, feat in feat_results if feat is not None]
+    # No price = nothing to trade and nothing worth an LLM call (a stale or
+    # halted symbol); the decision would be HOLD on an empty prompt anyway.
+    valid = [(sym, ac, feat) for sym, ac, feat in feat_results if feat is not None and feat.last_price is not None]
+    for sym, ac, feat in feat_results:
+        if feat is not None and feat.last_price is None:
+            logger.debug(f"{sym} [{ac}]: no fresh price; skip")
 
     if not valid:
         return 0

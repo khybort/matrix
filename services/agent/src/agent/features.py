@@ -12,6 +12,7 @@ from graph.queries import GraphAssetContext, base_token_to_asset, get_asset_cont
 from graph.read import get_remote_graph_signal, merge_contexts
 from matrix_shared import session_scope
 from matrix_shared.models import (
+    MarketBar,
     MarketTrade,
     OrderBookSnapshot,
     RawDocument,
@@ -56,6 +57,27 @@ class SymbolFeatures:
     # Market regime key "<vol>/<trend>/<funding>" (matrix_shared.regime) — the
     # same label is written to predictions.context so lessons can be regime-keyed.
     regime: str = "unknown"
+
+
+BAR_PRICE_CLASSES = frozenset({"bist", "us"})
+BAR_FRESHNESS_MIN = 30  # a bar older than this is not a tradable price
+
+
+def apply_bar_features(f: SymbolFeatures, bars: list[tuple]) -> None:
+    """Fill price fields from 1m bars ordered newest first: (ts, close, volume).
+    last_price = newest close; Δ5m = newest close vs the 5th-newest close;
+    notional_60s = newest bar's volume × close (the bar is one minute)."""
+    if not bars:
+        return
+    _, close, volume = bars[0]
+    if close is None or close <= 0:
+        return
+    f.last_price = Decimal(close)
+    f.notional_60s_usd = Decimal(volume or 0) * Decimal(close)
+    if len(bars) >= 6 and bars[5][1]:
+        old = Decimal(bars[5][1])
+        if old > 0:
+            f.price_change_pct_5m = (Decimal(close) - old) / old
 
 
 async def extract_symbol_features(symbol: str, asset_class: str = "crypto") -> SymbolFeatures:
@@ -160,6 +182,24 @@ async def extract_symbol_features(symbol: str, asset_class: str = "crypto") -> S
         ]
         f.n_news_1h = len(relevant)
         f.news_titles_sample = relevant[:5]
+
+    # Bar-priced markets (BIST, US) have no trade prints / orderbook / ticker
+    # rows: until 2026-09-14 every US symbol reached the LLM with last_price
+    # None and was decided HOLD on an empty prompt. Derive the price fields
+    # from the 1m bars the ingestor polls (same source the paper engine marks
+    # these positions with).
+    if asset_class in BAR_PRICE_CLASSES and f.last_price is None:
+        async with session_scope() as session:
+            bars = (await session.execute(
+                select(MarketBar.ts, MarketBar.close, MarketBar.volume)
+                .where(MarketBar.symbol == symbol)
+                .where(MarketBar.asset_class == asset_class)
+                .where(MarketBar.interval == "1m")
+                .where(MarketBar.ts >= now - timedelta(minutes=BAR_FRESHNESS_MIN))
+                .order_by(desc(MarketBar.ts))
+                .limit(6)
+            )).all()
+        apply_bar_features(f, [(r[0], Decimal(r[1]), Decimal(r[2] or 0)) for r in bars])
 
     # Graph-derived features.
     # Federated read: local AGE first, then supplement with the freshest

@@ -78,3 +78,19 @@ def test_universe_cap_keeps_best_edges_per_market():
     assert [t for t in out if t[1] == "us"][:2] == [("S7", "us"), ("S3", "us")]
     assert len([t for t in out if t[1] == "us"]) == 3 and ("BTC", "crypto") in out
     assert M._cap_universe(targets, edges, cap=0) == targets
+
+
+def test_bar_features_fill_price_change_and_notional():
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    from agent.features import SymbolFeatures, apply_bar_features
+    f = SymbolFeatures(symbol="AAPL")
+    now = datetime.now(timezone.utc)
+    bars = [(now, Decimal("101"), Decimal("1000")), (now, Decimal("100.5"), Decimal("900")), (now, Decimal("100.2"), Decimal("1")),
+            (now, Decimal("100.1"), Decimal("1")), (now, Decimal("100.0"), Decimal("1")), (now, Decimal("100"), Decimal("1"))]
+    apply_bar_features(f, bars)
+    assert f.last_price == Decimal("101") and f.notional_60s_usd == Decimal("101000")
+    assert f.price_change_pct_5m == Decimal("0.01")
+    g = SymbolFeatures(symbol="X")
+    apply_bar_features(g, [])
+    assert g.last_price is None
