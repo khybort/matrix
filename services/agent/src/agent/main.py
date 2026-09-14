@@ -43,7 +43,28 @@ AGENT_STRATEGY_ID = "matrix_agent"
 # CLI call each) and answered HOLD again. Features barely move inside 5 min in
 # a low-vol regime; exploration probes and rule decisions are unaffected.
 HOLD_COOLDOWN_S = float(__import__("os").environ.get("MATRIX_AGENT_HOLD_COOLDOWN_S", "300"))
+# Per-market cap on how many symbols the LLM strategy considers per tick. The
+# US universe is the S&P 500 + Nasdaq-100 (503 names): unbounded, the agent
+# would page through it 10 symbols per 15 s tick (~600 CLI calls/hour) and
+# still trade at most a handful. Best realised edge first; ties keep order.
+UNIVERSE_CAP = int(__import__("os").environ.get("MATRIX_AGENT_UNIVERSE_CAP", "60"))
 _hold_until: dict[tuple[str, str], float] = {}
+
+
+def _cap_universe(targets: list[tuple[str, str]], edge_map: dict[str, float],
+                  cap: int | None = None) -> list[tuple[str, str]]:
+    cap = UNIVERSE_CAP if cap is None else cap
+    if cap <= 0:
+        return targets
+    out: list[tuple[str, str]] = []
+    for ac in sorted({ac for _, ac in targets}):
+        mine = [t for t in targets if t[1] == ac]
+        if len(mine) > cap:
+            mine.sort(key=lambda t: edge_map.get(t[0], 0.5), reverse=True)
+            logger.debug(f"universe cap [{ac}]: {len(mine)} → {cap} symbols")
+            mine = mine[:cap]
+        out.extend(mine)
+    return out
 
 
 def _drop_held(targets: list[tuple[str, str]], now_mono: float) -> list[tuple[str, str]]:
@@ -239,6 +260,7 @@ async def _tick(symbols: list[str]) -> int:
     # unfilled is pure cost (1,441 expired vs 36 traded on 2026-09-13). Keep,
     # per market, only as many targets as the open backlog has room for,
     # best realised edge first.
+    fresh_targets = _cap_universe(fresh_targets, edge_map)
     fresh_targets = _drop_held(fresh_targets, time.monotonic())
     fresh_targets = await _trim_to_room(fresh_targets, edge_map)
     if not fresh_targets:

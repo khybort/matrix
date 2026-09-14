@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-14 — Agent market başına universe sınırı
+- US universe 503 sembol; agent 15 s'de 10 sembol sorarak tüm listeyi dolaşacaktı (~600 CLI çağrısı/saat). `MATRIX_AGENT_UNIVERSE_CAP` (vars. 60): market başına en iyi realised edge'li N sembol; HOLD cooldown ile birlikte 5 dk'da ≤ 6 batch.
+
 ## 2026-09-14 — ingestion image'ına lxml (US universe discovery)
 - US discover `pandas.read_html` için `lxml` istiyordu, image'da yoktu ("Import lxml failed", `us_symbols` boş). `services/ingestion/pyproject.toml`'a `lxml>=5.0` eklendi, `uv.lock` güncellendi, image yeniden build edilip ingestion-market/news/bars-aggregator recreate edildi.
 

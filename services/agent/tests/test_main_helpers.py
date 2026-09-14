@@ -68,3 +68,13 @@ async def test_resolve_targets_skips_a_market_whose_universe_fails(monkeypatch):
         async def __aexit__(self, *a): return False
     monkeypatch.setattr(M, "session_scope", lambda: _Scope())
     assert await M._resolve_targets([]) == [("AAA", "crypto"), ("BBB", "crypto")]
+
+
+def test_universe_cap_keeps_best_edges_per_market():
+    from agent import main as M
+    targets = [(f"S{i}", "us") for i in range(8)] + [("BTC", "crypto")]
+    edges = {"S7": 0.9, "S3": 0.8}
+    out = M._cap_universe(targets, edges, cap=3)
+    assert [t for t in out if t[1] == "us"][:2] == [("S7", "us"), ("S3", "us")]
+    assert len([t for t in out if t[1] == "us"]) == 3 and ("BTC", "crypto") in out
+    assert M._cap_universe(targets, edges, cap=0) == targets
