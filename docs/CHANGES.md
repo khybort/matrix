@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-14 — Regime referansı için yedek semboller
+- US referansı SPY ingest edilmiyor (universe endeks bileşenleri); 1h geçmişi yetersizse QQQ→AAPL→MSFT→NVDA denenir (BIST: GARAN/AKBNK, crypto: ETH). Böylece US/BIST regime `unknown` kalmaz.
+
 ## 2026-09-14 — 1h rollup tüm marketler için
 - `_ROLLUP_1H_SQL` yalnızca crypto'yu rollup'lıyordu; BIST/US için 1h bar yoktu → regime `unknown`, 7 günlük lookback'ler boş. Filtre kaldırıldı (GROUP BY zaten asset_class içeriyor).
 

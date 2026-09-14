@@ -47,3 +47,9 @@ def test_key_and_wildcard_matching():
     assert regime_matches("*/down/*", r.key) and regime_matches(r.key, r.key)
     assert not regime_matches("*/up/*", r.key)
     assert not regime_matches("high/down/pos", None)
+
+
+def test_us_reference_has_fallbacks_when_spy_is_not_ingested():
+    from matrix_shared.regime import REFERENCE_FALLBACKS, REFERENCE_SYMBOL
+    assert REFERENCE_SYMBOL["us"] == "SPY"
+    assert REFERENCE_FALLBACKS["us"][0] == "QQQ" and "AAPL" in REFERENCE_FALLBACKS["us"]

@@ -31,6 +31,17 @@ from matrix_shared.db import local_session_scope
 REFERENCE_SYMBOL = {"crypto": os.environ.get("MATRIX_REGIME_REF_CRYPTO", "BTCUSDT"),
                     "bist": os.environ.get("MATRIX_REGIME_REF_BIST", "THYAO.IS"),
                     "us": os.environ.get("MATRIX_REGIME_REF_US", "SPY")}
+# Tried in order when the primary reference has no 1h history (the US universe
+# is S&P 500 + Nasdaq-100 constituents, so SPY/QQQ themselves are not ingested).
+REFERENCE_FALLBACKS = {"us": ["QQQ", "AAPL", "MSFT", "NVDA"], "bist": ["GARAN.IS", "AKBNK.IS"], "crypto": ["ETHUSDT"]}
+
+
+async def _closes_1h(session, symbol: str, asset_class: str, since) -> list[float]:
+    rows = (await session.execute(text(
+        "SELECT close FROM market_bars WHERE symbol = :s AND asset_class = :ac "
+        "AND interval = '1h' AND ts >= :since ORDER BY ts"
+    ), {"s": symbol, "ac": asset_class, "since": since})).all()
+    return [float(r[0]) for r in rows]
 TREND_PCT = float(os.environ.get("MATRIX_REGIME_TREND_PCT", "0.015"))
 FUNDING_NEUTRAL = float(os.environ.get("MATRIX_REGIME_FUNDING_NEUTRAL", "0.0001"))
 REGIME_TTL_S = float(os.environ.get("MATRIX_REGIME_TTL_S", "300"))
@@ -103,11 +114,13 @@ async def current_regime(asset_class: str = "crypto", *, symbol: str | None = No
     try:
         since = datetime.now(UTC) - timedelta(days=7, hours=2)
         async with local_session_scope() as session:
-            rows = (await session.execute(text(
-                "SELECT close FROM market_bars WHERE symbol = :s AND asset_class = :ac "
-                "AND interval = '1h' AND ts >= :since ORDER BY ts"
-            ), {"s": ref, "ac": asset_class, "since": since})).all()
-            closes = [float(r[0]) for r in rows]
+            closes = await _closes_1h(session, ref, asset_class, since)
+            if len(closes) < 26 and symbol is None:
+                for alt in REFERENCE_FALLBACKS.get(asset_class, []):
+                    closes = await _closes_1h(session, alt, asset_class, since)
+                    if len(closes) >= 26:
+                        ref = alt
+                        break
             funding = None
             if asset_class == "crypto":
                 fr = (await session.execute(text(
