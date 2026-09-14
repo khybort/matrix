@@ -53,6 +53,10 @@
   toplam cap'inin üstünde (`orb config set memory_mib 12288`). Belirti: `docker ps` 20 s+ → önce vmgr.log'a bak.
   `docker-compose.limits.yml` yalnız base compose'daki servisleri içerebilir; overlay'e olmayan servis eklemek projeyi geçersiz kılar.
 
+- **2026-09-14 — `docker compose up -d <svc>` bağımlılıkları da yeniden yaratabilir.** ingestion-market'i recreate ederken
+  config'i değişmiş `postgres` de recreate edildi (15:55, tüm servislerde 20 s "database system is shutting down").
+  Tek servis için `up -d --no-deps <svc>` kullan; DB'ye dokunacaksan bilinçli yap.
+
 ## Git ve migration
 - **Sadece kendi hunk'larını stage et.** Ağaçta başka bir node'un uncommitted WIP'i durabilir (US-market adapter, 0038).
   `git add -A` yasak; ortak dosyalarda HEAD + kendi patch'in (`git hash-object` + `update-index`). CHANGES.md'ye
