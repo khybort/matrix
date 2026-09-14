@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-14 — ingestion image'ına lxml (US universe discovery)
+- US discover `pandas.read_html` için `lxml` istiyordu, image'da yoktu ("Import lxml failed", `us_symbols` boş). `services/ingestion/pyproject.toml`'a `lxml>=5.0` eklendi, `uv.lock` güncellendi, image yeniden build edilip ingestion-market/news/bars-aggregator recreate edildi.
+
 ## 2026-09-14 — US ingestion dev overlay'de açıldı
 - `docker-compose.dev.yml` ingestion-market komutu `--markets crypto bist` ile US adapter'ı dışlıyordu; `us` eklendi (0038 ile `us_symbols`/`market_bars_us` artık var). Agent/strategy US seansında universe bulacak.
 

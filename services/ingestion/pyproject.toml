@@ -12,6 +12,7 @@ dependencies = [
     "feedparser>=6.0.11",
     "yfinance>=0.2.50",
     "pandas>=2.2.0",
+    "lxml>=5.0",  # pandas.read_html for the US universe discovery (Wikipedia tables)
 ]
 
 [tool.uv.sources]
