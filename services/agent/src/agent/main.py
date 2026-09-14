@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import signal
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -36,6 +37,26 @@ from agent.decide import decide_batch
 from agent.features import extract_symbol_features
 
 AGENT_STRATEGY_ID = "matrix_agent"
+
+# After the LLM says HOLD for a symbol, don't ask again for a while: with the
+# 15 s loop the same 6 symbols were re-decided every tick (one ~30 s, ~20k-token
+# CLI call each) and answered HOLD again. Features barely move inside 5 min in
+# a low-vol regime; exploration probes and rule decisions are unaffected.
+HOLD_COOLDOWN_S = float(__import__("os").environ.get("MATRIX_AGENT_HOLD_COOLDOWN_S", "300"))
+_hold_until: dict[tuple[str, str], float] = {}
+
+
+def _drop_held(targets: list[tuple[str, str]], now_mono: float) -> list[tuple[str, str]]:
+    """Filter out (symbol, asset_class) pairs still inside their HOLD cooldown."""
+    kept = [t for t in targets if _hold_until.get(t, 0.0) <= now_mono]
+    if len(kept) < len(targets):
+        logger.debug(f"hold cooldown: skipping {len(targets) - len(kept)} symbol(s) decided HOLD recently")
+    return kept
+
+
+def _mark_hold(symbol: str, asset_class: str, now_mono: float) -> None:
+    if HOLD_COOLDOWN_S > 0:
+        _hold_until[(symbol, asset_class)] = now_mono + HOLD_COOLDOWN_S
 
 DEFAULT_INTERVAL_S = 15.0
 
@@ -213,6 +234,7 @@ async def _tick(symbols: list[str]) -> int:
     # unfilled is pure cost (1,441 expired vs 36 traded on 2026-09-13). Keep,
     # per market, only as many targets as the open backlog has room for,
     # best realised edge first.
+    fresh_targets = _drop_held(fresh_targets, time.monotonic())
     fresh_targets = await _trim_to_room(fresh_targets, edge_map)
     if not fresh_targets:
         return 0
@@ -244,6 +266,8 @@ async def _tick(symbols: list[str]) -> int:
 
         if decision.side == "hold" or decision.last_price is None:
             logger.debug(f"{symbol} [{asset_class}]: HOLD ({decision.thesis[:80]})")
+            if not decision.feature_dump.get("is_exploration"):
+                _mark_hold(symbol, asset_class, time.monotonic())
             continue
         is_exploration = bool(decision.feature_dump.get("is_exploration", False))
         # Exploration trades are intentionally low-confidence probes — they

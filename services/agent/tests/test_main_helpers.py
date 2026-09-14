@@ -32,3 +32,17 @@ async def test_trim_to_room_keeps_best_edge_symbols_per_market(monkeypatch):
     targets = [("A", "crypto"), ("B", "crypto"), ("C", "crypto"), ("X", "bist")]
     out = await M._trim_to_room(targets, {"A": 0.2, "B": 0.9, "C": 0.7})
     assert set(out) == {("B", "crypto"), ("C", "crypto"), ("X", "bist")}
+
+
+def test_hold_cooldown_hides_symbol_until_expiry(monkeypatch):
+    from agent import main as M
+    monkeypatch.setattr(M, "HOLD_COOLDOWN_S", 300.0)
+    M._hold_until.clear()
+    targets = [("A", "crypto"), ("B", "crypto")]
+    M._mark_hold("A", "crypto", 1000.0)
+    assert M._drop_held(targets, 1000.0 + 10) == [("B", "crypto")]
+    assert M._drop_held(targets, 1000.0 + 301) == targets
+    monkeypatch.setattr(M, "HOLD_COOLDOWN_S", 0.0)
+    M._mark_hold("B", "crypto", 2000.0)
+    assert M._drop_held(targets, 2000.0) == targets  # cooldown disabled
+    M._hold_until.clear()
