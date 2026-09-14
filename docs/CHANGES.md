@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-14 — bars-aggregator tick zaman sınırı
+- Host uykusundan sonra tick sessizce hiç dönmedi; `BARS_TICK_TIMEOUT_S` (240 s) ile sınırlandı, aşımda hata loglanır ve döngü devam eder.
+
 ## 2026-09-14 — Bybit WS ölü soket bekçisi
 - Host uykudan dönünce WebSocket 5 saat "açık" ama sessiz kaldı (`ping_interval=None`, ConnectionClosed hiç gelmedi); yalnız restart tick getirdi. Connector artık 60 s frame gelmezse soketi kapatıp yeniden bağlanır (`STALE_AFTER_S`). Aynı uykudan bars-aggregator da askıda kaldı; restart edildi.
 

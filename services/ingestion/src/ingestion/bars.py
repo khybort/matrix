@@ -304,6 +304,7 @@ async def _tick_symbols() -> list[str] | None:
         return None
 
 
+TICK_TIMEOUT_S = float(os.environ.get("BARS_TICK_TIMEOUT_S", "240"))
 STARTUP_SKIP_IF_FRESH_S = float(os.environ.get("BARS_STARTUP_SKIP_IF_FRESH_S", "300"))
 
 
@@ -417,7 +418,11 @@ async def run(
 
     while not stop.is_set():
         try:
-            await tick(lookback_minutes)
+            # A tick that never returns (host slept, DB socket half-dead) used
+            # to freeze the daemon silently; bound it so the loop logs and retries.
+            await asyncio.wait_for(tick(lookback_minutes), timeout=TICK_TIMEOUT_S)
+        except TimeoutError:
+            logger.error(f"tick exceeded {TICK_TIMEOUT_S:.0f}s; abandoning it and retrying next interval")
         except Exception as e:
             logger.exception(f"tick failed: {e}")
         try:
