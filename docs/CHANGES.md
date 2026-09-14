@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-14 — 0038 (US market) migration'ı iki tier'a uygulandı
+- Ağaçtaki commit'lenmemiş `0038_us_market.py` (US adapter WIP'inin parçası) LOCAL ve SHARED'a uygulandı: `us_symbols`, `market_bars_us` partition'ı, `default/us` cüzdanı, `matrix_agent/us` config. Canlı kod zaten bu tabloları arıyordu (ABD seansında agent tick'i düşüyordu). Dosya hâlâ commit'lenmemiş; sahibinin commit'lemesi gerekir. `make migrate-shared` host'ta `SHARED_DATABASE_URL` set edilmeden çalışmaz: `SHARED_DATABASE_URL=postgres://matrix:matrix_dev_only@postgres-shared:5432/matrix_shared make migrate-shared`.
+
 ## 2026-09-14 — bars-aggregator tick zaman sınırı
 - Host uykusundan sonra tick sessizce hiç dönmedi; `BARS_TICK_TIMEOUT_S` (240 s) ile sınırlandı, aşımda hata loglanır ve döngü devam eder.
 
