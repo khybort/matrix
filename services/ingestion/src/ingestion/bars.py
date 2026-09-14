@@ -234,7 +234,7 @@ SELECT
   symbol,
   asset_class,
   '1h'                                      AS interval,
-  date_trunc('hour', ts)                    AS ts,
+  date_trunc('hour', ts)                    AS ts,  -- all asset classes: BIST/US had no 1h bars, so no regime and no 7d lookbacks
   (array_agg(open ORDER BY ts ASC))[1]      AS open,
   MAX(high)                                 AS high,
   MIN(low)                                  AS low,
@@ -243,8 +243,7 @@ SELECT
   'rollup_1h'                               AS source,
   NOW()                                     AS created_at
 FROM market_bars
-WHERE asset_class = 'crypto'
-  AND interval = '1m'
+WHERE interval = '1m'
   AND ts >= :since
   AND ts <  :until
 GROUP BY symbol, asset_class, date_trunc('hour', ts)

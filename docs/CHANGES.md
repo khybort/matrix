@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-14 — 1h rollup tüm marketler için
+- `_ROLLUP_1H_SQL` yalnızca crypto'yu rollup'lıyordu; BIST/US için 1h bar yoktu → regime `unknown`, 7 günlük lookback'ler boş. Filtre kaldırıldı (GROUP BY zaten asset_class içeriyor).
+
 ## 2026-09-14 — Bar fiyatlı marketler (US/BIST) için agent feature'ları
 - `extract_symbol_features` yalnızca trade/orderbook/ticker (crypto) okuyordu; US/BIST sembolleri LLM'e `last_price=None` ile gidip boş prompt'la HOLD alıyordu. Şimdi 1m `market_bars`'tan last_price, Δ5m ve notional türetilir (`apply_bar_features`). Agent tick'i fiyatı olmayan sembolleri LLM'e hiç göndermez.
 
