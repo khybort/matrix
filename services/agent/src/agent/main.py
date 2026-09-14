@@ -155,18 +155,23 @@ async def _resolve_targets(
     for market in all_markets():
         if not market.is_session_open():
             continue
-        if market.name == "crypto":
-            # Honour the operator's --symbols override; falls back to the
-            # adapter's universe when nothing was passed.
-            symbols = cli_symbols if cli_symbols else None
-            if symbols is None:
+        try:
+            if market.name == "crypto":
+                # Honour the operator's --symbols override; falls back to the
+                # adapter's universe when nothing was passed.
+                symbols = cli_symbols if cli_symbols else None
+                if symbols is None:
+                    async with session_scope() as db:
+                        symbols = await market.universe(db)
+            else:
                 async with session_scope() as db:
                     symbols = await market.universe(db)
-            targets.extend((s, market.asset_class) for s in symbols)
-        else:
-            async with session_scope() as db:
-                symbols = await market.universe(db)
-            targets.extend((s, market.asset_class) for s in symbols)
+        except Exception as e:  # noqa: BLE001 — one market's universe must not kill the tick
+            # 2026-09-14: the US adapter's `us_symbols` table was not migrated yet;
+            # during US hours every agent tick died and crypto stopped deciding.
+            logger.warning(f"{market.name}: universe unavailable ({str(e).splitlines()[0][:120]}); skipping market")
+            continue
+        targets.extend((s, market.asset_class) for s in symbols)
     return targets
 
 

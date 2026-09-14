@@ -46,3 +46,25 @@ def test_hold_cooldown_hides_symbol_until_expiry(monkeypatch):
     M._mark_hold("B", "crypto", 2000.0)
     assert M._drop_held(targets, 2000.0) == targets  # cooldown disabled
     M._hold_until.clear()
+
+
+@pytest.mark.asyncio
+async def test_resolve_targets_skips_a_market_whose_universe_fails(monkeypatch):
+    from agent import main as M
+
+    class _Mkt:
+        def __init__(self, name, ok):
+            self.name, self.asset_class, self._ok = name, name, ok
+        def is_session_open(self):
+            return True
+        async def universe(self, db):
+            if not self._ok:
+                raise RuntimeError('relation "us_symbols" does not exist')
+            return ["AAA", "BBB"]
+
+    monkeypatch.setattr(M, "all_markets", lambda: [_Mkt("crypto", True), _Mkt("us", False)])
+    class _Scope:
+        async def __aenter__(self): return None
+        async def __aexit__(self, *a): return False
+    monkeypatch.setattr(M, "session_scope", lambda: _Scope())
+    assert await M._resolve_targets([]) == [("AAA", "crypto"), ("BBB", "crypto")]

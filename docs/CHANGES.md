@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-14 — Agent tick'i bir marketin universe hatasıyla ölmez
+- US adapter'ın `us_symbols` tablosu henüz migrate edilmemiş (0038 yabancı WIP); ABD seansında `_resolve_targets` patlıyor, crypto dahil hiçbir karar alınmıyordu. Market başına try/except: universe alınamayan market uyarıyla atlanır.
+
 ## 2026-09-14 — Kesintinin kök nedeni: kapak kapalı uyku
 - `pmset -g log`: 02:09 ve 13:26 (yerel) "Entering DarkWake state due to 'Clamshell Sleep'". Mac AC'de ve caffeinate/Amphetamine açık olsa da kapak kapalıyken uyuyor; OrbStack VM birlikte uyuyor, Docker soketi askıda kalıyor. VM OOM ikincil bulguydu. Kod çözümü yok; operatör: kapak açık / harici ekran / `sudo pmset -a disablesleep 1`. OPS_HARDENING ve ENGINEERING_LESSONS güncellendi.
 
