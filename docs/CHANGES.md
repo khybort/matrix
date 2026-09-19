@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-09-19 — LLM wiki (Karpathy deseni): proje bilgi tabanı `docs/wiki/`
+- `llm-wiki` skill'i kuruldu (`~/.claude/skills/llm-wiki/SKILL.md`): üç katman (ham kaynak / model-sahipli wiki / şema), sayfa formatı, ingest-query-lint operasyonları, global (`~/.claude/wiki/`) ve proje (`docs/wiki/`) ayrımı.
+- Proje wiki'si 15 sayfa: amaç+G1-G4 durumu, mimari, servisler, veri modeli, stratejiler, paper engine, **pnl-reality** (ölçülmüş ekonomi), öğrenme döngüsü, risk gate'leri, operasyon, LLM yığını, geliştirme, olaylar, açık sorular. CLAUDE.md oturum başında okumaya yönlendiriyor.
+- Global wiki: operatör, çalışma anlaşması, makine (clamshell sleep), harness tuhaflıkları, projeler arası hata kalıpları.
+
 ## 2026-09-16→19 — SESSİZ DURUŞ: paper engine 3 gün ölüydü; dev entrypoint artık supervisor
 - 2026-09-16 08:16'da postgres kısa süre "recovery mode"a girdi; `backtest` worker'ı bu geçici hatada öldü. `watchfiles.run_process` yalnız dosya değişiminde restart ettiği için container "Up" göründü ama içinde işçi yoktu: 3 gün boyunca hiç pozisyon açılmadı/kapanmadı (son kapanış 09-16 08:17, 8 pozisyon donmuş kaldı). Aynı desen daha önce reflection'da da görülmüştü.
 - `matrix_shared/dev_watchfiles.py` yeniden yazıldı: hot reload + **crash supervisor** (çocuk kendi kendine çıkarsa 2→60 s kapaklı backoff ile yeniden başlatılır, her restart loglanır; `MATRIX_WATCH_SUPERVISE=0` ile kapatılır). Regresyon testi: sürekli çöken çocuk ≥3 kez yeniden başlatılır.

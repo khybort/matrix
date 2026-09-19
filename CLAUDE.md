@@ -25,6 +25,10 @@ için yapılır.
 - Yol haritası: `docs/ROADMAP.md`
 - Node dağıtımı: `docs/WORK_SPLIT.md`
 - **Trading risk framework**: `docs/TRADING.md` ← live capital'a dokunulan her şey burada yazılı kurallara uymak ZORUNDA
+- **LLM wiki**: `docs/wiki/index.md` ← projenin derlenmiş bilgi tabanı (mimari, ölçülmüş PnL gerçeği, öğrenme
+  döngüsü, risk gate'leri, operasyon, olay geçmişi, açık sorular). **Oturum başında `docs/wiki/index.md` oku**;
+  yeni kalıcı bilgi öğrenince ilgili sayfayı YERİNDE güncelle (yeni sayfa yalnız yeni kavram için), sayıyı
+  tarihle, kaynağı yaz. Şema: `llm-wiki` skill'i. Makine/operatör bilgisi global wiki'de (`~/.claude/wiki/`).
 - **Mühendislik dersleri**: `docs/ENGINEERING_LESSONS.md` ← bir kez ödenmiş tuzaklar; kod yazmadan önce oku, yeni ders öğrenince AYNI commit'te ekle (dev_agent da `dev_agent_lessons` tablosundan okur)
 
 ## Hangi node'dasın? (her oturum ilk iş)
