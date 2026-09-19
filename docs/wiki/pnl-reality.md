@@ -12,15 +12,14 @@ The honest state of the only thing that matters. Measured, not modelled.
 
 | wallet | equity | vs start |
 |---|---|---|
-| crypto / default | 9 141.33 | −858.67 |
+| crypto / default | 9 513.31 | −486.69 |
 | crypto / shadow | 9 892.62 | −107.38 |
 | bist / default | 9 913.42 | −86.58 |
 | us / default | 9 999.18 | −0.82 |
 
-  Of the crypto loss, **−346.76 was a bug, not a strategy**: challenger
-  positions were booked into the champion wallet with no slot cap
-  (2026-09-13, fixed in 74eb6ff). The refund is still pending an operator
-  command — see [[operations]].
+  The crypto figure is after the **−346.76 refund applied 2026-09-19**: that
+  amount was a bug, not a strategy — challenger positions booked into the
+  champion wallet with no slot cap (2026-09-13, fixed in 74eb6ff).
 
 - **Trade economics, 30 days to 2026-09-19** (champion wallets, orphan closes
   excluded, n = 2 886): **net −161.73 USD, mean −18.2 bps per trade.**

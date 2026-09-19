@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-19 — Shadow-cüzdan bug'ının iadesi uygulandı
+- Operatör `make reset-capital ASSET=crypto AMOUNT=+346.76` çalıştırdı: 2026-09-13'te challenger pozisyonlarının şampiyon cüzdanına slot cap'siz yazılmasından doğan kayıp geri verildi (default/crypto equity 9166.55 → 9513.31). Öğrenme verisine dokunulmadı; bu tutar artık strateji performansı olarak sayılmıyor.
+
 ## 2026-09-19 — Giriş-zamanlaması edge çalışması: stratejilerin sinyali var mı, kontrollü test
 - Yeni `matrix_shared/edge_study.py` + `make edge-report [DAYS=] [STRATEGY=]`: her kapanmış işlem 1m bar'lar üzerinde yeniden oynatılır (`simulate_bracket`), sonra AYNI sembol/yön/TP/SL/ufuk ile K rastgele giriş zamanı için tekrar oynatılır. Tek fark girişin zamanı; maliyet, çıkış kuralı, tutma süresi, sembol karışımı sabit. Welch t-testi ile karşılaştırılır.
 - **Bulgu (14 g, 2 839 işlem, 60 kontrol çekilişi):** `oi_delta/crypto` rastgele girişten **+19.4 bps** iyi (t=2.90, n=274) — 15 bps gidiş-dönüş maliyetini aşan tek strateji. `momentum_xs` −35.8 bps (t=−2.78) ve `dca` −12.0 bps (t=−2.21) rastgeleden anlamlı KÖTÜ. İşlem hacminin %67'sini yapan `funding_reversion` (brüt +1.2) ve `grid` (brüt −0.1) sıfır edge: sadece spread ödüyorlar. Kayıp bir sızıntı değil, sinyal yokluğu.

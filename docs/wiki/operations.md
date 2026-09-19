@@ -19,8 +19,8 @@ memory, launchd) are in the global wiki's machine page.
   see [[incidents]].
 - **Money**: `make reset-capital ASSET=crypto [WALLET=default] [AMOUNT=+346.76]`
   adjusts wallet capital without touching learning data (`db-reset` truncates
-  outcomes and must not be used for this). **Pending operator action:** the
-  +346.76 refund for the 2026-09-13 shadow-wallet bug ([[pnl-reality]]).
+  outcomes and must not be used for this). Used 2026-09-19 to refund
+  +346.76 for the 2026-09-13 shadow-wallet bug ([[pnl-reality]]).
 - **Risk**: `make circuit-reset ASSET=crypto`, Telegram `/circuit_reset`.
 - **Learning**: `make method-ab`, `make ranker-ab`, `make leaderboard`,
   `make lab-scan`, `make director-once` / `director-tail` / `director-digest`.
