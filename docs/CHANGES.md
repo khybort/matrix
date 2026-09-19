@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-09-19 — Giriş-zamanlaması edge çalışması: stratejilerin sinyali var mı, kontrollü test
+- Yeni `matrix_shared/edge_study.py` + `make edge-report [DAYS=] [STRATEGY=]`: her kapanmış işlem 1m bar'lar üzerinde yeniden oynatılır (`simulate_bracket`), sonra AYNI sembol/yön/TP/SL/ufuk ile K rastgele giriş zamanı için tekrar oynatılır. Tek fark girişin zamanı; maliyet, çıkış kuralı, tutma süresi, sembol karışımı sabit. Welch t-testi ile karşılaştırılır.
+- **Bulgu (14 g, 2 839 işlem, 60 kontrol çekilişi):** `oi_delta/crypto` rastgele girişten **+19.4 bps** iyi (t=2.90, n=274) — 15 bps gidiş-dönüş maliyetini aşan tek strateji. `momentum_xs` −35.8 bps (t=−2.78) ve `dca` −12.0 bps (t=−2.21) rastgeleden anlamlı KÖTÜ. İşlem hacminin %67'sini yapan `funding_reversion` (brüt +1.2) ve `grid` (brüt −0.1) sıfır edge: sadece spread ödüyorlar. Kayıp bir sızıntı değil, sinyal yokluğu.
+- Slot scorer artık bu ölçümü kullanıyor (`_entry_edge_verdict`, 6 s cache): `pays` → gerçekleşmiş-zarar demotion'ından muaf; `harmful` → gerçekleşmiş PnL iyi görünse bile kitaptan çıkar. 2026-09-15'te eklenen sert demotion `oi_delta`'yı 0 slota indirmişti (kaybı maliyet+boyutlandırmadandı, sinyalden değil); guard devreye girip sistemin kendi slot pass'i onu 1 slota geri aldı. NOT: `slot_scorer.py`'deki bağlantı çalışan ağaçta duruyor (canlıda aktif), commit'i o dosyadaki başka yazarın commit'lenmemiş demotion bloğuyla birlikte gelmeli.
+
 ## 2026-09-19 — LLM wiki (Karpathy deseni): proje bilgi tabanı `docs/wiki/`
 - `llm-wiki` skill'i kuruldu (`~/.claude/skills/llm-wiki/SKILL.md`): üç katman (ham kaynak / model-sahipli wiki / şema), sayfa formatı, ingest-query-lint operasyonları, global (`~/.claude/wiki/`) ve proje (`docs/wiki/`) ayrımı.
 - Proje wiki'si 15 sayfa: amaç+G1-G4 durumu, mimari, servisler, veri modeli, stratejiler, paper engine, **pnl-reality** (ölçülmüş ekonomi), öğrenme döngüsü, risk gate'leri, operasyon, LLM yığını, geliştirme, olaylar, açık sorular. CLAUDE.md oturum başında okumaya yönlendiriyor.

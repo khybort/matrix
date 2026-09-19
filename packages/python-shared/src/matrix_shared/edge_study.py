@@ -1,0 +1,317 @@
+"""Does any strategy time its entries better than chance?
+
+The book loses ~18 bps a trade (docs/wiki/pnl-reality.md). Tuning only helps if
+the entries carry signal at all, so this module answers the prior question with
+a controlled experiment rather than another aggregate.
+
+Design — one simulator, two entry-time distributions:
+
+  treatment : the strategy's real entry bar
+  control   : K random entry bars for the same symbol, drawn from the same
+              period, with the SAME side, take-profit, stop-loss and horizon
+
+Both are replayed on 1m bars by `simulate_bracket`, so fees, slippage, exit
+rules, holding time and symbol mix are identical by construction and the only
+difference left is *when* the trade was opened. A strategy with real edge beats
+its control; one that does not is paying spread for noise.
+
+Returns are gross (no costs): the cost is a known constant
+(`trading.execution_cost_bps` × 2) and adding it to both arms would only shift
+both means. The report prints it so net can be read off.
+"""
+
+from __future__ import annotations
+
+import math
+import os
+import random
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+
+from loguru import logger
+from sqlalchemy import text
+
+from matrix_shared.db import local_session_scope, shared_session_scope
+
+CONTROL_DRAWS = int(os.environ.get("MATRIX_EDGE_CONTROL_DRAWS", "20"))
+MIN_TRADES = int(os.environ.get("MATRIX_EDGE_MIN_TRADES", "30"))
+DEFAULT_TP_PCT = 0.01
+DEFAULT_SL_PCT = 0.005
+_BPS = 10_000.0
+
+
+@dataclass(frozen=True, slots=True)
+class Bar:
+    ts: datetime
+    high: float
+    low: float
+    close: float
+
+
+@dataclass(frozen=True, slots=True)
+class SimResult:
+    reason: str  # hit_tp | hit_sl | hit_horizon | no_data
+    ret_bps: float
+    bars_held: int
+
+
+def simulate_bracket(
+    bars: list[Bar], entry_idx: int, *, side: str, tp_pct: float, sl_pct: float, horizon_bars: int
+) -> SimResult:
+    """Replay one bracketed trade on 1m bars from `entry_idx` (entry = its close).
+
+    Take-profit wins ties within a bar, matching the paper engine. Returns the
+    gross return in bps, signed for the side.
+    """
+    if entry_idx < 0 or entry_idx >= len(bars) or horizon_bars <= 0:
+        return SimResult("no_data", 0.0, 0)
+    entry = bars[entry_idx].close
+    if entry <= 0:
+        return SimResult("no_data", 0.0, 0)
+    long = side != "short"
+    tp_px = entry * (1 + tp_pct) if long else entry * (1 - tp_pct)
+    sl_px = entry * (1 - sl_pct) if long else entry * (1 + sl_pct)
+    last = min(entry_idx + horizon_bars, len(bars) - 1)
+    if last <= entry_idx:
+        return SimResult("no_data", 0.0, 0)
+    for i in range(entry_idx + 1, last + 1):
+        b = bars[i]
+        hit_tp = b.high >= tp_px if long else b.low <= tp_px
+        hit_sl = b.low <= sl_px if long else b.high >= sl_px
+        if hit_tp:
+            return SimResult("hit_tp", tp_pct * _BPS, i - entry_idx)
+        if hit_sl:
+            return SimResult("hit_sl", -sl_pct * _BPS, i - entry_idx)
+    exit_px = bars[last].close
+    raw = (exit_px - entry) / entry
+    return SimResult("hit_horizon", (raw if long else -raw) * _BPS, last - entry_idx)
+
+
+def welch(a: list[float], b: list[float]) -> tuple[float, float, float]:
+    """(mean difference a−b, standard error, t statistic) for unequal variances."""
+    if len(a) < 2 or len(b) < 2:
+        return (0.0, 0.0, 0.0)
+    ma, mb = sum(a) / len(a), sum(b) / len(b)
+    va = sum((x - ma) ** 2 for x in a) / (len(a) - 1)
+    vb = sum((x - mb) ** 2 for x in b) / (len(b) - 1)
+    se = math.sqrt(va / len(a) + vb / len(b))
+    if se == 0:
+        return (ma - mb, 0.0, 0.0)
+    return (ma - mb, se, (ma - mb) / se)
+
+
+@dataclass
+class StrategyEdge:
+    strategy_id: str
+    asset_class: str
+    n: int = 0
+    treatment: list[float] = field(default_factory=list)
+    control: list[float] = field(default_factory=list)
+    realised_net_bps: float = 0.0
+    tp_rate: float = 0.0
+
+    def as_row(self) -> dict:
+        t_mean = sum(self.treatment) / len(self.treatment) if self.treatment else 0.0
+        c_mean = sum(self.control) / len(self.control) if self.control else 0.0
+        diff, se, t = welch(self.treatment, self.control)
+        return {
+            "strategy": self.strategy_id,
+            "market": self.asset_class,
+            "n": self.n,
+            "gross_bps": round(t_mean, 2),
+            "control_bps": round(c_mean, 2),
+            "edge_bps": round(diff, 2),
+            "t": round(t, 2),
+            "significant": abs(t) >= 1.96 and self.n >= MIN_TRADES,
+            "realised_net_bps": round(self.realised_net_bps, 2),
+            "sim_tp_rate": round(self.tp_rate, 3),
+        }
+
+
+async def _load_trades(days: float, strategy_id: str | None) -> list[dict]:
+    sql = (
+        "SELECT p.strategy_id, p.asset_class, p.symbol, p.side, p.horizon_seconds, "
+        "       p.tp_pct, p.sl_pct, pp.opened_at, o.pnl_pct "
+        "FROM outcomes o "
+        "JOIN predictions p ON p.id = o.prediction_id "
+        "JOIN paper_positions pp ON pp.prediction_id = p.id "
+        "WHERE o.observed_at >= now() - make_interval(secs => :secs) "
+        "  AND o.reason <> 'orphan_flat_close' "
+        "  AND coalesce(p.context->>'is_shadow','false') = 'false' "
+        "  AND p.side IN ('long','short') "
+        + ("  AND p.strategy_id = :sid " if strategy_id else "")
+        + "ORDER BY pp.opened_at"
+    )
+    params = {"secs": days * 86400}
+    if strategy_id:
+        params["sid"] = strategy_id
+    async with shared_session_scope() as s:
+        rows = (await s.execute(text(sql), params)).mappings().all()
+    return [dict(r) for r in rows]
+
+
+async def _load_bars(symbols: set[str], asset_class: str, since: datetime) -> dict[str, list[Bar]]:
+    if not symbols:
+        return {}
+    async with local_session_scope() as s:
+        rows = (await s.execute(text(
+            "SELECT symbol, ts, high, low, close FROM market_bars "
+            "WHERE asset_class = :ac AND interval = '1m' AND ts >= :since "
+            "AND symbol = ANY(:syms) ORDER BY symbol, ts"
+        ), {"ac": asset_class, "since": since, "syms": list(symbols)})).all()
+    out: dict[str, list[Bar]] = {}
+    for sym, ts, high, low, close in rows:
+        out.setdefault(sym, []).append(
+            Bar(ts if ts.tzinfo else ts.replace(tzinfo=UTC), float(high), float(low), float(close))
+        )
+    return out
+
+
+def _index_at(bars: list[Bar], when: datetime) -> int:
+    lo, hi = 0, len(bars) - 1
+    if hi < 0 or when < bars[0].ts:
+        return -1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if bars[mid].ts <= when:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
+async def run_edge_study(
+    *, days: float = 14.0, strategy_id: str | None = None, draws: int = CONTROL_DRAWS, seed: int = 7
+) -> list[dict]:
+    """Compare every strategy's real entries against random entries. One row per
+    (strategy, market); rows are sorted by measured edge, best first."""
+    rng = random.Random(seed)
+    trades = await _load_trades(days, strategy_id)
+    if not trades:
+        logger.warning("edge study: no closed trades in window")
+        return []
+    since = datetime.now(UTC) - timedelta(days=days + 1)
+    by_class: dict[str, set[str]] = {}
+    for t in trades:
+        by_class.setdefault(t["asset_class"], set()).add(t["symbol"])
+    bars: dict[tuple[str, str], list[Bar]] = {}
+    for ac, syms in by_class.items():
+        for sym, b in (await _load_bars(syms, ac, since)).items():
+            bars[(ac, sym)] = b
+
+    acc: dict[tuple[str, str], StrategyEdge] = {}
+    skipped = 0
+    for t in trades:
+        series = bars.get((t["asset_class"], t["symbol"]))
+        if not series or len(series) < 30:
+            skipped += 1
+            continue
+        horizon_bars = max(1, int((t["horizon_seconds"] or 600) // 60))
+        tp = float(t["tp_pct"]) if t["tp_pct"] is not None else DEFAULT_TP_PCT
+        sl = float(t["sl_pct"]) if t["sl_pct"] is not None else DEFAULT_SL_PCT
+        idx = _index_at(series, t["opened_at"])
+        if idx < 0 or idx >= len(series) - 1:
+            skipped += 1
+            continue
+        treat = simulate_bracket(series, idx, side=t["side"], tp_pct=tp, sl_pct=sl, horizon_bars=horizon_bars)
+        if treat.reason == "no_data":
+            skipped += 1
+            continue
+        key = (t["strategy_id"], t["asset_class"])
+        e = acc.setdefault(key, StrategyEdge(t["strategy_id"], t["asset_class"]))
+        e.n += 1
+        e.treatment.append(treat.ret_bps)
+        e.realised_net_bps += float(t["pnl_pct"]) * _BPS
+        if treat.reason == "hit_tp":
+            e.tp_rate += 1
+        upper = len(series) - horizon_bars - 1
+        for _ in range(draws):
+            if upper <= 1:
+                break
+            c = simulate_bracket(
+                series, rng.randint(0, upper), side=t["side"], tp_pct=tp, sl_pct=sl, horizon_bars=horizon_bars
+            )
+            if c.reason != "no_data":
+                e.control.append(c.ret_bps)
+
+    rows = []
+    for e in acc.values():
+        if e.n:
+            e.realised_net_bps /= e.n
+            e.tp_rate /= e.n
+        rows.append(e.as_row())
+    rows.sort(key=lambda r: r["edge_bps"], reverse=True)
+    if skipped:
+        logger.info(f"edge study: {skipped} trade(s) skipped (no bar coverage)")
+    return rows
+
+
+def format_report(rows: list[dict], *, days: float, cost_bps: float) -> str:
+    if not rows:
+        return "edge study: no data"
+    head = (
+        f"Entry-timing edge vs random entry — last {days:g}d, "
+        f"{sum(r['n'] for r in rows)} trades, round-trip cost {cost_bps:g} bps\n"
+        f"{'strategy':<24}{'mkt':<8}{'n':>6}{'gross':>9}{'control':>9}{'edge':>8}{'t':>7}  sig\n"
+    )
+    lines = [
+        f"{r['strategy']:<24}{r['market']:<8}{r['n']:>6}{r['gross_bps']:>9.1f}"
+        f"{r['control_bps']:>9.1f}{r['edge_bps']:>8.1f}{r['t']:>7.2f}  {'YES' if r['significant'] else ''}"
+        for r in rows
+    ]
+    total_t = [r for r in rows if r["n"] >= MIN_TRADES]
+    tail = ""
+    if total_t:
+        best = max(total_t, key=lambda r: r["edge_bps"])
+        tail = (
+            f"\nbest: {best['strategy']}/{best['market']} edge {best['edge_bps']:+.1f} bps "
+            f"(t={best['t']:.2f}, n={best['n']}). "
+            f"An edge must exceed {cost_bps:g} bps to pay for itself."
+        )
+    return head + "\n".join(lines) + tail
+
+
+# ---------------------------------------------------------------- cached gate
+
+_EDGE_TTL_S = float(os.environ.get("MATRIX_EDGE_CACHE_TTL_S", "21600"))  # 6 h
+_edge_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
+
+
+def clear_cache() -> None:
+    _edge_cache.clear()
+
+
+def verdict(row: dict | None, *, cost_bps: float, min_t: float = 2.0) -> str:
+    """`pays` | `harmful` | `unproven`.
+
+    `pays`    — entries beat random by more than the round trip costs, at |t| ≥ min_t.
+    `harmful` — entries are significantly WORSE than random; the module is not
+                mistimed, it is anti-timed, and no sizing change fixes that.
+    """
+    if not row or row["n"] < MIN_TRADES:
+        return "unproven"
+    if row["t"] >= min_t and row["edge_bps"] >= cost_bps:
+        return "pays"
+    if row["t"] <= -min_t:
+        return "harmful"
+    return "unproven"
+
+
+async def strategy_edge(strategy_id: str, asset_class: str, *, days: float = 14.0) -> dict | None:
+    """One strategy's edge row, cached for MATRIX_EDGE_CACHE_TTL_S. Advisory:
+    returns None on any failure so a caller never blocks on this."""
+    import time as _time
+
+    key = (strategy_id, asset_class)
+    hit = _edge_cache.get(key)
+    now = _time.monotonic()
+    if hit and now - hit[0] < _EDGE_TTL_S:
+        return hit[1]
+    try:
+        rows = await run_edge_study(days=days, strategy_id=strategy_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"edge study for {strategy_id}/{asset_class} failed ({e})")
+        return None
+    row = next((r for r in rows if r["market"] == asset_class), None)
+    _edge_cache[key] = (now, row)
+    return row
