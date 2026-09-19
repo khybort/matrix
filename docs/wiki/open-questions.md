@@ -8,12 +8,11 @@ What is genuinely unknown, phrased so a future session can close it. Ranked by
 how much the answer would change.
 
 ## Claims
-- **Does any signal in the book have edge before costs?** The 30-day evidence
-  says no ([[pnl-reality]]): horizon exits average −11.3 bps against a ~15 bps
-  round trip, i.e. gross ≈ 0. *Test*: compute gross PnL (pre-fee, pre-slippage)
-  per strategy over a window with enough n, and compare each strategy's
-  distribution against a random-entry control on the same symbols and horizons.
-  Until one strategy separates from the control, tuning is theatre.
+- ~~Does any signal in the book have edge before costs?~~ **Answered
+  2026-09-19** by [[edge-study]]: one does (`oi_delta`, +19.4 bps vs random,
+  t=2.90), two are significantly worse than random, and the two highest-volume
+  strategies have gross ≈ 0. The follow-up question is now: **does `oi_delta`'s
+  edge hold out of sample, and can the book be rebuilt around it?**
 - **Is the horizon wrong, or the entry?** 57 % of exits are horizon exits at
   roughly minus cost. *Test*: for closed trades, measure max favourable and
   adverse excursion within the horizon. If MFE frequently exceeds the TP

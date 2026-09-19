@@ -23,6 +23,7 @@ working".
 - [strategies](strategies.md) — the signal catalogue and how a config becomes trades
 - [paper-engine](paper-engine.md) — how a prediction becomes a position and an outcome
 - [pnl-reality](pnl-reality.md) — measured economics: why it loses money
+- [edge-study](edge-study.md) — controlled test of entry timing vs random entry
 - [learning-loop](learning-loop.md) — reflection, labs, lessons, memory, and their gates
 - [risk-gates](risk-gates.md) — what stands between the code and real capital
 

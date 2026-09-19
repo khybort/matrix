@@ -41,7 +41,12 @@ The honest state of the only thing that matters. Measured, not modelled.
   (crypto taker 5.5 + slippage 2, per side; `trading.execution_cost_bps`).
   Gross drift on those trades is ≈ 0: the system is paying the spread to learn
   nothing.
-- **Therefore: no strategy in the book has demonstrated edge after costs.**
+- **One strategy does have measurable entry edge.** The controlled study in
+  [[edge-study]] (2026-09-19) puts `oi_delta`'s entries +19.4 bps above random
+  entries on the same symbols and brackets (t=2.90, n=274), clearing the 15 bps
+  round trip; `momentum_xs` and `dca` are significantly *worse* than random.
+  `funding_reversion` and `grid` — two thirds of all trades — have gross ≈ 0.
+- **Therefore: with one exception, no strategy in the book has demonstrated edge after costs.**
   The system is not losing because of a leak or a mis-parameterisation; it is
   losing because its signals are, so far, indistinguishable from noise once
   costs are charged. G3 in [[purpose-and-goals]] is far away.
