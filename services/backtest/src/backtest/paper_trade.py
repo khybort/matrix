@@ -125,6 +125,13 @@ WALLET_SNAPSHOT_INTERVAL_S = float(os.environ.get("WALLET_SNAPSHOT_INTERVAL_S", 
 # horizon are left unfilled (they still earn a virtual outcome, so the learning
 # loop keeps the evidence for free), and EV decays with age so fresh candidates
 # outrank stale ones.
+# Markets priced from `market_bars` (Yahoo candles) rather than tick prints:
+# crypto reads MarketTrade, equities read the 1m bar close. Referenced by
+# `_latest_price` since 572966c but its definition never reached git — a
+# latent NameError on any BIST/US mark, live only because the working tree
+# carried it.
+_BAR_PRICE_CLASSES = frozenset({"bist", "us"})
+
 MAX_SIGNAL_AGE_FRAC = float(os.environ.get("MATRIX_MAX_SIGNAL_AGE_FRAC", "0.20"))
 MIN_SIGNAL_WINDOW_S = float(os.environ.get("MATRIX_MIN_SIGNAL_WINDOW_S", "45"))
 
