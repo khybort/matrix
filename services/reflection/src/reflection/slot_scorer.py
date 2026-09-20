@@ -173,6 +173,21 @@ async def score_strategy_slots() -> int:
                 continue
             else:
                 new_slots = _slots_for_score(score, base_share)
+                if await _entry_edge_verdict(config.strategy_id, config.asset_class) == "pays":
+                    # Allocate on evidence, not on trailing PnL. `perf_score`
+                    # is a rearview mirror: momentum_xs sat at one slot — the
+                    # floor — while the controlled study put its entries +31
+                    # bps over random timing and +33 over random direction,
+                    # because its realised history was made of fills that
+                    # arrived halfway through their own horizon. A strategy
+                    # that beats a null by more than the round trip gets at
+                    # least a full share of the wallet.
+                    if new_slots < base_share:
+                        logger.warning(
+                            f"slot promote: {config.strategy_id}/{config.asset_class} "
+                            f"{new_slots}→{base_share} on measured entry edge"
+                        )
+                    new_slots = max(new_slots, base_share)
 
             config.perf_score = score
             config.consecutive_losses = consec

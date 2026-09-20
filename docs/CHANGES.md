@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-09-20 — Sermaye kanıta göre dağıtılıyor: momentum_xs 1 → 7 slot
+- Slot scorer sadece gerçekleşmiş PnL'e (perf_score) bakıyordu; bu bir dikiz aynası. momentum_xs taban olan 1 slotta oturuyordu çünkü geçmiş dolumları ufkunun yarısı geçtikten sonra açılmıştı — oysa kontrollü çalışma girişlerini rastgele zamana karşı +31 bps, rastgele yöne karşı +33 bps üstün buluyor. Artık bir null'ı maliyetin üstünde yenen strateji cüzdanın tam payını (base_share) alıyor. Canlıda uygulandı: momentum_xs 1 → 7.
+- Kitap şimdi: momentum_xs 7, screener_follow 6, cash_and_carry 3, oi_delta 3, inverse_carry 1, xexch_funding_arb 1; hiçbir null'ı yenemeyen 5 strateji 0 slotta.
+
 ## 2026-09-20 — Telegram canlı
 - Bot @Khybortbot doğrulandı (token'da fazladan bir karakter vardı, temizlendi), operatörün chat_id'si allowlist'e alındı, onay mesajı gönderildi. Uyarılar artık loga değil telefona düşüyor: paper engine durması, sinyal/ingestion bayatlaması, devre kesici, sertifika, günlük LLM bütçesi, dev_agent görevleri. Komutlar: /status /strategies /circuit /circuit_reset /dev_tasks /dev_accept /dev_discard /dev_revise, serbest metin → Brain.
 - Not: chat_id'yi `getUpdates` ile yakalamaya çalışan yardımcı izleyici hiçbir şey görmedi çünkü notify'ın kendi long-polling'i update'leri tüketiyor. Doğru kaynak notify'ın kendi logu: "ignoring message from unauthorized chat_id=...".

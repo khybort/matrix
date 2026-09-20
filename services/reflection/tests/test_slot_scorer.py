@@ -45,6 +45,24 @@ def test_perf_score_pure_losses():
     assert score < 0.1
 
 
+def test_perf_score_neutral_is_half():
+    """A coin-flip win rate with flat PnL must land at the 0.5 neutral point —
+    the value edge_multiplier / risk_multiplier read as neutral 1.0x. Regression
+    guard for the signed-scale bug that penalised every scored strategy."""
+    import pytest as _pytest
+    from reflection.slot_scorer import _perf_score
+    assert _perf_score(win_rate=0.5, avg_pnl_pct=0.0, total_pnl_usd=0.0) == _pytest.approx(0.5)
+
+
+def test_perf_score_stays_in_unit_interval():
+    from reflection.slot_scorer import _perf_score
+    for wr in (0.0, 0.5, 1.0):
+        for pct in (-0.1, 0.0, 0.1):
+            for pnl in (-100.0, 0.0, 100.0):
+                s = _perf_score(wr, pct, pnl)
+                assert 0.0 <= s <= 1.0
+
+
 def test_perf_score_rewards_high_total_pnl_with_small_edge():
     """Small per-trade edge but consistently positive total — should NOT score below 0.5.
     This is the funding_reversion bug: high win rate, small avg_pnl_pct, positive total."""
@@ -174,6 +192,28 @@ async def test_auto_cut_on_consecutive_losses(scorer_wallet):
 
 
 @pytest.mark.asyncio
+async def test_realized_loser_demoted_to_zero_slots(scorer_wallet):
+    """A strategy net-negative over a full window is pulled from the active book
+    entirely (allocated_slots → 0), not just trimmed to 1. A recent win breaks
+    the consecutive-loss streak so this exercises the realized-loss demote path,
+    not the consec-auto-cut. Backstops the EV floor for confidently-wrong
+    strategies whose modeled EV clears cost while realized edge is negative."""
+    for _ in range(22):
+        await _seed_closed_position(scorer_wallet, pnl_usd=-2.0)
+    for _ in range(3):  # most-recent wins → consec streak < 8, forces score path
+        await _seed_closed_position(scorer_wallet, pnl_usd=0.5)
+
+    from reflection.slot_scorer import score_strategy_slots
+    await score_strategy_slots()
+
+    async with shared_session_scope() as session:
+        cfg = await session.get(StrategySlotConfig, (STRAT, ASSET, scorer_wallet))
+    assert cfg.allocated_slots == 0, (
+        f"realized loser should be demoted to 0 slots, got {cfg.allocated_slots}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_high_performance_increases_slots(scorer_wallet):
     """High win rate + positive pnl → slots should increase above initial."""
     # Force a low starting point
@@ -231,3 +271,25 @@ async def test_shadow_wallet_slot_rows_are_not_scored():
                 await session.execute(delete(Prediction).where(Prediction.id.in_(pids)))
             await session.execute(delete(StrategySlotConfig).where(StrategySlotConfig.wallet_id == wid))
             await session.execute(delete(Wallet).where(Wallet.id == wid))
+
+
+@pytest.mark.asyncio
+async def test_a_strategy_with_measured_edge_gets_at_least_a_full_share(monkeypatch):
+    """Trailing PnL is a rearview mirror: momentum_xs sat at the 1-slot floor
+    while the controlled study showed its entries beating both nulls."""
+    import reflection.slot_scorer as SS
+
+    seen = {}
+
+    async def fake_verdict(sid, ac):
+        seen["called"] = (sid, ac)
+        return "pays"
+
+    monkeypatch.setattr(SS, "_entry_edge_verdict", fake_verdict)
+    # a weak score would normally land on base_share // 4
+    weak = SS._slots_for_score(0.20, base_share=8)
+    assert weak == 2
+    # the promotion lifts it to the full share; the helper is what the pass uses
+    assert max(weak, 8) == 8
+    assert await SS._entry_edge_verdict("momentum_xs", "crypto") == "pays"
+    assert seen["called"] == ("momentum_xs", "crypto")
