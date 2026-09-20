@@ -30,6 +30,7 @@ both means. The report prints it so net can be read off.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 import random
@@ -56,7 +57,7 @@ CONTROL_DRAWS = int(os.environ.get("MATRIX_EDGE_CONTROL_DRAWS", "20"))
 # target unreachable by construction. On 2026-09-20 momentum_xs registered 936
 # against a cap of 800 and would have sat at `provisional` forever. Keep this
 # comfortably above the largest registered `required_n`.
-MAX_PER_STRATEGY = int(os.environ.get("MATRIX_EDGE_MAX_PER_STRATEGY", "2500"))
+MAX_PER_STRATEGY = int(os.environ.get("MATRIX_EDGE_MAX_PER_STRATEGY", "1500"))
 MIN_TRADES = int(os.environ.get("MATRIX_EDGE_MIN_TRADES", "30"))
 DEFAULT_TP_PCT = 0.01
 DEFAULT_SL_PCT = 0.005
@@ -471,10 +472,14 @@ def format_report(rows: list[dict], *, days: float, cost_bps: float) -> str:
 
 _EDGE_TTL_S = float(os.environ.get("MATRIX_EDGE_CACHE_TTL_S", "21600"))  # 6 h
 _edge_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
+# Keys whose refresh is already in flight, so a 5-second trading loop cannot
+# queue thirteen concurrent studies while the first one is still running.
+_refreshing: set[tuple[str, str]] = set()
 
 
 def clear_cache() -> None:
     _edge_cache.clear()
+    _refreshing.clear()
 
 
 def verdict(row: dict | None, *, cost_bps: float, min_t: float = 2.0) -> str:
@@ -524,11 +529,32 @@ async def strategy_edge(strategy_id: str, asset_class: str, *, days: float = 14.
     now = _time.monotonic()
     if hit and now - hit[0] < _EDGE_TTL_S:
         return hit[1]
+
+    # Never run the study inline. It simulates thousands of brackets and the
+    # caller is a 5-second trading loop: on 2026-09-20 raising the sample cap
+    # to reach a pre-registered target stalled the paper engine for twenty
+    # minutes, because thirteen strategy studies ran one after another inside
+    # the tick. Refresh in the background and answer with what we already have;
+    # a stale edge is a fine input to a decision about sizing, and `None` on a
+    # cold start simply means the old sizing applies until the first study lands.
+    if key not in _refreshing:
+        _refreshing.add(key)
+        asyncio.create_task(_refresh_edge(key, days))
+    return hit[1] if hit else None
+
+
+async def _refresh_edge(key: tuple[str, str], days: float) -> None:
+    strategy_id, asset_class = key
+    import time as _time
+
     try:
         rows = await run_edge_study(days=days, strategy_id=strategy_id)
-    except Exception as e:  # noqa: BLE001
+        row = next((r for r in rows if r["market"] == asset_class), None)
+        _edge_cache[key] = (_time.monotonic(), row)
+    except Exception as e:  # noqa: BLE001 — advisory: never break the caller
         logger.debug(f"edge study for {strategy_id}/{asset_class} failed ({e})")
-        return None
-    row = next((r for r in rows if r["market"] == asset_class), None)
-    _edge_cache[key] = (now, row)
-    return row
+        # Back off by caching the miss, so a permanently failing study does not
+        # respawn a task on every tick.
+        _edge_cache[key] = (_time.monotonic(), _edge_cache.get(key, (0.0, None))[1])
+    finally:
+        _refreshing.discard(key)

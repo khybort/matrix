@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import random
 
+import pytest
+
 from matrix_shared import promotion as P
 from matrix_shared.edge_study import benjamini_hochberg, benjamini_yekutieli
 
@@ -204,3 +206,67 @@ def test_an_inverted_strategy_is_still_harmful_whatever_its_status():
 
     row = _verdict_row("provisional", t=-5.0, edge_bps=-30.0, t_side=-5.0, side_edge_bps=-30.0)
     assert verdict(row, cost_bps=12.0) == "harmful"
+
+
+# --- the study must never block the trading loop -------------------------
+
+pytestmark_async = pytest.mark.asyncio
+
+
+@pytest.mark.asyncio
+async def test_strategy_edge_returns_immediately_and_refreshes_behind(monkeypatch):
+    """The caller is a 5-second trading loop. A cache miss must hand back what
+    we have (or None) and schedule the work, never run it inline: on 2026-09-20
+    an inline study stalled the paper engine for twenty minutes."""
+    import asyncio
+
+    from matrix_shared import edge_study as E
+
+    E.clear_cache()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_study(*, days, strategy_id=None):
+        started.set()
+        await release.wait()
+        return [{"market": "crypto", "strategy": strategy_id, "n": 500}]
+
+    monkeypatch.setattr(E, "run_edge_study", slow_study)
+
+    first = await E.strategy_edge("momentum_xs", "crypto")
+    assert first is None                      # nothing cached yet, and we did not wait
+    await asyncio.wait_for(started.wait(), timeout=2)
+
+    # A second call while the refresh is in flight must not queue another study.
+    assert await E.strategy_edge("momentum_xs", "crypto") is None
+    assert len(E._refreshing) == 1
+
+    release.set()
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if not E._refreshing:
+            break
+    row = await E.strategy_edge("momentum_xs", "crypto")
+    assert row is not None and row["n"] == 500
+    E.clear_cache()
+
+
+@pytest.mark.asyncio
+async def test_a_failing_study_does_not_respawn_a_task_every_tick(monkeypatch):
+    import asyncio
+
+    from matrix_shared import edge_study as E
+
+    E.clear_cache()
+    calls = []
+
+    async def boom(*, days, strategy_id=None):
+        calls.append(strategy_id)
+        raise RuntimeError("no bars")
+
+    monkeypatch.setattr(E, "run_edge_study", boom)
+    for _ in range(5):
+        assert await E.strategy_edge("grid", "crypto") is None
+        await asyncio.sleep(0.02)
+    assert len(calls) == 1          # cached miss, not one study per tick
+    E.clear_cache()
