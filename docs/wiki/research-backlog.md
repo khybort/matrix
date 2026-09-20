@@ -79,11 +79,23 @@ answerable against realised trades rather than in the abstract.
 correction — eight crypto perps are nowhere near eight independent bets, which
 is the assumption the divisor makes.
 
-## 6. Queue- and imbalance-conditioned placement
-Condition passive placement and repricing on book imbalance. Front-of-queue 1 s
-markout −0.06 bp vs −1.16 bp at the back on Binance BTC perp. Prerequisite:
-L2 snapshots at ≤ 1 s — **blocked until capture is upgraded**. Only worth doing
-after #1 works.
+## 6. ~~Queue- and imbalance-conditioned placement~~ — MOOT 2026-09-20
+Conditioning passive placement and repricing on book imbalance was always
+gated on #1, post-only entry, working. #1 was implemented, measured and
+**rejected** for the strategy that matters, so there is no passive placement
+left for this to condition.
+
+Two measurements also make the prerequisite unattractive on its own terms.
+Our order-book capture runs at a 4.3 s median interval at 25 levels; the
+published result this item rests on (front-of-queue 1 s markout −0.06 bp
+against −1.16 bp at the back, Binance BTC perp) needs ≤1 s. Getting there is
+our own poller interval, so it is reachable — but it multiplies
+`market_orderbook_snapshots` roughly fourfold, from 13 GB per two-day window
+to ~52 GB, on a disk we spent 2026-09-20 fighting to keep ahead of
+([[incidents]]).
+
+Revisit only if post-only entry is ever re-tested and passes on our actual
+symbol mix, which is mostly altcoin perps rather than BTC/ETH.
 
 ## 7. ~~Deflated Sharpe + BHY as the promotion bar~~ — SHIPPED 2026-09-20
 `matrix_shared/promotion.py`. Three guards against one failure, a number that
