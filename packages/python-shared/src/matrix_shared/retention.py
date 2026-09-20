@@ -55,7 +55,17 @@ class Policy:
 
 POLICIES: tuple[Policy, ...] = (
     # Raw tick prints: readers look back ≤24h live, replayer ≤7d.
-    Policy("market_trades", "trade_ts", 7, "local"),
+    #
+    # Swept GLOBALLY (partition_col=None), not per symbol. This table is
+    # append-only with ~900 symbols interleaved, so one symbol's oldest rows
+    # are scattered across the whole heap: deleting 10 000 of them touches
+    # 10 000 cold pages and measured three to six minutes a batch, which is
+    # why retention lost to ingestion for months. The same 10 000 rows taken
+    # in time order come from ~180 contiguous pages — measured 2026-09-20 at
+    # 20 000 rows in 1.1-2.1 s, about a thousandfold. The `(trade_ts)` index
+    # added alongside this keeps the ordered sweep cheap once the backlog is
+    # gone and the predicate stops matching anything.
+    Policy("market_trades", "trade_ts", 7, "local", partition_col=None),
     # L2 snapshots: no reader beyond the model; keep 2d for debugging.
     Policy("market_orderbook_snapshots", "snapshot_ts", 2, "local"),
     # Funding / OI / mark: small rows, 30d covers every lookback.

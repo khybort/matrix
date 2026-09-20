@@ -147,3 +147,36 @@ async def test_the_shipped_statement_orders_by_the_policy_timestamp():
 
     src = inspect.getsource(R.prune_policy)
     assert "ORDER BY {policy.ts_col}" in src
+
+
+def test_market_trades_is_swept_globally_not_per_symbol():
+    """Per-symbol pruning reads an append-only, symbol-interleaved table in the
+    worst possible order: one symbol's oldest rows are scattered over the whole
+    heap. Sweeping in time order takes the same rows from contiguous pages —
+    measured 2026-09-20 as a thousandfold difference, and the reason retention
+    lost to ingestion for months."""
+    trades = next(p for p in POLICIES if p.table == "market_trades")
+    assert trades.partition_col is None
+
+
+async def test_the_global_sweep_has_an_index_to_stand_on():
+    """Without `(trade_ts)` the ordered global sweep degenerates into a sort of
+    the whole table the moment the backlog is gone."""
+    import asyncpg
+
+    dsn = os.environ.get("LOCAL_DATABASE_URL", "")
+    if not dsn:
+        pytest.skip("LOCAL_DATABASE_URL unset")
+    conn = await asyncpg.connect(dsn.replace("postgres://", "postgresql://"))
+    try:
+        # `indisvalid`, not merely present: CREATE INDEX CONCURRENTLY writes the
+        # catalog row long before the index can be used, so a presence check
+        # passes against an index the planner will ignore.
+        rows = await conn.fetch(
+            "SELECT i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid "
+            "WHERE c.relname = 'ix_market_trades_ts'"
+        )
+    finally:
+        await conn.close()
+    assert rows, "migration 0039 has not been applied to this database"
+    assert rows[0]["indisvalid"], "ix_market_trades_ts exists but is not valid yet"
