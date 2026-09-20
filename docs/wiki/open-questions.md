@@ -62,6 +62,15 @@ how much the answer would change.
   non-destructive, and everything reconnects, but disruptive enough that it
   should be a deliberate act rather than a side effect of a working session.
   *Test:* set it, watch `cache_hit_pct` and the feature-path query times.
+- **`autovacuum_work_mem` is 64 MB, which forces repeated index passes.** It
+  holds about 11M dead tuple ids at 6 bytes each; `market_trades` carried 26.5M
+  dead on 2026-09-20, so one vacuum has to scan all four indexes three times
+  over — and one of those indexes is now 3.5 GiB. Raising it to a few hundred
+  MB would make it a single pass. Unlike `shared_buffers` this needs only
+  `ALTER SYSTEM` plus `pg_reload_conf()`, no restart, but it is still a global
+  change and the current pass would not pick it up. Not urgent: the disk has
+  ~120 GB free and the pass does finish. *Test:* set it, then compare
+  `index_vacuum_count` at the end of the next pass.
 - **A time-only index changes plans elsewhere.** `ix_market_trades_ts` (0039)
   made `WHERE symbol = $1 ORDER BY trade_ts DESC LIMIT n` switch from the
   composite index to a backward scan of the time index with a symbol filter.
