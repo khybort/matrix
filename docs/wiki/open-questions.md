@@ -24,16 +24,25 @@ how much the answer would change.
   traded and skipped candidates perform about the same (−15.0 vs −13.9 bps,
   2026-09-13). *Test*: rank all candidates by EV, bucket into deciles, and plot
   realised PnL per decile. A flat curve means the ranker is decoration.
-- **What is the true cost model?** Fees and slippage are assumed
-  (5.5 + 2 bps per side for crypto) and never validated against fills. Until
-  live or exchange-simulated fills exist, every net-of-cost conclusion carries
-  that assumption.
+- **What is the true cost model?** Slippage is now measured per symbol from our
+  own book snapshots ([[methods]]), but fees remain assumed and nothing is
+  validated against real fills. Until live or exchange-simulated fills exist,
+  every net-of-cost conclusion still carries that assumption.
 - **Is the 15-second cadence justified?** Nothing has shown that faster
   decisions earn more than they cost in spread. *Test*: compare realised PnL of
   the same strategy at 15 s vs 60 s vs 300 s decision intervals.
 - **Should BIST and US be running at all right now?** They add surface area,
   cost and attention while crypto has no edge. The argument for keeping them is
   regime diversification; there is no evidence yet either way.
+- **Uncommitted, live, and mine to land later:** the EV floor lets a
+  *measured* edge outrank the model's own `confidence x tp_pct` estimate. The
+  floor was rejecting 174 of 178 candidates an hour (2026-09-20), every
+  momentum_xs signal among them, while that strategy measures +21 bps at the
+  95% lower bound against a ~12 bps round trip. The change is written, tested
+  (38/38) and running in the dev tree, but the EV floor itself is another
+  author's work that has not reached git, so there is no HEAD to commit it
+  against. Land it the moment their floor lands — until then it exists only in
+  the working tree and would be lost by a hard reset.
 - **Operator-blocked**: only `TELEGRAM_BOT_TOKEN` remains — without it every
   alert is invisible, which is what let the three-day outage pass unnoticed.
   The wallet refund was applied 2026-09-19 and lid sleep was disabled
