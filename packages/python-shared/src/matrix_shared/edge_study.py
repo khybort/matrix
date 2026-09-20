@@ -475,11 +475,27 @@ _edge_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
 # Keys whose refresh is already in flight, so a 5-second trading loop cannot
 # queue thirteen concurrent studies while the first one is still running.
 _refreshing: set[tuple[str, str]] = set()
+# ...and only one of those queued refreshes may touch the database at a time.
+# Moving the study off the tick stopped it blocking the engine, but thirteen
+# background studies then loaded bars concurrently and put five 60-second
+# `market_bars` reads on the database at once (2026-09-20). This is background
+# work against a 6 h cache: there is no reason for any of it to be parallel.
+_refresh_gate: asyncio.Semaphore | None = None
+
+
+def _gate() -> asyncio.Semaphore:
+    # Created lazily so the semaphore binds to the running loop, not to import.
+    global _refresh_gate
+    if _refresh_gate is None:
+        _refresh_gate = asyncio.Semaphore(1)
+    return _refresh_gate
 
 
 def clear_cache() -> None:
+    global _refresh_gate
     _edge_cache.clear()
     _refreshing.clear()
+    _refresh_gate = None
 
 
 def verdict(row: dict | None, *, cost_bps: float, min_t: float = 2.0) -> str:
@@ -548,6 +564,17 @@ async def _refresh_edge(key: tuple[str, str], days: float) -> None:
     import time as _time
 
     try:
+        async with _gate():
+            await _run_refresh(key, days)
+    finally:
+        _refreshing.discard(key)
+
+
+async def _run_refresh(key: tuple[str, str], days: float) -> None:
+    strategy_id, asset_class = key
+    import time as _time
+
+    try:
         rows = await run_edge_study(days=days, strategy_id=strategy_id)
         row = next((r for r in rows if r["market"] == asset_class), None)
         _edge_cache[key] = (_time.monotonic(), row)
@@ -556,5 +583,3 @@ async def _refresh_edge(key: tuple[str, str], days: float) -> None:
         # Back off by caching the miss, so a permanently failing study does not
         # respawn a task on every tick.
         _edge_cache[key] = (_time.monotonic(), _edge_cache.get(key, (0.0, None))[1])
-    finally:
-        _refreshing.discard(key)

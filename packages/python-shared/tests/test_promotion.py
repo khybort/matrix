@@ -270,3 +270,41 @@ async def test_a_failing_study_does_not_respawn_a_task_every_tick(monkeypatch):
         await asyncio.sleep(0.02)
     assert len(calls) == 1          # cached miss, not one study per tick
     E.clear_cache()
+
+
+@pytest.mark.asyncio
+async def test_background_refreshes_run_one_at_a_time(monkeypatch):
+    """Moving the study off the trading tick fixed the stall but let thirteen
+    background studies load bars at once, which put five 60-second market_bars
+    reads on the database simultaneously. Background work against a six-hour
+    cache has no reason to be parallel."""
+    import asyncio
+
+    from matrix_shared import edge_study as E
+
+    E.clear_cache()
+    concurrent = 0
+    peak = 0
+    release = asyncio.Event()
+
+    async def slow_study(*, days, strategy_id=None):
+        nonlocal concurrent, peak
+        concurrent += 1
+        peak = max(peak, concurrent)
+        await release.wait()
+        concurrent -= 1
+        return [{"market": "crypto", "strategy": strategy_id, "n": 100}]
+
+    monkeypatch.setattr(E, "run_edge_study", slow_study)
+    for sid in ("a", "b", "c", "d", "e"):
+        await E.strategy_edge(sid, "crypto")
+    await asyncio.sleep(0.05)
+    assert peak == 1, f"peak concurrent studies was {peak}"
+
+    release.set()
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if not E._refreshing:
+            break
+    assert peak == 1
+    E.clear_cache()
