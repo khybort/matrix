@@ -308,3 +308,23 @@ async def test_background_refreshes_run_one_at_a_time(monkeypatch):
             break
     assert peak == 1
     E.clear_cache()
+
+
+def test_a_target_larger_than_the_study_can_measure_is_answered_not_pending(monkeypatch):
+    """funding_reversion registered 13 039 trades for a 3.5 bps edge while the
+    study simulates at most 1 500. Leaving it `provisional` for ever would
+    dress up an answer as a pending question."""
+    monkeypatch.setenv("MATRIX_EDGE_MAX_PER_STRATEGY", "1500")
+    reg = P.Registry()
+    reg.register("funding_reversion", "crypto", edge_bps=3.5, sd_bps=69.0)
+    need = reg.get("funding_reversion", "crypto")["required_n"]
+    assert need > P.measurable_n()
+    row = {"strategy": "funding_reversion", "market": "crypto", "n": 1500, "dsr": 0.99}
+    assert P.status(row, registry=reg, n_trials=13, significant=True) == "unprovable"
+
+
+def test_an_unprovable_strategy_does_not_earn_capital():
+    from matrix_shared.edge_study import verdict
+
+    row = _verdict_row("unprovable")
+    assert verdict(row, cost_bps=12.0) == "unproven"

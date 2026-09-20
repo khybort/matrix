@@ -56,6 +56,17 @@ MIN_REQUIRED_N = int(os.environ.get("MATRIX_PROMOTION_MIN_N", "200"))
 # 30-trade target on 2026-09-20 with a DSR of 0.53, i.e. a coin flip.
 MIN_DSR = float(os.environ.get("MATRIX_PROMOTION_MIN_DSR", "0.95"))
 
+
+def measurable_n() -> int:
+    """The largest sample the edge study will actually simulate.
+
+    A registered target above this can never be reached, so a strategy holding
+    one would sit at `provisional` forever — the same shape as the bug found on
+    2026-09-20, where momentum_xs registered 936 against a study cap of 800.
+    Read from the environment rather than imported, because `edge_study`
+    imports this module and the dependency must not run the other way."""
+    return int(os.environ.get("MATRIX_EDGE_MAX_PER_STRATEGY", "1500"))
+
 _EULER = 0.5772156649015329
 
 
@@ -277,6 +288,8 @@ def status(
     - `failed`     — reached its registered count and no longer clears the bar.
                      The hypothesis had its chance.
     - `unproven`   — nothing measured, or nothing significant.
+    - `unprovable` — the sample its own edge demands is larger than the study
+                     can ever simulate. Not pending: answered.
 
     All three conditions are required together on purpose. Significance alone
     is a p-value from one of thirteen overlapping tests; the count alone can be
@@ -290,7 +303,13 @@ def status(
     reg = registry.get(row.get("strategy", ""), row.get("market", ""))
     if reg is None:
         return "provisional" if significant else "unproven"
-    reached = n >= int(reg["required_n"])
+    need = int(reg["required_n"])
+    # A target the study can never measure is not a pending target, it is an
+    # answer: this edge is too small to prove with the data we can hold.
+    # Saying so beats leaving the strategy `provisional` for ever.
+    if need > measurable_n():
+        return "unprovable"
+    reached = n >= need
     convincing = dsr is not None and float(dsr) >= min_dsr
     if not reached:
         return "provisional" if significant else "unproven"
@@ -303,6 +322,7 @@ def status(
 
 __all__ = [
     "MIN_DSR",
+    "measurable_n",
     "MIN_REQUIRED_N",
     "REGISTRY_PATH",
     "Registration",
