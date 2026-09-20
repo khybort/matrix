@@ -52,6 +52,47 @@ def _slots_for_score(score: float, base_share: int) -> int:
         return max(1, base_share // 4)
 
 
+async def _entry_edge_verdict(strategy_id: str, asset_class: str) -> str:
+    """`pays` | `harmful` | `unproven` for this strategy's entry timing, from the
+    controlled study in `matrix_shared.edge_study` (cached 6 h).
+
+    Realised PnL and entry quality are different questions, and the slot pass
+    needs both answers. `pays` protects a strategy from the realised-loss
+    demotion; `harmful` demotes one that the realised rule would have kept.
+
+    On 2026-09-19 `oi_delta` was demoted to zero slots on realised loss while
+    the study put its entries +19 bps above random entries on the same symbols,
+    sides and brackets (t=2.90, n=274) — its loss was cost and sizing, not
+    signal. Throwing that away is how a system with one working idea ends up
+    with none.
+    """
+    try:
+        from matrix_shared.edge_study import strategy_edge, verdict
+        from matrix_shared.trading import execution_cost_bps
+
+        cost = float(execution_cost_bps(asset_class)) * 2
+        row = await strategy_edge(strategy_id, asset_class)
+        v = verdict(row, cost_bps=cost)
+    except Exception as e:  # noqa: BLE001 — advisory; never block the slot pass
+        logger.debug(f"edge guard unavailable for {strategy_id}/{asset_class} ({e})")
+        return "unproven"
+    if v == "pays":
+        logger.warning(
+            f"slot demote SKIPPED for {strategy_id}/{asset_class}: entry edge "
+            f"{row['edge_bps']:+.1f} bps vs random (t={row['t']:.2f}, n={row['n']}) "
+            f"clears the {cost:.0f} bps round trip — losing on cost/sizing, not signal"
+        )
+    return v
+    if v == "pays":
+        logger.warning(
+            f"slot demote SKIPPED for {strategy_id}/{asset_class}: entry edge "
+            f"{row['edge_bps']:+.1f} bps vs random (t={row['t']:.2f}, n={row['n']}) "
+            f"clears the {cost:.0f} bps round trip — losing on cost/sizing, not signal"
+        )
+        return True
+    return False
+
+
 async def _flush_config(session, config: StrategySlotConfig) -> bool:
     """Flush one config's changes inside a savepoint. A slot row deleted by
     another process mid-pass (labs/test cleanup, operator SQL) used to raise
