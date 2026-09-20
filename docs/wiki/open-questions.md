@@ -34,6 +34,18 @@ how much the answer would change.
 - **Should BIST and US be running at all right now?** They add surface area,
   cost and attention while crypto has no edge. The argument for keeping them is
   regime diversification; there is no evidence yet either way.
+- **Why does one Telegram poller conflict with itself?** `notify` logs
+  `Conflict: terminated by other getUpdates request` every 40–140 s. Ruled out
+  on 2026-09-20: no second container (one `matrix-notify`, restart count 0), no
+  host process, no webhook, no other poller in the repo (only `notify.main`
+  calls `start_polling`; `director` merely sends), and — decisively — nine
+  consecutive long polls with the container stopped never returned 409, so no
+  external competitor exists. Widening the long poll from 10 s to 30 s with a
+  40 s read timeout cut request churn threefold but did not stop the conflicts.
+  Whatever is racing is inside a single process with a single updater. The bot
+  itself answers commands throughout, so this is noise rather than an outage —
+  but it is unexplained noise on the one channel that is supposed to tell us
+  the system has stopped.
 - **Uncommitted, live, and mine to land later:** the EV floor lets a
   *measured* edge outrank the model's own `confidence x tp_pct` estimate. The
   floor was rejecting 174 of 178 candidates an hour (2026-09-20), every
