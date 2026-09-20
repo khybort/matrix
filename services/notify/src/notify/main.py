@@ -17,15 +17,23 @@ import asyncio
 import os
 import signal
 import sys
+import time
 
 from loguru import logger
 
 from notify.alerts import (
     ALERT_INFO,
+    ALERT_URGENT,
     PollSnapshot,
     detect_alerts,
 )
-from notify.bot import LONG_POLL_S, build_application, push
+from notify.bot import (
+    LONG_POLL_S,
+    CONFLICTS,
+    build_application,
+    install_conflict_filter,
+    push,
+)
 from notify.health import HealthFlags, collect_health, detect_health_alerts
 from notify.state import (
     get_active_strategies,
@@ -35,6 +43,12 @@ from notify.state import (
 )
 
 DEFAULT_POLL_INTERVAL_S = 60.0
+# How many getUpdates conflicts before we say something, and how rarely we
+# repeat it. One conflict can be a restart overlap; a stream of them is a
+# second consumer.
+CONFLICT_ALERT_MIN = int(os.environ.get("MATRIX_TG_CONFLICT_ALERT_MIN", "5"))
+CONFLICT_ALERT_EVERY_S = float(os.environ.get("MATRIX_TG_CONFLICT_ALERT_EVERY_S", "3600"))
+_conflict_alerted_at = [0.0]
 
 
 async def _certs_keymap() -> dict[tuple[str, str, int], str]:
@@ -119,6 +133,22 @@ async def _poll_loop(
             else:
                 await push(app, level, text)
 
+        # A contested bot token is invisible from inside: sending still works,
+        # only receiving is stolen. Say so on the channel that does work, at
+        # most once an hour so it never becomes wallpaper.
+        if not dry_run and app is not None:
+            n = int(CONFLICTS["count"])
+            if n >= CONFLICT_ALERT_MIN and time.time() - _conflict_alerted_at[0] > CONFLICT_ALERT_EVERY_S:
+                _conflict_alerted_at[0] = time.time()
+                await push(
+                    app,
+                    ALERT_URGENT,
+                    f"⚠️ Bu bot token'ını başka biri de yokluyor ({n} getUpdates "
+                    f"çakışması). Gönderdiğin komutlar bize ulaşmayabilir. "
+                    f"BotFather'da /revoke ile token'ı yenile, sonra "
+                    f"`scripts/rotate_telegram_token.sh` çalıştır.",
+                )
+
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval_s)
         except TimeoutError:
@@ -143,6 +173,7 @@ async def run(token: str | None, poll_interval_s: float) -> None:
         await _poll_loop(None, poll_interval_s, stop, dry_run=True)
         return
 
+    install_conflict_filter()
     app = build_application(token)
     # python-telegram-bot v21 wants explicit lifecycle for "run alongside
     # other coroutines" (no `run_polling` shortcut here).

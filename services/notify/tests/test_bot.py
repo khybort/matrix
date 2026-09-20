@@ -113,3 +113,54 @@ async def test_dev_commands_ignore_unauthorized_and_validate_usage(monkeypatch):
     bad2 = _update(1)
     await B.cmd_dev_revise(bad2, ctx)
     assert "Usage" in bad2.message.reply_text.await_args.args[0]
+
+
+# --- getUpdates conflict watch -------------------------------------------
+
+
+def _conflict_record() -> "logging.LogRecord":
+    import logging
+
+    from telegram.error import Conflict
+
+    try:
+        raise Conflict("terminated by other getUpdates request")
+    except Conflict:
+        import sys
+
+        return logging.LogRecord(
+            "telegram.ext.Updater", logging.ERROR, __file__, 1,
+            "Exception happened while polling for updates.", (), sys.exc_info(),
+        )
+
+
+def test_conflict_filter_counts_and_drops_the_traceback():
+    """A contested token must cost one counted line, not a stack trace every
+    40 seconds — and the count is what the operator alert is keyed on."""
+    from notify import bot as B
+
+    B.CONFLICTS.update({"count": 0, "first_at": 0.0, "last_at": 0.0})
+    f = B._ConflictFilter()
+    rec = _conflict_record()
+    assert f.filter(rec) is True          # the record is kept, not swallowed
+    assert rec.exc_info is None           # but the traceback is gone
+    assert B.CONFLICTS["count"] == 1
+    assert B.CONFLICTS["first_at"] > 0
+    assert "another consumer holds this bot token" in (rec.msg % rec.args)
+
+    f.filter(_conflict_record())
+    assert B.CONFLICTS["count"] == 2
+
+
+def test_conflict_filter_leaves_unrelated_errors_alone():
+    import logging
+
+    from notify import bot as B
+
+    B.CONFLICTS.update({"count": 0, "first_at": 0.0, "last_at": 0.0})
+    rec = logging.LogRecord(
+        "telegram.ext.Updater", logging.ERROR, __file__, 1, "network down", (), None
+    )
+    assert B._ConflictFilter().filter(rec) is True
+    assert B.CONFLICTS["count"] == 0
+    assert rec.msg == "network down"

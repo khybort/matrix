@@ -11,10 +11,13 @@ Used by the alert poller in main.py.
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 
 from loguru import logger
 from telegram import Update
+from telegram.error import Conflict
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (
     Application,
@@ -302,3 +305,53 @@ __all__ = [
     "get_allowed_chat_ids",
     "push",
 ]
+
+# --------------------------------------------------- getUpdates conflict watch
+
+# Telegram delivers each update to exactly ONE getUpdates caller. When a second
+# consumer holds the same bot token, it both terminates our long poll (logging a
+# full traceback every time) and *takes* updates that were meant for us — so a
+# command the operator sends can silently land somewhere else. On 2026-09-20
+# this was measured from three independent vantage points with our own poller
+# stopped: a lone traced poller inside the container (3 conflicts in 240 s at
+# inflight=1), plain host-side long polls (2 of 8 returned 409), and an
+# inventory showing no local container or process holding the token. The only
+# remedy is revoking the token in BotFather; until then we count the conflicts,
+# keep the log to one line, and tell the operator over the channel that still
+# works (sending is unaffected — only receiving is contested).
+
+CONFLICTS: dict[str, float | int] = {"count": 0, "first_at": 0.0, "last_at": 0.0}
+
+
+class _ConflictFilter(logging.Filter):
+    """Collapse PTB's per-conflict traceback into one counted warning line."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc = record.exc_info[1] if record.exc_info else None
+        if not isinstance(exc, Conflict):
+            return True
+        now = time.time()
+        CONFLICTS["count"] = int(CONFLICTS["count"]) + 1
+        CONFLICTS["last_at"] = now
+        if not CONFLICTS["first_at"]:
+            CONFLICTS["first_at"] = now
+        record.exc_info = None
+        record.exc_text = None
+        record.msg = (
+            "getUpdates conflict #%d — another consumer holds this bot token; "
+            "updates may be going to it instead of us"
+        )
+        record.args = (CONFLICTS["count"],)
+        return True
+
+
+def install_conflict_filter() -> None:
+    """Attach the filter to the loggers PTB polls from."""
+    for name in ("telegram.ext.Updater", "telegram.ext._updater"):
+        logging.getLogger(name).addFilter(_ConflictFilter())
+
+
+def conflicts_since(epoch_s: float) -> int:
+    """Conflicts counted since `epoch_s` (cheap: the counter is monotonic)."""
+    return int(CONFLICTS["count"]) if CONFLICTS["last_at"] >= epoch_s else 0
+
