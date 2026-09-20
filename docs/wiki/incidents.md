@@ -27,8 +27,8 @@ dominant failure mode here, and the reason liveness is measured by output age
 - **2026-09-13 → 09-14, 11 hours down.** MacBook entered *Clamshell Sleep*; the
   OrbStack VM slept with it and the Docker socket hung. A kernel OOM in the
   10 GiB VM was a contributing (not root) cause. Fixes: per-container memory
-  caps, VM raised to 12 GiB. The root cause is physical and **still open** —
-  see the global wiki's machine page.
+  caps, VM raised to 12 GiB. The lid itself kept costing time (another 21 h on
+  2026-09-19/20) until `sudo pmset -a disablesleep 1` was applied 2026-09-20.
 - **2026-09-14 — the Claude credentials sync had never run.** launchd cannot
   execute a script under `~/Documents` (TCC, exit 126); the job looked
   installed. Moved to `~/.matrix/bin`, interval 30 min.

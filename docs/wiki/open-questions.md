@@ -32,7 +32,7 @@ how much the answer would change.
 - **Should BIST and US be running at all right now?** They add surface area,
   cost and attention while crypto has no edge. The argument for keeping them is
   regime diversification; there is no evidence yet either way.
-- **Operator-blocked**: lid sleep (`sudo pmset -a disablesleep 1`, must be run
-  in a real terminal — it needs a password prompt) and `TELEGRAM_BOT_TOKEN`
-  (without it every alert is invisible, which is what let the three-day outage
-  pass unnoticed). The wallet refund was applied 2026-09-19.
+- **Operator-blocked**: only `TELEGRAM_BOT_TOKEN` remains — without it every
+  alert is invisible, which is what let the three-day outage pass unnoticed.
+  The wallet refund was applied 2026-09-19 and lid sleep was disabled
+  2026-09-20, so the system can finally accumulate an uninterrupted sample.

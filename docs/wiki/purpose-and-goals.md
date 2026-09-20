@@ -22,7 +22,7 @@ speeding the learning loop". The newsletter product is deferred.
 
 | Gate | Definition | State |
 |---|---|---|
-| G1 continuity | 30 days of uninterrupted ticks | ❌ three multi-hour/day outages in the last week ([[incidents]]) |
+| G1 continuity | 30 days of uninterrupted ticks | 🟡 clock restarted 2026-09-20: lid sleep disabled and the worker supervisor landed, removing both causes of the last four outages ([[incidents]]) |
 | G2 closed learning loop | every applied mutation measured after 7 days, negatives auto-reverted | ✅ mechanism runs; too few samples to have judged much |
 | G3 positive paper EV | ≥1 strategy, 60 days, n≥200, PnL>0 after costs, DD<15%, 95% CI lower bound >0 | ❌ nothing close; see [[pnl-reality]] |
 | G4 self-repair | dev_agent patch is tested and merged, effect measured | 🟡 chain works end to end; one real patch adopted after manual review |

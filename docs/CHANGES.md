@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-20 — Kapak uykusu kapatıldı: G1 sayacı yeniden başladı
+- Operatör `sudo pmset -a disablesleep 1` çalıştırdı; `pmset -g` artık `SleepDisabled 1`. Son dört kesintinin ikisinin nedeni (kapak kapalı uyku: 11 s, 21 s) ortadan kalktı, diğer ikisininki (sessiz ölen worker) 095b2c4 supervisor'ı ile. Sistem ilk kez kesintisiz örneklem biriktirebilir. Kalan tek operatör eksiği: `TELEGRAM_BOT_TOKEN`.
+
 ## 2026-09-19 — Shadow-cüzdan bug'ının iadesi uygulandı
 - Operatör `make reset-capital ASSET=crypto AMOUNT=+346.76` çalıştırdı: 2026-09-13'te challenger pozisyonlarının şampiyon cüzdanına slot cap'siz yazılmasından doğan kayıp geri verildi (default/crypto equity 9166.55 → 9513.31). Öğrenme verisine dokunulmadı; bu tutar artık strateji performansı olarak sayılmıyor.
 
