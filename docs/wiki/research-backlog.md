@@ -57,14 +57,27 @@ ADAUSDT 15.5, BRUSDT 16.9. *Still open:* impact beyond the touch (our clips are
 small, so the half-spread is the dominant term) and validation against real
 fills, which needs live execution.
 
-## 5. Quarter-Kelly sizing on a shrunk edge
-f = 0.25 × Kelly on an empirical-Bayes-shrunk edge, scaled inversely to
-realised volatility, hard-capped. Kelly is ~11× more sensitive to errors in
-means than variances, and fractional Kelly is equivalent to full Kelly on a
-shrunk mean. *Decisive test:* block-bootstrap realised trade returns at
-f ∈ {0.1, 0.25, 0.5, 1.0}. **Pass: higher median terminal log-wealth with the
-95th-percentile drawdown inside the existing cap.** Sizing creates no edge; it
-only stops one being destroyed.
+## 5. ~~Quarter-Kelly sizing on a shrunk edge~~ — SHIPPED 2026-09-20
+`allocation.kelly_fraction_of_equity` sizes any strategy the controlled study
+calls `pays`, on the **95% lower bound** of its measured edge net of the
+measured round trip ([[methods]]), divided by the book's real concurrency,
+quartered, then capped. Kelly is ~11x more sensitive to errors in means than
+variances, so the lower bound rather than the point estimate is the whole
+defence. The wallet's `max_position_pct` remains the ceiling in every branch,
+and a zero fraction falls back to the old sizing instead of suppressing a trade
+the slot gate allowed.
+
+Live on the first day: `momentum_xs` measures +33.2 bps at t=5.56 with a
+per-trade sd of 164.8 bps over 798 signals. Quarter-Kelly on eight concurrent
+positions asks for ~6.7% of equity; the 5% hard cap and then the 2% wallet gate
+both bind, so it sizes at the gate — roughly 2.3x its previous effective size.
+Two things follow: the *policy*, not the arithmetic, is setting this size, and
+the block-bootstrap comparison across f is still the open question, now
+answerable against realised trades rather than in the abstract.
+
+*Still open:* the f ∈ {0.1, 0.25, 0.5, 1.0} bootstrap, and the correlation
+correction — eight crypto perps are nowhere near eight independent bets, which
+is the assumption the divisor makes.
 
 ## 6. Queue- and imbalance-conditioned placement
 Condition passive placement and repricing on book imbalance. Front-of-queue 1 s

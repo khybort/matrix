@@ -53,6 +53,11 @@ response to a measured failure, never as decoration), and what is queued.
   that beats a null by more than its round trip gets a full wallet share even
   if its realised history is poor; `perf_score` reflects fills that may have
   been broken. `momentum_xs` went 1 → 7 slots on this rule.
+- **Size on the lower bound of a measured edge, not its point estimate.**
+  Kelly is about an order of magnitude more sensitive to errors in the mean
+  than in the variance, so a point estimate plus full Kelly is a reliable way
+  to go broke while being directionally right. We take the 95% lower bound,
+  quarter it, and keep the risk gate above it. See [[research-backlog]] #5.
 - **A tie is an answer** — a challenger indistinguishable from its champion
   after ≥100 outcomes each (|z| < 0.5) is retired rather than run to its
   14-day limit. One challenger slot per strategy means an inconclusive
