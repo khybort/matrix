@@ -129,3 +129,11 @@
   **24 dakika** koşup 6.18M buffer okudu — üstelik tam da beklediğim indeksin kurulumuyla yarışarak.
   Planı görmek için `ANALYZE` olmadan düz `EXPLAIN` yeter ve hiçbir şey çalıştırmaz. Büyük tabloda
   `ANALYZE`'ı yalnız sonucu kesin küçük olan (LIMIT'i indeksle dolacak) sorgularda kullan.
+
+- **2026-09-20 — Canlı strateji adına bağlı test, o strateji emekli olunca kırılır.**
+  `labs/tests/test_auto_apply_safe.py::test_safe_apply_takes_param_tune_for_grid` gerçek `grid`
+  stratejisinin **aktif** config'i olmasına dayanıyor. Öğrenme döngüsü bugün grid'i kanıta göre
+  kapattı (15:09 efficacy challenger'ı emekli etti, 17:45 slot scorer 1→0 çekti, 18:02'den sonra
+  hiç sinyal yok) ve test kırıldı. Yani sistem doğru çalıştığı için test kırmızıya döndü.
+  Kural: fixture'lar sentetik strateji id'si üretsin (`chal_*` gibi), canlı bir strateji adına
+  bağlanmasın. İlgili: backtest suite'inin canlı motorla aynı DB'yi paylaşması.
