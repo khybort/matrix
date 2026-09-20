@@ -25,7 +25,7 @@ from notify.alerts import (
     PollSnapshot,
     detect_alerts,
 )
-from notify.bot import build_application, push
+from notify.bot import LONG_POLL_S, build_application, push
 from notify.health import HealthFlags, collect_health, detect_health_alerts
 from notify.state import (
     get_active_strategies,
@@ -149,7 +149,11 @@ async def run(token: str | None, poll_interval_s: float) -> None:
     await app.initialize()
     await app.start()
     if app.updater is not None:
-        await app.updater.start_polling()
+        # Explicit long-poll window, matched to the read timeout in
+        # `build_application`. The default 10 s window turns over six times a
+        # minute and each turnover is a chance to race a poll the server still
+        # holds open.
+        await app.updater.start_polling(timeout=int(LONG_POLL_S))
     logger.info("telegram bot started; allowed chats configured")
 
     try:

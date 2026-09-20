@@ -231,8 +231,24 @@ async def cmd_dev_revise(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
 # ----------------------------------------------------------------- builder
 
 
+# Long poll for LONG_POLL_S, and give the HTTP read a margin on top of it.
+# When the client read deadline lands *inside* a poll the server is still
+# holding, the retry races the request Telegram has not closed yet and every
+# few minutes the log fills with `Conflict: terminated by other getUpdates
+# request` — which reads exactly like a second bot instance and is not one.
+# On 2026-09-20 that cost an investigation: nine consecutive long polls with
+# the container stopped never once returned 409, so no competitor existed.
+LONG_POLL_S = float(os.environ.get("MATRIX_TG_LONG_POLL_S", "30"))
+LONG_POLL_READ_MARGIN_S = float(os.environ.get("MATRIX_TG_READ_MARGIN_S", "10"))
+
+
 def build_application(token: str) -> Application:
-    app = Application.builder().token(token).build()
+    app = (
+        Application.builder()
+        .token(token)
+        .get_updates_read_timeout(LONG_POLL_S + LONG_POLL_READ_MARGIN_S)
+        .build()
+    )
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("strategies", cmd_strategies))
