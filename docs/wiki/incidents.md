@@ -80,3 +80,40 @@ the old one now answers `getMe` with `Unauthorized`, which is how a revoke is
 verified. The replacement was installed by the script and the channel confirmed
 working. Watch the conflict counter rather than the traceback: if it climbs
 again on a fresh token, the leak is somewhere that keeps getting the new one.
+
+## 2026-09-20 — Retention ran for eight days and deleted almost nothing
+
+**Symptom:** none. That is the point. `bars-aggregator` logged
+`retention: pruned market_trades=200` every few minutes, which reads exactly
+like a drained steady state.
+
+**Reality:** `market_trades` held 322M rows going back to 2026-06-01 against a
+seven-day policy, the local database was 112 GB, and the postgres volume was
+78% full. Growth measured at 1.56 GB/day *net of* the pruner.
+
+**Cause:** a query plan, not the code. The pruner's inner
+`SELECT ctid ... WHERE ts < cutoff AND symbol = $1 LIMIT 10000` gave Postgres a
+LIMIT over a predicate it estimated at tens of millions of rows, so it chose a
+sequential scan. For a symbol with nothing old left the LIMIT never fills, the
+scan reads all 322M rows, and that one query eats the whole 45-second budget —
+every run, before reaching the symbols that had data to delete. `ANALYZE` had
+never run on the table either, so the estimates the planner used came from
+nothing.
+
+**Fix:** `ORDER BY` the policy's timestamp column, which makes the existing
+`(symbol, ts)` index strictly better than a scan. Measured: the empty-symbol
+case falls from minutes to **0.9 ms**, and a full batch returns 10,000 rows in
+800 ms. Two tests guard it — one against the real planner, one against the
+shipped SQL string.
+
+**The lesson worth keeping:** a maintenance job that reports success is not
+evidence that it is working. This one had a log line, a budget, a test suite
+and a Makefile target, and it was still a no-op for eight days. Check the
+quantity it is supposed to move — here, the age of the oldest surviving row —
+not whether it ran. Same shape as [[open-questions]]' contested bot token:
+the signal that would have told us was itself broken.
+
+**Still open:** deleted space returns to Postgres' free-space map, not to the
+OS. New inserts reuse it, so the disk trend flattens rather than falls;
+`make db-compact TABLE=market_trades` (VACUUM FULL) is the operator-run,
+table-locking way to give it back.

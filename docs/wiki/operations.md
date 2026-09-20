@@ -39,3 +39,21 @@ memory, launchd) are in the global wiki's machine page.
   `MATRIX_CERT_*`, `MATRIX_WATCH_SUPERVISE`.
 - **Unconfigured as of 2026-09-19**: `TELEGRAM_BOT_TOKEN` (notify runs dry-run,
   alerts only reach the logs) and `OPENROUTER_API_KEY`.
+
+## Storage
+
+The local database is the thing that will fill the disk, and `market_trades`
+is nearly all of it. Retention lives in `matrix_shared/retention.py`, runs
+inside `bars-aggregator` every 5 minutes, and keeps raw prints 7 days, L2
+snapshots 2 days, ticker snapshots 30 days, wallet snapshots 30 days.
+
+Check that it is actually working, not merely running (2026-09-20 it ran for
+eight days and deleted nothing — see [[incidents]]):
+
+```sql
+-- should be within the policy window, not months ago
+SELECT min(trade_ts) FROM market_trades WHERE symbol = 'BTCUSDT';
+```
+
+`make retention-drain` forces a full catch-up; `make db-compact TABLE=…` runs
+VACUUM FULL to return space to the OS and **locks the table** while it does.
