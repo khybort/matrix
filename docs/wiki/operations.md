@@ -53,8 +53,13 @@ small. Check that retention is actually working, not merely running (2026-09-20
 it ran for months and deleted almost nothing — see [[incidents]]):
 
 ```sql
--- should be within the policy window, not months ago
-SELECT min(trade_ts) FROM market_trades WHERE symbol = 'BTCUSDT';
+-- The progress metric is the GLOBAL frontier, not one symbol's: the sweep
+-- deletes oldest-first across all symbols, so a single symbol's minimum sits
+-- still until its whole day is cleared. Cheap now that (trade_ts) is indexed.
+SELECT min(trade_ts) FROM market_trades;   -- should be within the policy window
+
+-- how much of the backlog is left
+SELECT count(*) FROM market_trades WHERE trade_ts < now() - interval '7 days';
 ```
 
 Deleting rows does not shrink the file. Space goes to Postgres' free-space map,
