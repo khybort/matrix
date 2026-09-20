@@ -202,3 +202,21 @@ the planner for *every* query touching that table, and the planner will take it
 wherever its estimates say so. After adding one to a large table, re-check the
 plans of the queries that were already fast — and ANALYZE, because a new index
 with stale statistics is how a good plan becomes a bad one.
+
+## 2026-09-20 — A units error in my own incident note
+
+While writing up the retention work I reported that the database "grew 12.5 GB
+in two hours" under the unthrottled drain. It did not. `pg_size_pretty` reports
+GiB and I compared its 112 GB reading against a raw byte count converted as
+decimal GB. The real figure is 112.0 → 116.0 GiB, of which 3.4 GiB is the index
+that migration 0039 added deliberately: 0.5 GiB of unexplained growth in two
+hours, not 12.5.
+
+The conclusion survived — deleting faster than VACUUM reclaims does grow the
+file, and throttling the drain was still right — but the number that justified
+it was inflated roughly twentyfold, and a future session reading that note
+would have over-reacted. Corrected in [[operations]].
+
+**The lesson:** `pg_size_pretty` is GiB, `pg_database_size` is bytes, and a
+delta computed across the two is wrong by 7%% per power of 1024. State the unit
+in the note, and compute deltas from raw bytes on both ends.

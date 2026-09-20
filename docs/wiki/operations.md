@@ -72,11 +72,16 @@ FROM pg_stat_user_tables WHERE relname = 'market_trades';
 
 **Deleting faster than VACUUM can reclaim makes the file grow, not shrink.**
 A deleted row becomes a dead tuple and still occupies its page until VACUUM
-returns it to the free-space map. On 2026-09-20 the first, unthrottled version
-of the time-ordered sweep deleted ~155M rows/day while autovacuum had not
-finished a single pass, and the database grew 12.5 GB in two hours — the
-opposite of the intent. The sustainable shape is a drain that outpaces
-ingestion by a few times, not by thirty, with autovacuum given room to run:
+returns it to the free-space map, so a drain that outruns autovacuum makes the
+file grow instead of shrink. Measured on 2026-09-20, with the numbers stated
+carefully because the first version of this note got them wrong by comparing
+decimal GB against a GiB reading: the database went 112.0 → 116.0 GiB over two
+hours, of which **3.4 GiB is the new `(trade_ts)` index**. Non-index growth was
+0.5 GiB in two hours, about 6.5 GiB/day against a 1.56 GiB/day baseline — real,
+but a fraction of the "12.5 GB in two hours" the bad arithmetic suggested.
+
+The sustainable shape is a drain that outpaces ingestion by a few times, with
+autovacuum given room to run:
 
 | knob | value | why |
 |---|---|---|
