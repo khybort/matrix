@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-09-20 — Git'te gizli kalmış iki tanımsız referans düzeltildi
+- Ortak ağaçta başka yazarın commit'lenmemiş değişiklikleri olan dosyalarda kendi hunk'larımı elle stage ederken iki tanım git'e girmemişti: `slot_scorer._entry_edge_verdict` (bugün) ve `paper_trade._BAR_PRICE_CLASSES` (572966c, bir haftadır). Çalışan ağaç tanımları taşıdığı için canlı sistem hiç patlamadı; yalnızca temiz bir checkout'ta NameError verirlerdi.
+- Dokunduğum her dosya için AST taraması yapıldı (çağrılan fonksiyon + büyük harfli sabit adları, tanım/atama/import/builtins kümesine karşı). İkisi de düzeltildi, kalan dosyalar temiz.
+
 ## 2026-09-20 — Sermaye kanıta göre dağıtılıyor: momentum_xs 1 → 7 slot
 - Slot scorer sadece gerçekleşmiş PnL'e (perf_score) bakıyordu; bu bir dikiz aynası. momentum_xs taban olan 1 slotta oturuyordu çünkü geçmiş dolumları ufkunun yarısı geçtikten sonra açılmıştı — oysa kontrollü çalışma girişlerini rastgele zamana karşı +31 bps, rastgele yöne karşı +33 bps üstün buluyor. Artık bir null'ı maliyetin üstünde yenen strateji cüzdanın tam payını (base_share) alıyor. Canlıda uygulandı: momentum_xs 1 → 7.
 - Kitap şimdi: momentum_xs 7, screener_follow 6, cash_and_carry 3, oi_delta 3, inverse_carry 1, xexch_funding_arb 1; hiçbir null'ı yenemeyen 5 strateji 0 slotta.
