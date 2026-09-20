@@ -114,3 +114,11 @@
   konteyneri `expired` yapıyor. `docker compose stop backtest` ile aynı test anında geçiyor. Yani suite yeşil/kırmızı
   sinyali, o an motorun açık olup olmamasına bağlı — regresyon avı buraya kilitlenip saat yakabilir. Şimdilik kural:
   backtest suite'ini motor kapalıyken koş. Kalıcı çözüm test'lere ayrı şema/DB (açık madde).
+
+- **2026-09-20 — Motoru uzun bir komutun ortasında durdurma.** Backtest testleri canlı motorla
+  aynı DB'yi paylaştığı için `docker compose stop backtest && <testler> && docker compose start backtest`
+  kalıbını kullanıyordum. Test koşusu takılınca komut arka plana düştü ve **motor 22 dakika kapalı kaldı**;
+  fark etmem ancak log'da "shutdown signal received"den sonra sessizlik görmemle oldu. `docker compose ps`
+  "running" diyordu çünkü konteyner ayaktaydı, içindeki süreç yoktu (aynı arıza şekli 16 Eylül'deki üç
+  günlük kesinti). Kural: durdurma ve başlatma **ayrı, kısa** komutlar olsun; motoru kapatan her komuttan
+  sonra ilk iş `docker compose ps` değil, **son log satırının tazeliğine** bakmak.
