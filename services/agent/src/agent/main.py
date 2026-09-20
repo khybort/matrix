@@ -322,7 +322,9 @@ async def _tick(symbols: list[str]) -> int:
         try:
             from matrix_shared.barriers import vol_scaled_barriers
 
-            barriers = await vol_scaled_barriers(symbol, asset_class, cfg.horizon_seconds)
+            barriers = await vol_scaled_barriers(
+                symbol, asset_class, cfg.horizon_seconds, tp_pct=cfg.tp_pct, sl_pct=cfg.sl_pct
+            )
         except Exception as e:  # noqa: BLE001
             logger.debug(f"vol barrier skipped for {symbol}: {e}")
             barriers = None

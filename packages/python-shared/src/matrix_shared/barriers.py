@@ -83,15 +83,38 @@ async def per_bar_vol(symbol: str, asset_class: str) -> float:
     return sigma
 
 
+def preserve_ratio(dist: float, tp0: Decimal | float | None, sl0: Decimal | float | None
+                   ) -> tuple[Decimal, Decimal]:
+    """Anchor the stop at `dist` (= m·σ_h) and keep the strategy's own payoff
+    ratio for the target.
+
+    Volatility sets the *scale* — a stop must sit outside the noise band — but
+    the tp:sl ratio is the strategy's thesis and not ours to flatten. Making
+    both legs equal also breaks the EV floor: a symmetric bracket only clears
+    the round trip above a 60% hit rate, so on 2026-09-20 it silently stopped
+    the whole book from opening. Ratio is clamped to [0.5, 4] so a degenerate
+    config cannot produce an unreachable target again.
+    """
+    try:
+        r = float(tp0) / float(sl0) if tp0 and sl0 and float(sl0) > 0 else 2.0
+    except (TypeError, ValueError, ZeroDivisionError):
+        r = 2.0
+    r = max(0.5, min(4.0, r))
+    sl = min(MAX_PCT, max(MIN_PCT, dist))
+    tp = min(MAX_PCT, max(MIN_PCT, dist * r))
+    return Decimal(str(round(tp, 6))), Decimal(str(round(sl, 6)))
+
+
 async def vol_scaled_barriers(
-    symbol: str, asset_class: str, horizon_seconds: int | float, *, m: float = DEFAULT_M
+    symbol: str, asset_class: str, horizon_seconds: int | float, *, m: float = DEFAULT_M,
+    tp_pct: Decimal | float | None = None, sl_pct: Decimal | float | None = None,
 ) -> tuple[Decimal, Decimal] | None:
-    """(tp_pct, sl_pct) scaled to this symbol's current volatility, or None when
-    volatility is unknown and the caller should keep its own barriers."""
+    """(tp_pct, sl_pct) scaled to this symbol's current volatility, keeping the
+    caller's payoff ratio. None when volatility is unknown and the caller
+    should keep its own barriers."""
     if not ENABLED:
         return None
     dist = scale(await per_bar_vol(symbol, asset_class), horizon_seconds, m)
     if dist is None:
         return None
-    q = Decimal(str(round(dist, 6)))
-    return q, q
+    return preserve_ratio(dist, tp_pct, sl_pct)

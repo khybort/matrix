@@ -37,3 +37,23 @@ def test_unknown_volatility_returns_none_so_the_caller_keeps_its_own():
 def test_missing_horizon_floors_at_one_bar():
     assert scale(0.001, 0, m=1.0) == MIN_PCT or scale(0.001, 0, m=1.0) == 0.001
     assert scale(0.001, None, m=1.0) is not None
+
+
+def test_ratio_is_preserved_so_the_ev_floor_stays_passable():
+    from decimal import Decimal
+
+    from matrix_shared.barriers import preserve_ratio
+
+    # strategy asked for 2:1; volatility says the stop belongs at 0.7%
+    tp, sl = preserve_ratio(0.007, Decimal("0.024"), Decimal("0.012"))
+    assert sl == Decimal("0.007") and tp == Decimal("0.014")
+    # a symmetric bracket would have needed a 60% hit rate to clear 15 bps;
+    # this one clears it at 50%
+    assert float(tp) - float(sl) > 0
+
+    # missing or broken inputs fall back to a sane 2:1
+    assert preserve_ratio(0.005, None, None) == (Decimal("0.01"), Decimal("0.005"))
+    assert preserve_ratio(0.005, Decimal("0.01"), Decimal("0")) == (Decimal("0.01"), Decimal("0.005"))
+    # absurd ratios are clamped, never reproducing the 8.8σ target
+    tp, sl = preserve_ratio(0.005, Decimal("0.5"), Decimal("0.001"))
+    assert float(tp) / float(sl) == 4.0

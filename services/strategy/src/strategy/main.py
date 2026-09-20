@@ -155,7 +155,9 @@ async def _apply_vol_barriers(drafts: list) -> int:
         if d.tp_pct is None and d.sl_pct is None:
             continue  # carry / delta-neutral legs have no price barrier
         try:
-            scaled = await vol_scaled_barriers(d.symbol, d.asset_class, d.horizon_seconds)
+            scaled = await vol_scaled_barriers(
+                d.symbol, d.asset_class, d.horizon_seconds, tp_pct=d.tp_pct, sl_pct=d.sl_pct
+            )
         except Exception as e:  # noqa: BLE001 — never block a tick on this
             logger.debug(f"vol barrier skipped for {d.symbol}: {e}")
             continue

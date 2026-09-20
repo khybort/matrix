@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-09-20 — Vol-ölçekli bare stratejinin ödeme oranını korur (simetrik bare kitabı durdurmuştu)
+- İlk sürüm tp=sl=m·σ_h veriyordu. Simetrik bir bare EV tabanını ancak %60 isabetle geçer; kitap 40 dakika boyunca hiç pozisyon açmadı. `preserve_ratio`: volatilite ÖLÇEĞİ belirler (stop gürültü bandının dışına), tp:sl oranı stratejinin tezidir ve korunur ([0.5, 4] kıskacıyla). Örnek: grid 0.024/0.015 → 0.0024/0.0015 (oran 1.6 sabit).
+- Bunun ortaya çıkardığı gerçek: eski EV hesabı ULAŞILAMAZ barelerle şişiyordu (8.8σ'lık bir tp, conf×tp olarak EV'ye tam puan veriyordu). Gerçekçi barelerle EV tabanı kitabın çoğunu doğru şekilde reddediyor — çünkü edge yok. Öğrenme durmuyor: sinyal bazlı çalışmalar ve virtual outcome'lar dolum gerektirmiyor.
+
 ## 2026-09-20 — Meta-labeling uygulandı ve ÖLÇÜLDÜ: bu kitapta işe yaramıyor
 - `matrix_shared/meta_label.py` + `make meta-report`: birincil model yönü, ikincil model *bu sinyale girilsin mi* sorusunu cevaplar (López de Prado). Etiketler triple-barrier'dan (dolum gerekmez), feature'lar prediction'ın kendi snapshot'ından; L2 lojistik regresyon, zaman sıralı bölme + bir ufukluk embargo, eşik YALNIZ train dağılımından.
 - Sonuç (14 g, örneklem dışı): AUC 0.43–0.54, en iyi lift +2.9 bps. Yani mevcut feature'lar hangi sinyalin tutacağını bilmiyor. `momentum_xs` ve `oi_breakout` için lift negatif. Model diske yazma barı sıkıldı (lift ≥ 5 bps ve AUC ≥ 0.55); ilk koşuda kaydedilen 3 gürültü modeli silindi. Sermaye kapısına BAĞLANMADI — kanıt yok.
