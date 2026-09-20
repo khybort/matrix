@@ -10,16 +10,19 @@ state: one strategy with verified edge, a book otherwise dominated by costs.
 Each entry carries the single decisive experiment, so nothing is adopted on
 authority. Applied methods live in [[methods]].
 
-## 1. Post-only entry with a timed taker fallback — highest certainty
-Rest passive at touch for 10–60 s, cross only if unfilled. Maker/maker round
-trips run ~3–4 bps against ~9–11 bps taker/taker, so this recovers **6–7 bps of
-round trip — about a fifth of the entire measured +31 bps edge** without
-finding any new signal. Affordable precisely because horizons are 5–60 minutes.
-*Decisive test:* replay the 799 `momentum_xs` signals with a post-only-then-cross
-policy, counting non-fills as zero. **Pass: net edge ≥ +10 bps and fill rate
-≥ 60 %.** Watch for adverse selection — passive fills arrive when the book
-turns against you; crypto evidence puts that at 0.5–1.2 bp against 3.5 bp/side
-saved.
+## 1. ~~Post-only entry~~ — TESTED 2026-09-20, rejected for the strategy that matters
+`make execution-report` replayed every signal resting a limit at the signal
+bar's close, filling as maker when the market traded through it and crossing
+otherwise. Fill rates were high (82–91 %) and most strategies gained +2…+16 bps.
+**But `momentum_xs` — the one strategy with verified edge — lost 2.9 bps**
+(t=−0.35): a momentum signal's limit only fills when price comes back to it,
+i.e. exactly when the momentum has broken. Textbook adverse selection, and it
+outweighs the 6.5 bps of fee saved. Crossing remains correct for it.
+The gains elsewhere are irrelevant while those strategies hold no capital.
+*Still open:* the **exit** leg. A take-profit is a resting limit order and is
+being charged taker fees by our cost model; correcting that accounting would
+change the EV floor for every strategy. Do not implement as a PnL improvement —
+implement it only alongside actually placing limit take-profits.
 
 ## 2. Delete the strategies that beat neither null
 Eleven of thirteen beat neither the random-time nor the random-side null
@@ -28,12 +31,18 @@ pay 15 bps to trade noise. *Decisive test:* recompute 30-day book PnL with
 survivors only — arithmetic, not a hypothesis. The slot gate already demotes
 them; formal retirement of the configs is the remaining step.
 
-## 3. Horizon profiling (alpha decay)
-Measure E[return | signal] at h = 1…120 min net of cost and set the horizon to
-the argmax instead of a fixed value. **57 % of exits are time exits at roughly
-minus cost** — the loudest unexplained diagnostic left. *Decisive test:*
-split-half — fit the decay profile on one half, apply the argmax horizon to the
-other. **Pass: ≥ +8 bps/trade and time-exit share < 40 %.**
+## 3. ~~Horizon profiling~~ — MEASURED 2026-09-20, one change proposed
+`make horizon-report` measures each signal's **excess** return over a random
+entry in the same symbol at h = 1…120 min (subtracting per-symbol drift, or a
+rising tape reads as slow alpha), net of cost, with a t per horizon.
+Only one result clears its own noise: `momentum_xs` peaks at **90 minutes,
++37.0 bps, t=3.59**, against −26.8 bps at its configured 60. Filed as a
+`param_tune` proposal (horizon_s 3600 → 5400); it waits because momentum_xs
+already has a challenger and the system allows one at a time.
+Everything else has t < 2 — long horizons carry enormous variance and always
+win on the point estimate alone, which is why the report prints `act` rather
+than just the argmax. Note the multiplicity: 12 horizons × 7 strategies is 84
+comparisons, so treat any t near 2 as noise.
 
 ## 4. Per-symbol cost model replacing the flat 15 bps
 The flat assumption is simultaneously too harsh for BTC/ETH (~10–11 bps all-in

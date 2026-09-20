@@ -26,22 +26,26 @@ strategy demoted to zero slots would never produce evidence again. Since
 answers (below), and it is what makes free evaluation of a demoted strategy
 possible.
 
-## Findings — 14 days to 2026-09-20, 5 281 signals (997 filled), 30 control draws
+## Findings — 14 days to 2026-09-20, 5 277 signals, both nulls
 
-| strategy | n | filled | gross bps | control bps | edge | t |
-|---|---|---|---|---|---|---|
-| **momentum_xs / crypto** | 796 | 78 | +34.4 | +3.6 | **+30.8** | **5.24** |
-| bist_news_event / bist | 33 | 3 | +4.0 | −20.5 | +24.4 | 7.10 |
-| oi_breakout / crypto | 459 | 94 | +7.6 | +2.9 | +4.7 | 0.79 |
-| funding_reversion / crypto | 799 | 54 | +5.4 | +2.4 | +3.0 | 1.24 |
-| oi_delta / crypto | 720 | 304 | +2.7 | +1.4 | +1.3 | 0.34 |
-| grid / crypto | 800 | 204 | −1.1 | −0.4 | −0.7 | −0.31 |
-| dca / crypto | 761 | 96 | −2.6 | +0.1 | −2.7 | −1.20 |
-| matrix_agent / us | 48 | 23 | −12.1 | −1.1 | −10.9 | −1.45 |
+Each strategy is tested against two nulls: random entry time with the same
+side, and random side at the same moment. A strategy that beats neither has no
+measured reason to hold capital.
+
+| strategy | n | vs random time | t | vs random side | t |
+|---|---|---|---|---|---|
+| **momentum_xs / crypto** | 799 | **+31.2** | **5.25** | **+33.0** | **5.55** |
+| bist_news_event / bist | 33 | +21.1 | 5.39 | +10.6 | 4.04 |
+| oi_breakout / crypto | 459 | +5.6 | 0.93 | **−14.9** | −2.46 |
+| oi_delta / crypto | 723 | +4.2 | 1.11 | −5.2 | −1.38 |
+| grid / crypto | 800 | +2.7 | 1.25 | +2.5 | 1.15 |
+| funding_reversion / crypto | 799 | +1.2 | 0.49 | −2.1 | −0.84 |
+| dca / crypto | 761 | −2.7 | −1.21 | **−5.8** | −2.56 |
+| matrix_agent / us | 48 | −10.9 | −1.43 | −13.6 | −1.78 |
 
 ## Claims
 - **`momentum_xs` has the strongest signal in the book** (+36.0 bps over random
-  entry, t=6.04, n=799) — and its *fills* were the worst thing in the book
+  — and its *fills* were the worst thing in the book
   (−35.8 bps measured on 2026-09-19 against the same control). The signal was
   real; what reached capital was not.
 - **The destroyer is fill latency, and it is measured.** Average fill happened
@@ -55,8 +59,9 @@ possible.
   `oi_delta` looked like the one edge (+19.4 bps on fills) because its fill
   rate was 42 % and its horizon short; on the full signal set it is +1.3 bps
   (t=0.34). Do not size on fill-sampled edge.
-- **Still true: `grid` and `dca` have no signal** (−0.7 and −2.7 bps), and they
-  plus `funding_reversion` produce most of the volume. Volume without edge is
+- **`oi_breakout` and `dca` pick direction worse than a coin flip**
+  (−14.9 t=−2.46, −5.8 t=−2.56): inverted, not mistuned. `grid` and
+  `funding_reversion` beat neither null and produce most of the volume. Volume without edge is
   the cost engine described in [[pnl-reality]].
 - **Multiple testing is corrected, not hand-waved.** Since 2026-09-20 the
   report applies Benjamini-Hochberg at FDR 5 % across all 13 simultaneous

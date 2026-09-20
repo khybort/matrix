@@ -10,6 +10,12 @@ response to a measured failure, never as decoration), and what is queued.
 
 ## Applied
 
+- **Drift-controlled measurement, everywhere.** Every study compares a signal
+  against what a random entry in the same symbol and period would have earned.
+  Without it, a rising tape makes every long look like alpha — the first
+  horizon profile showed `funding_reversion` "+232 bps at 90 minutes" purely
+  from market drift.
+
 - **Two-null permutation test** — [[edge-study]]. A strategy is compared
   against itself with (a) random entry times, same side, and (b) random side,
   same moment. Only both together separate "knows when" from "knows which way";
