@@ -31,11 +31,14 @@ both means. The report prints it so net can be read off.
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 import random
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+
+from pathlib import Path
 
 from loguru import logger
 
@@ -471,6 +474,16 @@ def format_report(rows: list[dict], *, days: float, cost_bps: float) -> str:
 # ---------------------------------------------------------------- cached gate
 
 _EDGE_TTL_S = float(os.environ.get("MATRIX_EDGE_CACHE_TTL_S", "21600"))  # 6 h
+# Persisted next to the other measured models. Without this the cache dies with
+# the process, `strategy_edge` answers None for the first minutes after every
+# restart, and the slot scorer reads "no measured edge" as "no edge" — on
+# 2026-09-20 that demoted momentum_xs from 7 slots to 3 within seconds of a
+# reload, the one strategy whose edge is confirmed. Wall-clock timestamps, not
+# monotonic, because the whole point is to outlive the process.
+_CACHE_PATH = Path(
+    os.environ.get("MATRIX_MODEL_DIR") or "/var/lib/matrix/models"
+) / "edge_cache.json"
+_loaded_from_disk = False
 _edge_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
 # Keys whose refresh is already in flight, so a 5-second trading loop cannot
 # queue thirteen concurrent studies while the first one is still running.
@@ -492,10 +505,54 @@ def _gate() -> asyncio.Semaphore:
 
 
 def clear_cache() -> None:
-    global _refresh_gate
+    global _refresh_gate, _loaded_from_disk
     _edge_cache.clear()
     _refreshing.clear()
     _refresh_gate = None
+    _loaded_from_disk = True  # tests own the cache; do not re-read the disk
+
+
+def _load_disk_cache() -> None:
+    global _loaded_from_disk
+    if _loaded_from_disk:
+        return
+    _loaded_from_disk = True
+    try:
+        raw = json.loads(_CACHE_PATH.read_text())
+    except FileNotFoundError:
+        return
+    except Exception as e:  # noqa: BLE001 — a corrupt cache is not worth a crash
+        logger.warning(f"edge cache unreadable ({e}); starting cold")
+        return
+    now = _wall()
+    for key, entry in raw.items():
+        sid, _, market = key.partition("|")
+        at = float(entry.get("at") or 0.0)
+        if not sid or not market or now - at >= _EDGE_TTL_S:
+            continue
+        _edge_cache[(sid, market)] = (at, entry.get("row"))
+    if _edge_cache:
+        logger.info(f"edge cache: {len(_edge_cache)} row(s) restored from disk")
+
+
+def _save_disk_cache() -> None:
+    try:
+        _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            f"{sid}|{market}": {"at": at, "row": row}
+            for (sid, market), (at, row) in _edge_cache.items()
+        }
+        tmp = _CACHE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload))
+        tmp.replace(_CACHE_PATH)
+    except Exception as e:  # noqa: BLE001 — persistence is a convenience
+        logger.debug(f"edge cache not saved ({e})")
+
+
+def _wall() -> float:
+    import time as _t
+
+    return _t.time()
 
 
 def verdict(row: dict | None, *, cost_bps: float, min_t: float = 2.0) -> str:
@@ -540,9 +597,10 @@ async def strategy_edge(strategy_id: str, asset_class: str, *, days: float = 14.
     returns None on any failure so a caller never blocks on this."""
     import time as _time
 
+    _load_disk_cache()
     key = (strategy_id, asset_class)
     hit = _edge_cache.get(key)
-    now = _time.monotonic()
+    now = _wall()
     if hit and now - hit[0] < _EDGE_TTL_S:
         return hit[1]
 
@@ -577,9 +635,10 @@ async def _run_refresh(key: tuple[str, str], days: float) -> None:
     try:
         rows = await run_edge_study(days=days, strategy_id=strategy_id)
         row = next((r for r in rows if r["market"] == asset_class), None)
-        _edge_cache[key] = (_time.monotonic(), row)
+        _edge_cache[key] = (_wall(), row)
+        _save_disk_cache()
     except Exception as e:  # noqa: BLE001 — advisory: never break the caller
         logger.debug(f"edge study for {strategy_id}/{asset_class} failed ({e})")
         # Back off by caching the miss, so a permanently failing study does not
         # respawn a task on every tick.
-        _edge_cache[key] = (_time.monotonic(), _edge_cache.get(key, (0.0, None))[1])
+        _edge_cache[key] = (_wall(), _edge_cache.get(key, (0.0, None))[1])

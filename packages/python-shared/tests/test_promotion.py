@@ -328,3 +328,57 @@ def test_an_unprovable_strategy_does_not_earn_capital():
 
     row = _verdict_row("unprovable")
     assert verdict(row, cost_bps=12.0) == "unproven"
+
+
+@pytest.mark.asyncio
+async def test_the_edge_cache_survives_a_restart(monkeypatch, tmp_path):
+    """A process restart used to blank the measured edge, so `strategy_edge`
+    answered None for minutes and the slot scorer read "no measurement" as "no
+    edge" — demoting momentum_xs from 7 slots to 3 seconds after a reload, the
+    one strategy whose edge is confirmed."""
+    import asyncio
+
+    from matrix_shared import edge_study as E
+
+    monkeypatch.setattr(E, "_CACHE_PATH", tmp_path / "edge_cache.json")
+    E.clear_cache()
+    E._loaded_from_disk = False
+
+    async def study(*, days, strategy_id=None):
+        return [{"market": "crypto", "strategy": strategy_id, "n": 1989, "edge_bps": 29.7}]
+
+    monkeypatch.setattr(E, "run_edge_study", study)
+    await E.strategy_edge("momentum_xs", "crypto")
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if not E._refreshing:
+            break
+    assert (tmp_path / "edge_cache.json").exists()
+
+    # Simulate the restart: in-memory state gone, disk intact.
+    E._edge_cache.clear()
+    E._refreshing.clear()
+    E._loaded_from_disk = False
+    row = await E.strategy_edge("momentum_xs", "crypto")
+    assert row is not None and row["n"] == 1989
+
+    E.clear_cache()
+
+
+@pytest.mark.asyncio
+async def test_a_stale_disk_cache_is_ignored(monkeypatch, tmp_path):
+    import json
+    import time
+
+    from matrix_shared import edge_study as E
+
+    path = tmp_path / "edge_cache.json"
+    path.write_text(json.dumps({
+        "momentum_xs|crypto": {"at": time.time() - E._EDGE_TTL_S - 60, "row": {"n": 1}}
+    }))
+    monkeypatch.setattr(E, "_CACHE_PATH", path)
+    E.clear_cache()
+    E._loaded_from_disk = False
+    E._load_disk_cache()
+    assert ("momentum_xs", "crypto") not in E._edge_cache
+    E.clear_cache()
