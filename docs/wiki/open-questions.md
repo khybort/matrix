@@ -9,12 +9,14 @@ how much the answer would change.
 
 ## Claims
 - ~~Does any signal in the book have edge before costs?~~ **Answered
-  2026-09-19** by [[edge-study]]: one does (`oi_delta`, +19.4 bps vs random,
-  t=2.90), two are significantly worse than random, and the two highest-volume
-  strategies have gross ≈ 0. The follow-up question is now: **does `oi_delta`'s
-  edge hold out of sample, and can the book be rebuilt around it?**
+  2026-09-20** by [[edge-study]] on all signals rather than fills:
+  `momentum_xs` beats random entry by +36 bps (t=6.04, n=799); `grid`, `dca`
+  and `funding_reversion` have none. The live question is now: **does that edge
+  reach the wallet now that stale fills are blocked?** Same signal, same costs,
+  only the latency removed — the first falsifiable profit hypothesis.
 - **Is the horizon wrong, or the entry?** 57 % of exits are horizon exits at
-  roughly minus cost. *Test*: for closed trades, measure max favourable and
+  roughly minus cost — though part of that was fills arriving with only half
+  the horizon left, which is now fixed. *Test*: for closed trades, measure max favourable and
   adverse excursion within the horizon. If MFE frequently exceeds the TP
   distance, the problem is exit timing; if not, the entry has no predictive
   content.

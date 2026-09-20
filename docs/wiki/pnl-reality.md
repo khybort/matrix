@@ -1,6 +1,6 @@
 ---
 title: PnL reality — why it loses money
-updated: 2026-09-19
+updated: 2026-09-20
 sources: ["db: outcomes ⋈ predictions, 30d window to 2026-09-19", "packages/python-shared/src/matrix_shared/trading.py", "db: wallets"]
 status: current
 ---
@@ -40,11 +40,14 @@ The honest state of the only thing that matters. Measured, not modelled.
   (crypto taker 5.5 + slippage 2, per side; `trading.execution_cost_bps`).
   Gross drift on those trades is ≈ 0: the system is paying the spread to learn
   nothing.
-- **One strategy does have measurable entry edge.** The controlled study in
-  [[edge-study]] (2026-09-19) puts `oi_delta`'s entries +19.4 bps above random
-  entries on the same symbols and brackets (t=2.90, n=274), clearing the 15 bps
-  round trip; `momentum_xs` and `dca` are significantly *worse* than random.
-  `funding_reversion` and `grid` — two thirds of all trades — have gross ≈ 0.
+- **Part of the loss was self-inflicted, and it is now fixed.** Measured
+  2026-09-20 ([[edge-study]]): `momentum_xs`'s *signals* beat random entry by
+  +36.0 bps (t=6.04, n=799) while its *fills* came in at −35.8 bps, because the
+  average fill landed 53 % into the horizon. Across the book fills were
+  20–53 % late. The freshness gate in [[paper-engine]] closes that gap; whether
+  it turns into profit is the open test.
+- **`grid`, `dca` and `funding_reversion` still have no signal** (−0.7, −2.7,
+  +3.0 bps vs random) and produce most of the volume — the cost engine.
 - **Therefore: with one exception, no strategy in the book has demonstrated edge after costs.**
   The system is not losing because of a leak or a mis-parameterisation; it is
   losing because its signals are, so far, indistinguishable from noise once

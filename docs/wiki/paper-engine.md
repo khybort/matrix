@@ -1,6 +1,6 @@
 ---
 title: Paper engine
-updated: 2026-09-19
+updated: 2026-09-20
 sources: [services/backtest/src/backtest/paper_trade.py, packages/python-shared/src/matrix_shared/allocation.py]
 status: current
 ---
@@ -16,6 +16,15 @@ bugs corrupt every downstream conclusion.
   ordered by confidence and recency, then re-ranked by expected value
   (`allocation.expected_value`: confidence × tp − (1−confidence) × sl, scaled by
   symbol edge, strategy perf and pair edge).
+- **Freshness gate (2026-09-20)**: a candidate more than
+  `MATRIX_MAX_SIGNAL_AGE_FRAC` (20 %) into its own horizon is not opened, with
+  an absolute floor of `MATRIX_MIN_SIGNAL_WINDOW_S` (45 s) so short-horizon
+  signals stay fillable; EV additionally decays by the elapsed fraction so a
+  stale candidate cannot outrank a fresh one. Before this, queued predictions
+  competed until `close_by` and the average fill landed 20–53 % into the
+  horizon — the single largest measured value destroyer in the system
+  ([[edge-study]]). Refused candidates still earn a virtual outcome, so the
+  evidence is kept for free.
 - **Two slot layers**: wallet-level `max_concurrent_positions`, and per-strategy
   `allocated_slots` from `strategy_slot_configs`. The shadow pass borrows the
   champion's slot rows, so a challenger runs under the same capital discipline.
