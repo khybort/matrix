@@ -117,6 +117,39 @@ def build_registry(state: TickState) -> ToolRegistry:
             return _error(str(e))
         return _text([dict(r) for r in rows])
 
+    @tool("quant_research",
+          "EXPENSIVE (10-60s), call at most once per tick and only when you intend to act on it. "
+          "Runs one of the controlled studies over the recent window and returns its rows. "
+          "kind='edge': does each strategy's entry timing beat random entry on the same symbols, "
+          "sides and barriers (Benjamini-Hochberg corrected across strategies)? "
+          "kind='barrier': where do the take-profits sit in units of horizon volatility, and which "
+          "multiple would have maximised net PnL? kind='meta': would a second model that decides "
+          "whether to act on each signal add anything out of sample? "
+          "Use these to judge whether a losing strategy lacks signal (retire it) or is losing to "
+          "geometry/execution (file a dev task).",
+          {"kind": str, "days": float})
+    async def quant_research(args: dict) -> dict:
+        kind = str(args.get("kind", "edge")).strip().lower()
+        days = float(args.get("days") or 14.0)
+        try:
+            if kind == "edge":
+                from matrix_shared.edge_study import run_edge_study
+
+                rows = await run_edge_study(days=days)
+            elif kind == "barrier":
+                from matrix_shared.barrier_study import run_barrier_study
+
+                rows = await run_barrier_study(days=days)
+            elif kind == "meta":
+                from matrix_shared.meta_label import run_meta_study
+
+                rows = await run_meta_study(days=days)
+            else:
+                return _error(f"unknown kind {kind!r}; use edge | barrier | meta")
+        except Exception as e:  # noqa: BLE001
+            return _error(f"{kind} study failed: {e}")
+        return _text({"kind": kind, "days": days, "rows": rows})
+
     @tool("dev_tasks_report",
           "dev_agent queue: pending / running / awaiting_review / recent failed tasks with reasons.", {})
     async def dev_tasks_report(_args: dict) -> dict:
@@ -229,6 +262,7 @@ def build_registry(state: TickState) -> ToolRegistry:
         return _text({"revoked": True})
 
     for t in (system_digest, strategy_pnl, efficacy_report, dev_tasks_report, active_lessons,
+              quant_research,
               file_dev_task, retire_strategy, revoke_certificate):
         reg.add(t)
     return reg

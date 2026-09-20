@@ -40,6 +40,13 @@ SYSTEM_PROMPT = (
     "   - `retire_strategy` for a persistent loser (negative 7d and 24h, n >= 100, no pending "
     "challenger) that already had mutations rolled back.\n"
     "   - `revoke_certificate` when a certified version is losing money now.\n"
+    "   - `quant_research` when a strategy's PnL alone cannot tell you WHY it loses. A losing "
+    "strategy whose entries beat random entry is losing to costs, geometry or execution — fix "
+    "those, do not retire it. One whose entries do not beat random has no signal, and no amount "
+    "of tuning will help. Prefer `edge`; use `barrier` when time exits dominate, `meta` when you "
+    "suspect the problem is which signals get filled rather than the signals themselves. "
+    "Statistical honesty: a result that does not survive the report's own multiple-testing "
+    "correction is not a result.\n"
     "3. Finish with a plain-text brief (<= 12 lines) for the operator: state of the system, what "
     "you did and why, what you are watching. No JSON, no markdown tables.\n"
 )

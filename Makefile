@@ -416,6 +416,11 @@ edge-report: ## Entry-timing edge vs random entry, per strategy: make edge-repor
 	$(DC) $(DC_DEV) exec -T backtest uv run --no-sync python /workspace/scripts/edge_report.py \
 		--days $(or $(DAYS),14) $(if $(STRATEGY),--strategy $(STRATEGY),) $(if $(DRAWS),--draws $(DRAWS),)
 
+.PHONY: meta-report
+meta-report: ## Meta-labeling: does a second model improve which signals we act on?
+	$(DC) $(DC_DEV) exec -T backtest uv run --no-sync python /workspace/scripts/meta_report.py \
+		--days $(or $(DAYS),14) $(if $(STRATEGY),--strategy $(STRATEGY),)
+
 .PHONY: barrier-report
 barrier-report: ## Volatility-scaled (triple-barrier) TP/SL vs the fixed ones: make barrier-report [DAYS=14]
 	$(DC) $(DC_DEV) exec -T backtest uv run --no-sync python /workspace/scripts/barrier_report.py \

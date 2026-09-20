@@ -46,10 +46,13 @@ def test_tool_belt_side_effects_are_declared():
     effects = {t.name: t.side_effect for t in reg.all()}
     assert effects == {
         "system_digest": "read", "strategy_pnl": "read", "efficacy_report": "read",
-        "dev_tasks_report": "read", "active_lessons": "read",
+        "dev_tasks_report": "read", "active_lessons": "read", "quant_research": "read",
         "file_dev_task": "write", "retire_strategy": "write",
         "revoke_certificate": "risk-gated",
     }
+    # The research tools are read-only by construction: they replay history in
+    # memory and must never reach capital.
+    assert effects["quant_research"] == "read"
     # Nothing in the belt can grant, enable or size anything.
     for name in effects:
         assert "grant" not in name and "enable" not in name and "wallet" not in name

@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-09-20 — Meta-labeling uygulandı ve ÖLÇÜLDÜ: bu kitapta işe yaramıyor
+- `matrix_shared/meta_label.py` + `make meta-report`: birincil model yönü, ikincil model *bu sinyale girilsin mi* sorusunu cevaplar (López de Prado). Etiketler triple-barrier'dan (dolum gerekmez), feature'lar prediction'ın kendi snapshot'ından; L2 lojistik regresyon, zaman sıralı bölme + bir ufukluk embargo, eşik YALNIZ train dağılımından.
+- Sonuç (14 g, örneklem dışı): AUC 0.43–0.54, en iyi lift +2.9 bps. Yani mevcut feature'lar hangi sinyalin tutacağını bilmiyor. `momentum_xs` ve `oi_breakout` için lift negatif. Model diske yazma barı sıkıldı (lift ≥ 5 bps ve AUC ≥ 0.55); ilk koşuda kaydedilen 3 gürültü modeli silindi. Sermaye kapısına BAĞLANMADI — kanıt yok.
+- Director'a `quant_research` (edge | barrier | meta) read-only tool'u eklendi: saatlik ajan artık "neden kaybediyor" sorusunu PnL'e bakarak değil kontrollü çalışmayla cevaplayıp ona göre dev task açabiliyor / stratejiyi emekli edebiliyor.
+
 ## 2026-09-20 — Çoklu test düzeltmesi (Benjamini-Hochberg) edge raporuna eklendi
 - 13 stratejiyi aynı anda test etmek, düzeltmesiz %5 eşikte her koşuda ~1 sahte keşif demek (Bailey & López de Prado, Deflated Sharpe). Edge raporu artık iki yanlı p hesaplıyor ve FDR %5'te BH uyguluyor: **13'ten 2'si** hayatta kalıyor — `momentum_xs` (p<0.0001, edge +30.8 bps) ve `bist_news_event` (n=33, sermaye ayırmak için çok ince). Yani kitapta gerçekten kanıtlanmış tek edge momentum_xs.
 
