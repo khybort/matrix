@@ -34,18 +34,22 @@ how much the answer would change.
 - **Should BIST and US be running at all right now?** They add surface area,
   cost and attention while crypto has no edge. The argument for keeping them is
   regime diversification; there is no evidence yet either way.
-- **Why does one Telegram poller conflict with itself?** `notify` logs
-  `Conflict: terminated by other getUpdates request` every 40–140 s. Ruled out
-  on 2026-09-20: no second container (one `matrix-notify`, restart count 0), no
-  host process, no webhook, no other poller in the repo (only `notify.main`
-  calls `start_polling`; `director` merely sends), and — decisively — nine
-  consecutive long polls with the container stopped never returned 409, so no
-  external competitor exists. Widening the long poll from 10 s to 30 s with a
-  40 s read timeout cut request churn threefold but did not stop the conflicts.
-  Whatever is racing is inside a single process with a single updater. The bot
-  itself answers commands throughout, so this is noise rather than an outage —
-  but it is unexplained noise on the one channel that is supposed to tell us
-  the system has stopped.
+- **Someone else holds this bot token.** ~~Why does one Telegram poller
+  conflict with itself?~~ — answered 2026-09-20, and the answer is that it
+  never was conflicting with itself. Measured from three vantage points with
+  every local consumer stopped: a lone traced poller inside the container took
+  3 conflicts in 240 s while its own in-flight request count never exceeded 1;
+  plain host-side long polls returned 409 on 2 of 8; and no running container
+  or host process held the token. Telegram hands each update to exactly one
+  `getUpdates` caller, so the other consumer is not merely noisy — it can
+  **receive the operator's commands instead of us**, and sending still works,
+  which is why nothing looked broken. The token was created and pasted on
+  2026-09-20; treat it as leaked. *Remedy, operator-only:* `/revoke` in
+  BotFather, then `scripts/rotate_telegram_token.sh` (validates with getMe,
+  writes `.env` without echoing, recreates notify, and reports whether the new
+  token is clean). Until then `notify` counts conflicts, logs one line each
+  instead of a traceback, and pushes an urgent alert hourly.
+
 - **Uncommitted, live, and mine to land later:** the EV floor lets a
   *measured* edge outrank the model's own `confidence x tp_pct` estimate. The
   floor was rejecting 174 of 178 candidates an hour (2026-09-20), every

@@ -48,3 +48,32 @@ dominant failure mode here, and the reason liveness is measured by output age
   284 M-row index every minute; Director filed tasks into the wrong database
   tier; phantom slot rows diluted every real strategy's share to 3 slots
   instead of 8.
+
+## 2026-09-20 — The bot token was never ours alone
+
+**Symptom:** `notify` logged `Conflict: terminated by other getUpdates request`
+every 40–140 s with a full traceback, from the day the token was installed.
+
+**What it looked like:** a second copy of our own bot — a stale container, a
+leftover debug script, a restart overlap. All three were checked and none held.
+Widening the long poll from 10 s to 30 s cut request churn threefold and
+changed nothing.
+
+**How it was settled:** instrument, don't theorise. A traced poller run alone
+in the notify image logged every `get_updates` call's start and end: its own
+in-flight count never exceeded 1, yet it took 3 conflicts in 240 s. Host-side
+`curl` long polls, with every container stopped, returned 409 on 2 of 8. An
+inventory of every running container's environment found no other holder. Three
+independent vantage points, one conclusion: the competitor is outside this
+machine.
+
+**Why it mattered more than the noise:** Telegram delivers each update to
+exactly one `getUpdates` caller. A competing consumer takes the operator's
+commands, and because *sending* is unaffected, alerts kept arriving and nothing
+looked wrong. This is the same failure shape as the three-day outage — the
+channel that reports health was itself impaired, silently.
+
+**Fix:** conflicts are counted and collapsed to one line, an urgent alert goes
+out hourly over the path that still works, and `scripts/rotate_telegram_token.sh`
+makes the swap a single command once BotFather has issued a new token. The
+rotation itself is operator-only and still pending. See [[open-questions]].
