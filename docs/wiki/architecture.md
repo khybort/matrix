@@ -33,3 +33,23 @@ data; they meet in Postgres.
 - **The LLM is a component, not the system.** Rule models produce a verdict
   independently; the model's verdict is blended with it ([[strategies]]), and
   every LLM path degrades to rules when the backend is down ([[llm-stack]]).
+
+## Where measured models live
+
+Three files are measured once and read by several services: `symbol_costs.json`
+(per-symbol execution cost), `edge_cache.json` (the controlled study's answers),
+and `edge_registry.json` (pre-registered sample-size targets). All three resolve
+through `matrix_shared.model_store.model_dir()` and nowhere else.
+
+The directory is `~/.claude/matrix_models`, which rides the
+`matrix_claude_config` volume mounted at `/root/.claude` in eleven services.
+`MATRIX_MODEL_DIR` overrides it.
+
+The single resolver exists because on 2026-09-20 two of the three resolved to
+`/var/lib/matrix/models`, which is **not a volume**: each container had its own
+copy. `reflection` could not see the edge cache, so after every restart it read
+"no measurement" as "no edge" and demoted the strategy with the only confirmed
+edge; and the pre-registration registry, whose sole guarantee is that a target
+is written once and never moves, was being written once *per container*. See
+[[incidents]]. Anything new that is measured once and read twice belongs here
+too — never a fresh path.

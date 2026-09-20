@@ -135,3 +135,33 @@ of — visible as two concurrent prune statements from the same client address,
 with a shutdown traceback in the connection pool. Editing anything under
 `packages/python-shared/src` restarts that container, so a working session
 quietly stacks orphaned backends against the table it is trying to drain.
+
+## 2026-09-20 — Measured models that never reached the services reading them
+
+**Symptom:** `momentum_xs` dropped from 7 slots to 3 within seconds of a
+container reload, right after the same pass had promoted it on a confirmed
++29.7 bps edge.
+
+**First cause, and mine:** the edge study cache lived only in the process, so
+`strategy_edge` answered `None` for minutes after every restart, and the slot
+scorer treated "no answer" as "no edge". Fixed by persisting the cache and by
+teaching the scorer that `unknown` is not `unproven` — an allocation evidence
+already bought is held while the study is merely silent, though a realised
+loser is still demoted, because that branch stands on its own evidence.
+
+**Second cause, larger:** persisting it did not help, because the file went to
+`/var/lib/matrix/models`, which is not a volume. Each container had a private
+copy. `symbol_costs` had resolved to `~/.claude/matrix_models` — the shared
+`matrix_claude_config` volume — and the two modules written later simply picked
+a different default. The live registry had `momentum_xs` registered at 936 in
+one container and absent in another, which quietly voids the one guarantee a
+pre-registration makes.
+
+**Fix:** `matrix_shared.model_store` resolves the path, every model uses it, a
+test asserts all three land in one directory under three distinct names, and
+the existing registries were merged by earliest registration.
+
+**The lesson:** a constant that is duplicated will diverge, and the duplicate
+that matters is the one nobody reads twice. Both failures here were invisible
+from inside a single container: everything wrote successfully, every log line
+said so, and the file simply was not the same file.
