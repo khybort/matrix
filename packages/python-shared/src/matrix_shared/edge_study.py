@@ -93,6 +93,42 @@ def simulate_bracket(
     return SimResult("hit_horizon", (raw if long else -raw) * _BPS, last - entry_idx)
 
 
+def _norm_sf(t: float) -> float:
+    """Upper-tail probability of the standard normal (two-sided p = 2·sf(|t|)).
+    n is in the hundreds here, so the normal approximation to Student's t is
+    accurate and avoids a scipy dependency."""
+    return 0.5 * math.erfc(abs(t) / math.sqrt(2.0))
+
+
+def two_sided_p(t: float) -> float:
+    return min(1.0, 2.0 * _norm_sf(t))
+
+
+def benjamini_hochberg(pvalues: list[float], q: float = 0.05) -> list[bool]:
+    """Which hypotheses survive at false-discovery rate `q`.
+
+    Thirteen strategies are compared at once, so an uncorrected 5% threshold
+    expects roughly one false discovery every run — exactly the mechanism
+    behind published backtests that never repeat (Bailey & López de Prado,
+    "The Deflated Sharpe Ratio"). BH controls the expected share of false
+    positives among the ones we act on, which is the quantity that matters
+    when the action is "allocate capital".
+    """
+    n = len(pvalues)
+    if n == 0:
+        return []
+    order = sorted(range(n), key=lambda i: pvalues[i])
+    keep = [False] * n
+    cutoff = -1
+    for rank, i in enumerate(order, start=1):
+        if pvalues[i] <= q * rank / n:
+            cutoff = rank
+    for rank, i in enumerate(order, start=1):
+        if rank <= cutoff:
+            keep[i] = True
+    return keep
+
+
 def welch(a: list[float], b: list[float]) -> tuple[float, float, float]:
     """(mean difference a−b, standard error, t statistic) for unequal variances."""
     if len(a) < 2 or len(b) < 2:
@@ -130,6 +166,8 @@ class StrategyEdge:
             "control_bps": round(c_mean, 2),
             "edge_bps": round(diff, 2),
             "t": round(t, 2),
+            "p": round(two_sided_p(t), 5),
+            # provisional; run_edge_study replaces it with the FDR-corrected call
             "significant": abs(t) >= 1.96 and self.n >= MIN_TRADES,
             "realised_net_bps": round(self.realised_net_bps, 2),
             "sim_tp_rate": round(self.tp_rate, 3),
@@ -266,6 +304,14 @@ async def run_edge_study(
         if e.n:
             e.tp_rate /= e.n
         rows.append(e.as_row())
+    # Multiple-testing correction across every strategy tested in this run.
+    testable = [r for r in rows if r["n"] >= MIN_TRADES]
+    keep = benjamini_hochberg([r["p"] for r in testable])
+    for r, k in zip(testable, keep):
+        r["significant"] = bool(k)
+    for r in rows:
+        if r["n"] < MIN_TRADES:
+            r["significant"] = False
     rows.sort(key=lambda r: r["edge_bps"], reverse=True)
     if skipped:
         logger.info(f"edge study: {skipped} prediction(s) skipped (no bar coverage)")
@@ -279,7 +325,7 @@ def format_report(rows: list[dict], *, days: float, cost_bps: float) -> str:
         f"Entry-timing edge vs random entry — last {days:g}d, "
         f"{sum(r['n'] for r in rows)} signals ({sum(r['n_filled'] for r in rows)} filled), "
         f"round-trip cost {cost_bps:g} bps\n"
-        f"{'strategy':<24}{'mkt':<8}{'n':>7}{'fill':>6}{'gross':>9}{'control':>9}{'edge':>8}{'t':>7}  sig\n"
+        f"{'strategy':<24}{'mkt':<8}{'n':>7}{'fill':>6}{'gross':>9}{'control':>9}{'edge':>8}{'t':>7}  FDR\n"
     )
     lines = [
         f"{r['strategy']:<24}{r['market']:<8}{r['n']:>7}{r['n_filled']:>6}{r['gross_bps']:>9.1f}"
@@ -290,10 +336,13 @@ def format_report(rows: list[dict], *, days: float, cost_bps: float) -> str:
     tail = ""
     if total_t:
         best = max(total_t, key=lambda r: r["edge_bps"])
+        n_sig = sum(1 for r in rows if r["significant"])
         tail = (
             f"\nbest: {best['strategy']}/{best['market']} edge {best['edge_bps']:+.1f} bps "
-            f"(t={best['t']:.2f}, n={best['n']}). "
-            f"An edge must exceed {cost_bps:g} bps to pay for itself."
+            f"(t={best['t']:.2f}, p={best['p']:.4f}, n={best['n']}). "
+            f"{n_sig}/{len(total_t)} survive Benjamini-Hochberg at FDR 5% across "
+            f"{len(total_t)} simultaneous tests. An edge must also exceed "
+            f"{cost_bps:g} bps to pay for itself."
         )
     return head + "\n".join(lines) + tail
 

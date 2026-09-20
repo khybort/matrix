@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-09-20 — Çoklu test düzeltmesi (Benjamini-Hochberg) edge raporuna eklendi
+- 13 stratejiyi aynı anda test etmek, düzeltmesiz %5 eşikte her koşuda ~1 sahte keşif demek (Bailey & López de Prado, Deflated Sharpe). Edge raporu artık iki yanlı p hesaplıyor ve FDR %5'te BH uyguluyor: **13'ten 2'si** hayatta kalıyor — `momentum_xs` (p<0.0001, edge +30.8 bps) ve `bist_news_event` (n=33, sermaye ayırmak için çok ince). Yani kitapta gerçekten kanıtlanmış tek edge momentum_xs.
+
 ## 2026-09-20 — Vol-ölçekli triple barrier (López de Prado) uygulandı
 - `make barrier-report`: her geçmiş sinyal, bareler m·σ_h olacak şekilde yeniden oynatılır (σ_h = 1m getirilerin std'si × √ufuk). Ölçüm: mevcut take-profit'ler ufuk volatilitesinin **8.8σ** (grid), 6.8σ (matrix_agent/crypto), 6.3σ (matrix_agent/us), 5.6σ (bist_volume_breakout) uzağında — yani ufuk içinde ulaşılamaz. Çıkışların %57'sinin "hit_horizon ≈ eksi maliyet" olmasının sebebi bu.
 - Sweep sonucu (14 g, maliyet düşülmüş net bps): `oi_breakout` −6.7 → **+14.1** (m=1.5), `momentum_xs` +15.7 → **+26.9** (m=3), `bist_intraday_reversion` −6.1 → +5.1, `funding_reversion` −12.8 → −2.2. `grid`/`dca`/`oi_delta`/`matrix_agent` hiçbir m'de pozitif değil — bare geometrisi sinyalsizliği kurtarmıyor.

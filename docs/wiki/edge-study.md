@@ -30,7 +30,7 @@ possible.
 
 | strategy | n | filled | gross bps | control bps | edge | t |
 |---|---|---|---|---|---|---|
-| **momentum_xs / crypto** | 799 | 82 | +39.6 | +3.6 | **+36.0** | **6.04** |
+| **momentum_xs / crypto** | 796 | 78 | +34.4 | +3.6 | **+30.8** | **5.24** |
 | bist_news_event / bist | 33 | 3 | +4.0 | −20.5 | +24.4 | 7.10 |
 | oi_breakout / crypto | 459 | 94 | +7.6 | +2.9 | +4.7 | 0.79 |
 | funding_reversion / crypto | 799 | 54 | +5.4 | +2.4 | +3.0 | 1.24 |
@@ -58,10 +58,14 @@ possible.
 - **Still true: `grid` and `dca` have no signal** (−0.7 and −2.7 bps), and they
   plus `funding_reversion` produce most of the volume. Volume without edge is
   the cost engine described in [[pnl-reality]].
-- **Caveats.** 13 comparisons, so |t| ≈ 2.9 is the multiplicity-safe bar —
-  momentum_xs clears it comfortably, bist_news_event does not (n=33). Controls
-  are drawn from the same period, so market drift appears in both arms. The
-  simulator enters at a 1m bar close.
+- **Multiple testing is corrected, not hand-waved.** Since 2026-09-20 the
+  report applies Benjamini-Hochberg at FDR 5 % across all 13 simultaneous
+  comparisons: **2 of 13 survive** — `momentum_xs` (p<0.0001) and
+  `bist_news_event`, the latter on n=33, which is too thin to allocate against.
+  See [[methods]].
+- **Remaining caveats.** Controls are drawn from the same period, so market
+  drift appears in both arms. The simulator enters at a 1m bar close and does
+  not model slippage beyond the flat cost assumption.
 
 ## How it is used
 `make edge-report [DAYS=14] [STRATEGY=x] [DRAWS=20]` prints the table. The slot

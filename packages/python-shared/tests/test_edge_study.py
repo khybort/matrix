@@ -108,3 +108,26 @@ def test_subsample_spans_the_window_and_preserves_order():
     assert [g["i"] for g in got] == sorted(g["i"] for g in got)
     assert subsample(items, 0) is items                      # disabled
     assert subsample(items[:5], 10) == items[:5]             # smaller than cap
+
+
+def test_two_sided_p_matches_known_normal_quantiles():
+    from matrix_shared.edge_study import two_sided_p
+
+    assert abs(two_sided_p(1.96) - 0.05) < 0.002
+    assert abs(two_sided_p(2.576) - 0.01) < 0.002
+    assert two_sided_p(0.0) == 1.0
+    assert two_sided_p(-6.0) < 1e-8          # sign does not matter
+
+
+def test_benjamini_hochberg_controls_the_false_discovery_rate():
+    from matrix_shared.edge_study import benjamini_hochberg
+
+    # one strong signal among noise survives; the marginal ones do not
+    ps = [0.0001, 0.20, 0.35, 0.60, 0.04]
+    keep = benjamini_hochberg(ps, q=0.05)
+    assert keep[0] is True and keep[4] is False and not any(keep[1:4])
+    # several genuinely small p-values all survive
+    assert benjamini_hochberg([0.001, 0.002, 0.003], q=0.05) == [True, True, True]
+    # nothing survives when everything is noise
+    assert benjamini_hochberg([0.4, 0.5, 0.9], q=0.05) == [False, False, False]
+    assert benjamini_hochberg([]) == []
