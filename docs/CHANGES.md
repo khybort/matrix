@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-09-20 — Post-only giriş testi: genel kazanç var ama EDGE'İ OLAN stratejide yok
+- `matrix_shared/execution_study.py` + `make execution-report`: her sinyal için sinyal barının kapanışına limit konur, `WAIT` bar beklenir, dolarsa maker (1 bps) doldu sayılır, dolmazsa piyasadan geçilir (taker). Bracket kalan ufukla oynatılır; bekleme süresi ufuktan düşülür.
+- Sonuç (14 g, 1 bar bekleme): dolum oranı %82–91. Çoğu stratejide +2…+16 bps kazanç. **Ama `momentum_xs`'te −2.9 bps (t=−0.35)** — momentum sinyalinde limit emri ancak fiyat geri geldiğinde doluyor, yani tam da momentum bozulduğunda: ters seçim. Kabul kriteri (net edge ≥ +10 bps) sağlanmadı, bu yüzden **uygulanmadı**.
+- Ders: post-only bir "bedava 6 bps" değil, strateji tipine bağlı. Ortalamaya dönen kurgularda kazandırır, momentumda kaybettirir. Edge'i olan tek stratejide geçiş (taker) doğru karar.
+
 ## 2026-09-20 — Edge testine ikinci null: rastgele ZAMAN yetmez, rastgele YÖN de gerekiyor
 - Metodolojik hata düzeltildi (dış araştırma ajanının tespiti): test yönü sabit tutup zamanı rastgeleliyordu, yani yalnız zamanlamayı sınıyordu. Bir strateji yön bilgisine sahip olup zamanlama edge'i olmayabilir (veya tersi); tek null'a bakıp strateji silmek yanlış karar riski taşıyordu. Artık iki aile test ediliyor: (a) rastgele giriş zamanı, aynı yön; (b) aynı an, rastgele yön. Her ikisine de BH/FDR uygulanıyor.
 - Sonuç (14 g, 5 277 sinyal): `momentum_xs` her iki null'ı da yeniyor — zamana karşı +31.2 bps (t=5.25), yöne karşı +33.0 bps (t=5.55). `bist_news_event` de yeniyor ama n=33. Diğer 11'i hiçbir null'ı yenmiyor. Ayrıca `oi_breakout` (−14.9, t=−2.46) ve `dca` (−5.8, t=−2.56) yön olarak yazı-turadan KÖTÜ — ters çalışıyorlar.
