@@ -908,3 +908,29 @@ indeksi zorunlu kılıyor: boş sembol dakikalardan 0.9 ms'ye düşüyor. Tabloy
 Açık kalan, plan hatasından büyük: sembol-başına silme bu tabloda yapısal olarak yavaş
 (append-only, ~900 sembol iç içe, tek sembolün eski satırları 97 GB'a dağılmış). Kalıcı çözüm
 zaman-bazlı partition veya son 7 günü tutan tek seferlik yeniden yazım — ikisi de operatör kararı.
+
+## 2026-09-20 — Ölçülmüş modeller tek paylaşılan dizinde
+
+`matrix_shared/model_store.py`: `symbol_costs.json`, `edge_cache.json` ve `edge_registry.json`
+artık tek bir çözücüden geçiyor (`~/.claude/matrix_models`, `matrix_claude_config` volume'ü).
+Öncesinde ikisi volume olmayan `/var/lib/matrix/models`'e yazıyordu, yani her konteynerin kendi
+kopyası vardı: `reflection` edge cache'ini göremeyip her restart'tan sonra "ölçüm yok"u "edge yok"
+sayıyor ve momentum_xs'i 7 slottan 3'e düşürüyordu; ön-kayıt registry'si de konteyner başına bir kez
+yazılıyordu. Slot scorer'a ayrıca `unknown` ≠ `unproven` ayrımı eklendi — kanıtla alınmış tahsis,
+ölçüm geçici olarak okunamıyorken geri alınmıyor. Gerçekleşmiş zarar dalı eski davranışını koruyor.
+
+## 2026-09-20 — Motorda boşta nabız
+
+`backtest/main.py` iki dakikada bir `heartbeat: idle` yazıyor. Motor yalnız iş yaptığında log
+yazdığı için boştaki motorla ölü motor dışarıdan aynı görünüyordu; bu belirsizlik eylülde üç gün,
+bugün yirmi iki dakika kesintiye yol açtı ve her ikisinde de konteyner "running" diyordu. Artık log
+tazeliği güvenilir bir canlılık sinyali. `MATRIX_ENGINE_HEARTBEAT_S` ayarlar.
+
+## 2026-09-20 — market_trades zaman indeksi ve autovacuum
+
+Göç 0039 `(trade_ts)` indeksini CONCURRENTLY ekliyor (3.4 GiB), 0040 ise bu tabloya
+`autovacuum_vacuum_scale_factor=0.02` veriyor. İkisi retention'ın global zaman sıralı süpürmesi için:
+indeks olmadan sıralı süpürme 300M satırı sıralamaya kalkıyor, autovacuum olmadan da silinen satırlar
+boş-alan haritasına dönmediği için dosya küçülmek yerine büyüyor. Uyarı: yeni indeks, aynı tabloya
+dokunan başka sorguların planını da değiştirir — eklendikten sonra `ANALYZE` çek ve zaten hızlı olan
+sorguları düz `EXPLAIN` ile yeniden kontrol et.
