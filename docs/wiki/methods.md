@@ -10,11 +10,12 @@ response to a measured failure, never as decoration), and what is queued.
 
 ## Applied
 
-- **Controlled entry-timing test** — [[edge-study]]. A strategy is compared
-  against *itself with random entry times*, same symbol, side, barriers and
-  horizon. This is the only way to separate "the signal works" from "the market
-  drifted". It is what showed `momentum_xs` +30.8 bps over random while its
-  fills were −36 bps.
+- **Two-null permutation test** — [[edge-study]]. A strategy is compared
+  against itself with (a) random entry times, same side, and (b) random side,
+  same moment. Only both together separate "knows when" from "knows which way";
+  judging on one null risks deleting a strategy that has the other kind of
+  edge. `momentum_xs` beats both (+31.2 bps t=5.25, +33.0 bps t=5.55); eleven
+  of thirteen beat neither.
 - **Evaluate signals, not fills.** Only ~12 % of predictions become positions,
   and the selection is not random, so a fills-only study measures the selector,
   not the strategy. Since 2026-09-20 every prediction is replayed. This also
@@ -41,23 +42,14 @@ response to a measured failure, never as decoration), and what is queued.
 - **Wilson lower bounds and CI-gated certificates** — [[learning-loop]],
   [[risk-gates]]: small-sample win rates are not point estimates.
 
-## Queued, in order of expected value
+## Queued
+Moved to [[research-backlog]], which now carries a decisive experiment and a
+pass criterion for each candidate, plus the methods judged dead ends here.
 
-1. **Meta-labeling** (López de Prado). Keep `momentum_xs` as the primary model
-   deciding *side*, and train a secondary model to decide *whether to act* on
-   each of its signals. The system already has the required labels (triple
-   barrier outcomes) and features (`predictions.context.features`), and can
-   only fill ~12 % of signals — so "which ones" is exactly the decision worth
-   optimising. Published results move precision substantially; here it would
-   replace the EV ranker, which measurement shows adds nothing.
-2. **Purged, embargoed cross-validation** before any model is trusted:
-   overlapping horizons make naive k-fold leak by construction.
-3. **Volatility targeting for position size** — size ∝ 1/σ so risk per trade is
-   constant across regimes, instead of the current confidence-scaled notional.
-4. **Deflated Sharpe ratio** as the promotion bar for challengers, replacing
-   raw PnL comparison.
-5. **Execution realism**: measure fill slippage against the mark to validate
-   the assumed 5.5 + 2 bps before any live capital.
+**Meta-labeling was tried and failed on this data** (2026-09-20): a secondary
+model scoring each signal reached AUC 0.43–0.54 out of sample with lift
+≤ +2.9 bps, so it is not wired to capital. The threshold for shipping one is
+lift ≥ 5 bps at AUC ≥ 0.55.
 
 ## Open questions
 - Does the meta-labeller beat "fill the freshest signal", the policy the
