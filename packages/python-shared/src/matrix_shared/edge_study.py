@@ -37,6 +37,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from loguru import logger
+
+from matrix_shared.promotion import Registry, deflated_sharpe
+from matrix_shared.promotion import status as promotion_status
 from sqlalchemy import text
 
 from matrix_shared.db import local_session_scope, shared_session_scope
@@ -47,7 +50,13 @@ CONTROL_DRAWS = int(os.environ.get("MATRIX_EDGE_CONTROL_DRAWS", "20"))
 # seven eighths of the evidence it produced — and a demoted strategy at zero
 # slots would never generate any evidence again. The simulator does not care
 # whether capital was committed, so every prediction is replayed.
-MAX_PER_STRATEGY = int(os.environ.get("MATRIX_EDGE_MAX_PER_STRATEGY", "800"))
+# Signals per strategy the study will simulate. This is a power limit, not a
+# performance knob: the pre-registered stopping rule asks whether a strategy has
+# accumulated enough evidence, and a cap below its registered target makes that
+# target unreachable by construction. On 2026-09-20 momentum_xs registered 936
+# against a cap of 800 and would have sat at `provisional` forever. Keep this
+# comfortably above the largest registered `required_n`.
+MAX_PER_STRATEGY = int(os.environ.get("MATRIX_EDGE_MAX_PER_STRATEGY", "2500"))
 MIN_TRADES = int(os.environ.get("MATRIX_EDGE_MIN_TRADES", "30"))
 DEFAULT_TP_PCT = 0.01
 DEFAULT_SL_PCT = 0.005
@@ -135,6 +144,26 @@ def benjamini_hochberg(pvalues: list[float], q: float = 0.05) -> list[bool]:
         if rank <= cutoff:
             keep[i] = True
     return keep
+
+
+def benjamini_yekutieli(pvalues: list[float], q: float = 0.05) -> list[bool]:
+    """BH's dependency-safe sibling: same procedure, threshold divided by H(m).
+
+    BH controls the false-discovery rate only when the tests are independent or
+    positively dependent. Ours are neither: every strategy is scored on the same
+    bars, the same symbols and overlapping windows, so a quiet market makes all
+    thirteen look alike at once. Benjamini-Yekutieli divides the threshold by
+    the harmonic number H(m) = sum(1/i), which is valid under *arbitrary*
+    dependence and costs a factor of about 3.2 at m=13.
+
+    That factor is the price of an honest promotion bar, and it is worth paying
+    precisely because the decision downstream is "give this strategy capital".
+    """
+    n = len(pvalues)
+    if n == 0:
+        return []
+    harmonic = sum(1.0 / i for i in range(1, n + 1))
+    return benjamini_hochberg(pvalues, q / harmonic)
 
 
 def welch(a: list[float], b: list[float]) -> tuple[float, float, float]:
@@ -327,6 +356,9 @@ async def run_edge_study(
             if cs.reason != "no_data":
                 e.control_side.append(cs.ret_bps)
 
+    _treatment_returns = {
+        (e.strategy_id, e.asset_class): list(e.treatment) for e in acc.values()
+    }
     rows = []
     for e in acc.values():
         if e.n_filled:
@@ -336,20 +368,66 @@ async def run_edge_study(
         rows.append(e.as_row())
     # Multiple-testing correction across every strategy tested in this run.
     testable = [r for r in rows if r["n"] >= MIN_TRADES]
-    keep = benjamini_hochberg([r["p"] for r in testable])
-    keep_side = benjamini_hochberg([two_sided_p(r["t_side"]) for r in testable])
-    for r, k, ks in zip(testable, keep, keep_side):
+    # Benjamini-Yekutieli, not Benjamini-Hochberg: every strategy here is scored
+    # on the same bars, symbols and overlapping windows, so BH's independence
+    # assumption is violated and its FDR guarantee does not hold. BHY is valid
+    # under arbitrary dependence at a cost of H(m) ~ 3.2x at m=13. BH is kept
+    # alongside so the two can be compared rather than argued about.
+    keep_bh = benjamini_hochberg([r["p"] for r in testable])
+    keep = benjamini_yekutieli([r["p"] for r in testable])
+    keep_side = benjamini_yekutieli([two_sided_p(r["t_side"]) for r in testable])
+    for r, k, ks, kbh in zip(testable, keep, keep_side, keep_bh):
         r["significant"] = bool(k)
+        r["significant_bh"] = bool(kbh)
         r["significant_side"] = bool(ks)
         # The bar for keeping a strategy: beat at least one null convincingly.
         r["has_edge"] = bool((k and r["edge_bps"] > 0) or (ks and r["side_edge_bps"] > 0))
     for r in rows:
         if r["n"] < MIN_TRADES:
             r["significant"] = r["significant_side"] = r["has_edge"] = False
+            r["significant_bh"] = False
+
+    # Deflate each Sharpe for the fact that we looked at every strategy, then
+    # pre-register the sample size the survivors owe us. Advisory: a failure
+    # here must never stop the study from returning its rows.
+    try:
+        registry = Registry.load()
+        changed = False
+        for r in rows:
+            arm = _treatment_returns.get((r["strategy"], r["market"]), [])
+            d = deflated_sharpe(arm, n_trials=max(1, len(rows)))
+            r["dsr"] = round(d["dsr"], 4) if d else None
+            r["sharpe"] = round(d["sharpe"], 4) if d else None
+            if r.get("has_edge") and r.get("sd_bps"):
+                edge = max(float(r["edge_bps"]), float(r.get("side_edge_bps") or 0.0))
+                if registry.register(
+                    r["strategy"], r["market"], edge_bps=edge, sd_bps=float(r["sd_bps"])
+                ):
+                    changed = True
+            reg = registry.get(r["strategy"], r["market"])
+            r["required_n"] = int(reg["required_n"]) if reg else None
+            r["status"] = promotion_status(
+                r, registry=registry, n_trials=max(1, len(rows)),
+                significant=bool(r.get("has_edge")),
+            )
+        if changed:
+            registry.save()
+    except Exception as e:  # noqa: BLE001 — the promotion bar is advisory
+        logger.warning(f"promotion bar unavailable ({e}); rows returned without it")
     rows.sort(key=lambda r: r["edge_bps"], reverse=True)
     if skipped:
         logger.info(f"edge study: {skipped} prediction(s) skipped (no bar coverage)")
     return rows
+
+
+def _fmt_dsr(r: dict) -> str:
+    v = r.get("dsr")
+    return f"{v:.3f}" if v is not None else "-"
+
+
+def _fmt_need(r: dict) -> str:
+    v = r.get("required_n")
+    return str(v) if v else "-"
 
 
 def format_report(rows: list[dict], *, days: float, cost_bps: float) -> str:
@@ -359,12 +437,13 @@ def format_report(rows: list[dict], *, days: float, cost_bps: float) -> str:
         f"Entry-timing edge vs random entry — last {days:g}d, "
         f"{sum(r['n'] for r in rows)} signals ({sum(r['n_filled'] for r in rows)} filled), "
         f"round-trip cost {cost_bps:g} bps\n"
-        f"{'strategy':<24}{'mkt':<7}{'n':>6}{'gross':>8}{'vs time':>9}{'t':>6}{'vs side':>9}{'t':>6}  edge\n"
+        f"{'strategy':<24}{'mkt':<7}{'n':>6}{'gross':>8}{'vs time':>9}{'t':>6}"
+        f"{'vs side':>9}{'t':>6}{'DSR':>7}{'need n':>8}  status\n"
     )
     lines = [
         f"{r['strategy']:<24}{r['market']:<7}{r['n']:>6}{r['gross_bps']:>8.1f}"
         f"{r['edge_bps']:>9.1f}{r['t']:>6.2f}{r['side_edge_bps']:>9.1f}{r['t_side']:>6.2f}"
-        f"  {'YES' if r.get('has_edge') else ''}"
+        f"{_fmt_dsr(r):>7}{_fmt_need(r):>8}  {r.get('status', 'unproven')}"
         for r in rows
     ]
     total_t = [r for r in rows if r["n"] >= MIN_TRADES]
@@ -378,7 +457,12 @@ def format_report(rows: list[dict], *, days: float, cost_bps: float) -> str:
             f"{n_sig}/{len(total_t)} beat a null at FDR 5% (two families: random entry time "
             f"with the same side, and random side at the same time). A strategy that beats "
             f"neither has no measured reason to hold capital; an edge must also exceed "
-            f"{cost_bps:g} bps to pay for itself."
+            f"{cost_bps:g} bps to pay for itself.\n"
+            f"Significance is Benjamini-Yekutieli (valid under the dependence these "
+            f"overlapping tests actually have), DSR is the Sharpe deflated for having "
+            f"searched {len(rows)} strategies, and 'need n' is the sample size registered "
+            f"in advance for HALF this edge to stay detectable. Only `confirmed` — past "
+            f"its own registered count and still significant — earns full size."
         )
     return head + "\n".join(lines) + tail
 
@@ -407,7 +491,23 @@ def verdict(row: dict | None, *, cost_bps: float, min_t: float = 2.0) -> str:
         return "unproven"
     t_time, t_side = row["t"], row.get("t_side", 0.0)
     e_time, e_side = row["edge_bps"], row.get("side_edge_bps", 0.0)
-    if (t_time >= min_t and e_time >= cost_bps) or (t_side >= min_t and e_side >= cost_bps):
+    beats_a_null = (t_time >= min_t and e_time >= cost_bps) or (
+        t_side >= min_t and e_side >= cost_bps
+    )
+    # The promotion bar (matrix_shared.promotion): beating a null is necessary,
+    # not sufficient. `pays` — the verdict that moves capital — additionally
+    # requires the strategy to have reached the sample size it registered in
+    # advance and to survive deflation for the number of strategies we searched.
+    # A `provisional` strategy keeps emitting signals and keeps being measured;
+    # it just does not get sized on a number that has not finished proving
+    # itself. When `status` is absent (an older cached row, or a registry this
+    # process cannot read) the bar is skipped rather than allowed to starve the
+    # book — the promotion machinery is advisory in exactly the way the risk
+    # gates are not.
+    status = row.get("status")
+    if beats_a_null and status is not None and status != "confirmed":
+        return "unproven"
+    if beats_a_null:
         return "pays"
     if (t_time <= -min_t and e_time < 0) or (t_side <= -min_t and e_side < 0):
         return "harmful"
