@@ -880,3 +880,31 @@ Kanıtsız stratejilerin boyutlandırması aynen korunur. Edge satırına `sd_bp
 Gerekçe: boyutlandırma bugüne dek `risk_multiplier` üzerinden **gerçekleşmiş PnL**'e bakıyordu — yani bozuk fill'lerin
 kirlettiği sinyale. Ölçülen edge farklı bir soruyu yanıtlıyor ve tek kanıtlanmış strateji (`momentum_xs`) bu kuralla
 %2'lik kapının hemen altına, ~%1.6 equity'ye boyutlanıyor (önceki efektif ~%0.9).
+
+## 2026-09-20 — Promosyon barı: sermaye için kanıt eşiği
+
+`matrix_shared/promotion.py`. Bir stratejinin sermaye tutabilmesi için üçü birden gerekli:
+**Benjamini-Yekutieli** (on üç test aynı bar/sembol/pencerede ölçüldüğü için BH'nin bağımsızlık
+varsayımı geçersiz; BHY keyfi bağımlılıkta geçerli, m=13'te 3.18 kat sıkı), **deflated Sharpe**
+(aranmış olmanın yarattığı yukarı sapmayı düşer; eşik 0.95), ve **önceden kayıtlı örneklem
+hedefi** (edge'in yarısının hâlâ tespit edilebilir olması için gereken n; kayıt asla üzerine
+yazılmaz). Yalnız `confirmed` durumu `pays` verdict'ini kazanır; `status` yoksa eski davranış
+korunur, okunamayan bir registry kitabı aç bırakmasın diye.
+
+Ölçülebilenden büyük hedef kaydeden strateji `unprovable` işaretlenir — sonsuza dek "beklemede"
+bırakmak, cevabı soru gibi göstermek olurdu.
+
+momentum_xs/crypto: n=1989, hedef 936, +29.7 bps (t=7.85), DSR 1.000 → **confirmed**.
+
+## 2026-09-20 — Retention sekiz gündür hiçbir şey silmiyormuş
+
+`retention` beş dakikada bir "pruned market_trades=200" yazıyordu; tablo ise 322M satırdı ve
+1 Haziran'a kadar gidiyordu (politika 7 gün), local DB 112 GB, disk %78 dolu. Sebep kod değil
+**sorgu planı**: `LIMIT`'li iç SELECT seq scan seçiyor, eski satırı olmayan bir sembolde LIMIT
+hiç dolmuyor, tarama 322M satırı okuyup 45 saniyelik bütçenin tamamını yiyordu. `ORDER BY ts`
+indeksi zorunlu kılıyor: boş sembol dakikalardan 0.9 ms'ye düşüyor. Tabloya ayrıca ilk kez
+`ANALYZE` çekildi.
+
+Açık kalan, plan hatasından büyük: sembol-başına silme bu tabloda yapısal olarak yavaş
+(append-only, ~900 sembol iç içe, tek sembolün eski satırları 97 GB'a dağılmış). Kalıcı çözüm
+zaman-bazlı partition veya son 7 günü tutan tek seferlik yeniden yazım — ikisi de operatör kararı.
