@@ -80,8 +80,13 @@ how much the answer would change.
   ([[incidents]]), and the arithmetic says no rescue is needed — ~120 GB free
   against 8.7 GiB/day of lag-driven growth is 14 days, and once the pass lands
   the deletions free roughly sixteen times what ingestion consumes, so the
-  file should stop extending on its own. Revisit only if a pass fails to
-  complete or the runway drops under a week.
+  file should stop extending on its own. Measured while it ran: the worker
+  reads ~6.7 MB/s of index under the throttle and `num_dead_tuples` sat at
+  11,184,524, exactly the 64 MB work_mem capacity — which is the three-pass
+  prediction confirmed from the other side. Roughly 30 GiB of indexes puts a
+  pass near 75 minutes and the whole vacuum near 3.7 hours, during which the
+  file gains under a GiB. Revisit only if a pass fails to complete or the
+  runway drops under a week.
 - **A time-only index changes plans elsewhere.** `ix_market_trades_ts` (0039)
   made `WHERE symbol = $1 ORDER BY trade_ts DESC LIMIT n` switch from the
   composite index to a backward scan of the time index with a symbol filter.
