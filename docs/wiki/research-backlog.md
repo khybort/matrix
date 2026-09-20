@@ -24,12 +24,16 @@ being charged taker fees by our cost model; correcting that accounting would
 change the EV floor for every strategy. Do not implement as a PnL improvement —
 implement it only alongside actually placing limit take-profits.
 
-## 2. Delete the strategies that beat neither null
-Eleven of thirteen beat neither the random-time nor the random-side null
-([[edge-study]]), and two are directionally *worse* than a coin flip. They each
-pay 15 bps to trade noise. *Decisive test:* recompute 30-day book PnL with
-survivors only — arithmetic, not a hypothesis. The slot gate already demotes
-them; formal retirement of the configs is the remaining step.
+## 2. Strategies that beat neither null — demoted, deliberately not deleted
+Eleven of thirteen beat neither null and two pick direction worse than a coin
+flip. All are at **zero slots**, so they hold no capital and cost nothing but
+database rows. Formal retirement was considered and rejected: a retired config
+stops emitting predictions, and predictions are the free evidence every study
+runs on ([[edge-study]] evaluates signals, not fills). A strategy that cannot
+trade but still produces signal can be re-evaluated for nothing and revived if
+the evidence turns; a deleted one is gone. The one real cost is `matrix_agent`,
+which spends LLM calls per signal — its universe cap and HOLD cooldown bound
+that, and it is worth re-examining if the rate budget ever binds.
 
 ## 3. ~~Horizon profiling~~ — MEASURED 2026-09-20, one change proposed
 `make horizon-report` measures each signal's **excess** return over a random
@@ -44,13 +48,14 @@ win on the point estimate alone, which is why the report prints `act` rather
 than just the argmax. Note the multiplicity: 12 horizons × 7 strategies is 84
 comparisons, so treat any t near 2 as noise.
 
-## 4. Per-symbol cost model replacing the flat 15 bps
-The flat assumption is simultaneously too harsh for BTC/ETH (~10–11 bps all-in
-at small clip) and far too generous for altcoin perps (15–40 bps), which
-corrupts the EV floor in both directions. *Decisive test:* measure realised
-round-trip cost per symbol from fills and book depth; re-apply the EV floor.
-**Pass: a symbol whitelist where measured edge > measured cost, tracking error
-< 3 bps.**
+## 4. ~~Per-symbol cost model~~ — DONE 2026-09-20
+`matrix_shared/symbol_costs.py` measures the median top-of-book spread per
+symbol from our own snapshots and charges half of it per side, refreshed each
+reflection tick, cached on the shared volume, falling back to the flat
+allowance for anything unmeasured. Live result: BTCUSDT 12.0 bps round trip,
+ADAUSDT 15.5, BRUSDT 16.9. *Still open:* impact beyond the touch (our clips are
+small, so the half-spread is the dominant term) and validation against real
+fills, which needs live execution.
 
 ## 5. Quarter-Kelly sizing on a shrunk edge
 f = 0.25 × Kelly on an empirical-Bayes-shrunk edge, scaled inversely to

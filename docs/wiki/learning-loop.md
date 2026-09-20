@@ -1,6 +1,6 @@
 ---
 title: Learning loop
-updated: 2026-09-19
+updated: 2026-09-20
 sources: [services/reflection/, services/labs/, services/agent_lessons/, packages/python-shared/src/matrix_shared/{setup_memory,regime,stats,backpressure}.py]
 status: current
 ---
@@ -50,5 +50,13 @@ is optimising noise.
 - **Slot scorer** moves capital between strategies, but only on n ≥ 30 closed
   positions and using a **Wilson lower bound** win rate; the consecutive-loss
   auto-cut is the one change allowed on thinner evidence.
+- **The loop closed end to end on evidence for the first time on 2026-09-20**:
+  the alpha-decay study measured `momentum_xs` peaking at 90 minutes against
+  its configured 60 (t=3.59) → a `param_tune` proposal was filed with that
+  evidence in its `metrics_window` → the tied challenger occupying the slot was
+  retired under the new indifference rule → labs applied the proposal as
+  challenger v4 → efficacy now judges it on realised PnL. No step was taken by
+  hand.
 - **Honest limitation:** all of the above is machinery for exploiting an edge.
-  It cannot manufacture one, and as of 2026-09-19 there is none to exploit.
+  It cannot manufacture one. As of 2026-09-20 exactly one strategy has a
+  measured edge ([[edge-study]]), and the machinery is now pointed at it.

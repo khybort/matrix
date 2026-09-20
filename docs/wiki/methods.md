@@ -43,8 +43,20 @@ response to a measured failure, never as decoration), and what is queued.
   strategy proposed if it is opened promptly; fills 20–53 % into the horizon
   were the largest measured value destroyer.
 - **Cost-aware gating everywhere** — an edge is only real if it exceeds the
-  round trip (15 bps crypto). The EV floor, the slot gate and the barrier study
-  all compare against that number rather than against zero.
+  round trip. Since 2026-09-20 that number is **measured per symbol**
+  (`matrix_shared/symbol_costs.py`): median top-of-book spread from our own
+  snapshots, halved for the crossing, floored and capped. Measured range
+  1.16–5.95 bps spread, i.e. 12.0 bps round trip on BTCUSDT against 16.9 on
+  BRUSDT — the old flat 15 was simultaneously too harsh for majors and too
+  generous for illiquid alts, distorting the EV floor in both directions.
+- **Allocate on evidence, not on trailing PnL** — [[learning-loop]]. A strategy
+  that beats a null by more than its round trip gets a full wallet share even
+  if its realised history is poor; `perf_score` reflects fills that may have
+  been broken. `momentum_xs` went 1 → 7 slots on this rule.
+- **A tie is an answer** — a challenger indistinguishable from its champion
+  after ≥100 outcomes each (|z| < 0.5) is retired rather than run to its
+  14-day limit. One challenger slot per strategy means an inconclusive
+  experiment is blocking the queue behind it.
 - **Wilson lower bounds and CI-gated certificates** — [[learning-loop]],
   [[risk-gates]]: small-sample win rates are not point estimates.
 
