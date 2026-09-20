@@ -60,3 +60,13 @@ is optimising noise.
 - **Honest limitation:** all of the above is machinery for exploiting an edge.
   It cannot manufacture one. As of 2026-09-20 exactly one strategy has a
   measured edge ([[edge-study]]), and the machinery is now pointed at it.
+
+- **A measurement that is missing is not a measurement of zero.** The slot
+  scorer reads `strategy_edge`; that cache lived only in the process, so for
+  minutes after every reload it answered `None`, and `None` demoted rather than
+  abstained. On 2026-09-20 a restart took `momentum_xs` from 7 slots to 3
+  seconds after the same pass had promoted it on a confirmed +29.7 bps edge —
+  the one strategy with a proven edge losing half its allocation to a reload.
+  The cache now persists to the model volume with wall-clock stamps. The
+  general rule, and it applies to every gate here: distinguish *unknown* from
+  *measured and bad* before acting on it.
