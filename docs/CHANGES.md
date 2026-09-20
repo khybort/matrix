@@ -868,3 +868,15 @@ MATRIX_MODEL_OPUS=us.anthropic.claude-opus-4-7-20251022-v1:0
 Brain + 5 backend agent (synthesis / graph extract / reflection / decision LLM / bulletin) + Haiku
 worker birlikte flip eder. `CLAUDE_CODE_OAUTH_TOKEN` set'liyse Bedrock yine de override eder
 (CLI'nın iç önceliği bu yönde).
+
+## 2026-09-20 — Kanıtlanmış edge'e quarter-Kelly boyutlandırma
+
+`allocation.kelly_fraction_of_equity` + `kelly_notional`: her iki null'ı da geçen (`edge_study.verdict == "pays"`)
+stratejiler için pozisyon büyüklüğü, ölçülen edge'in **%95 alt sınırından** hesaplanır — maliyet düşülür, eşzamanlı
+pozisyon sayısına bölünür, çeyrek Kelly alınır, `KELLY_MAX_F` ile tavanlanır. Cüzdanın `max_position_pct` risk kapısı
+her dalda tavan olarak kalır ve Kelly yalnızca **büyütebilir**, slot kapısının izin verdiği bir işlemi susturamaz.
+Kanıtsız stratejilerin boyutlandırması aynen korunur. Edge satırına `sd_bps` eklendi (varyans olmadan Kelly hesaplanamaz).
+
+Gerekçe: boyutlandırma bugüne dek `risk_multiplier` üzerinden **gerçekleşmiş PnL**'e bakıyordu — yani bozuk fill'lerin
+kirlettiği sinyale. Ölçülen edge farklı bir soruyu yanıtlıyor ve tek kanıtlanmış strateji (`momentum_xs`) bu kuralla
+%2'lik kapının hemen altına, ~%1.6 equity'ye boyutlanıyor (önceki efektif ~%0.9).

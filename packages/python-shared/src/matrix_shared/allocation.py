@@ -6,6 +6,8 @@ profitable pairings get more slots/size while cold streaks shrink exposure.
 
 from __future__ import annotations
 
+import math
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -18,6 +20,83 @@ from matrix_shared.models import PaperPosition, Prediction
 PAIR_LOOKBACK_DAYS = 14
 EDGE_SHRINK_K = 5
 PNL_PCT_SCALE = 0.02  # 2% avg return → top of clamp range
+
+# --- Kelly sizing on a measured edge -----------------------------------------
+# Applied only to a strategy whose edge survived both nulls in `edge_study`.
+# Everything unproven keeps the old confidence/streak sizing untouched.
+KELLY_FRACTION = float(os.environ.get("MATRIX_KELLY_FRACTION", "0.25"))  # quarter-Kelly
+KELLY_PRIOR_N = float(os.environ.get("MATRIX_KELLY_PRIOR_N", "50"))
+KELLY_MAX_F = float(os.environ.get("MATRIX_KELLY_MAX_F", "0.05"))  # ≤5% of equity
+
+
+def kelly_fraction_of_equity(
+    *,
+    edge_bps: float,
+    sd_bps: float,
+    n: int,
+    cost_bps: float,
+    t_stat: float | None = None,
+    concurrency: int = 1,
+    fraction: float = KELLY_FRACTION,
+    prior_n: float = KELLY_PRIOR_N,
+) -> float | None:
+    """Fraction of equity one position may take, given a measured per-trade edge.
+
+    `f* = mu / sigma^2` is the Kelly fraction for a continuous return. Applied
+    naively to a bracket trade it returns multiples of equity — per-trade
+    variance is small next to equity, so the arithmetic asks for leverage that
+    only makes sense for one bet at a time held to resolution. Four corrections
+    make it usable:
+
+    - **Costs first.** An edge smaller than the round trip returns 0.0 (size
+      nothing) rather than None, which means "no opinion".
+    - **The lower confidence bound, not the point estimate.** With a t-stat we
+      size on `edge - 1.96*se`; an edge of 31 bps at t=5 is really "at least
+      ~19 bps". Without one, shrink by `n / (n + prior_n)` instead. Kelly on an
+      over-estimated edge is the classic way to go broke while being right.
+    - **Divide by concurrency.** The formula assumes the bet is the book. We
+      hold up to `max_concurrent_positions` at once, and crypto perps move
+      together, so the full fraction cannot go into each one.
+    - **A hard cap** (`KELLY_MAX_F`) on top, because `sd` is itself estimated
+      and a small one must not produce a large position.
+
+    Returns None when the inputs cannot support a decision, so the caller keeps
+    its existing sizing instead of reading it as "size zero".
+    """
+    if n <= 0 or sd_bps <= 0.0:
+        return None
+    if t_stat is not None and t_stat > 0:
+        se = abs(edge_bps) / t_stat
+        edge_used = max(0.0, edge_bps - 1.96 * se)
+    else:
+        edge_used = edge_bps * (n / (n + prior_n))
+    net = edge_used - cost_bps
+    if net <= 0.0:
+        return 0.0
+    mu = net / 10_000.0
+    sigma = sd_bps / 10_000.0
+    f = fraction * mu / (sigma * sigma) / max(1, concurrency)
+    if not math.isfinite(f):
+        return None
+    return max(0.0, min(KELLY_MAX_F, f))
+
+
+def kelly_notional(
+    *,
+    equity: Decimal,
+    max_notional: Decimal,
+    kelly_f: float | None,
+) -> Decimal | None:
+    """Kelly size, floored at nothing and capped by the wallet's risk gate.
+
+    The gate is the ceiling in every case: Kelly may size *below*
+    `max_position_pct`, never above it. That keeps a single measurement error
+    from widening a hard risk limit."""
+    if kelly_f is None:
+        return None
+    return min(max_notional, (equity * Decimal(str(kelly_f))).quantize(Decimal("0.01")))
+
+
 
 
 def shrink_pair_edge(n: int, avg_pnl_pct: float) -> float:

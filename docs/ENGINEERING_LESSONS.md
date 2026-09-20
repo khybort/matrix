@@ -101,3 +101,10 @@
 - `claude setup-token` uzun ömürlü token'ları bu hesapta 401 verdi → host keychain oturumu (refresh token'sız) saatlik
   volume senkronu (`scripts/claude_creds_sync.sh`). Token'ları asla loga/rapora yazma.
 - `from __future__ import annotations` modülün ilk statement'ı olmalı (docstring hariç).
+
+- **2026-09-20 — Hunk izolasyonunda blok sınırı: iki kez aynı fonksiyon.** Yabancı WIP taşıyan dosyalarda kendi
+  değişikliğimi `HEAD` üzerine yeniden uygularken bloğu "benim başlangıcım → bir sonraki tanıdık fonksiyon" diye
+  kestim; araya giren dört fonksiyon da bloğa dahil oldu ve staged blob'da **iki kez** tanımlandı (`allocation.py`:
+  shrink_pair_edge / edge_multiplier / expected_value / risk_multiplier). Diff `0 deletion` gösterdiği için gözden
+  kaçıyordu. Kural: staged blob'u commit'ten ÖNCE AST ile tara — top-level `def`/`class` adlarında tekrar varsa
+  sınır yanlıştır. (Aynı ailedeki eski hata: sınırın *dışında* kalan tanımın hiç commit edilmemesi, 03e52ea.)

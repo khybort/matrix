@@ -164,6 +164,11 @@ class StrategyEdge:
 
     def as_row(self) -> dict:
         t_mean = sum(self.treatment) / len(self.treatment) if self.treatment else 0.0
+        t_sd = (
+            math.sqrt(sum((x - t_mean) ** 2 for x in self.treatment) / (len(self.treatment) - 1))
+            if len(self.treatment) > 1
+            else 0.0
+        )
         c_mean = sum(self.control) / len(self.control) if self.control else 0.0
         s_mean = sum(self.control_side) / len(self.control_side) if self.control_side else 0.0
         diff, se, t = welch(self.treatment, self.control)
@@ -185,6 +190,9 @@ class StrategyEdge:
             "control_side_bps": round(s_mean, 2),
             "realised_net_bps": round(self.realised_net_bps, 2),
             "sim_tp_rate": round(self.tp_rate, 3),
+            # Per-trade dispersion of the treatment arm, in bps. Kelly sizing
+            # needs the variance, not only the mean (see allocation.kelly_*).
+            "sd_bps": round(t_sd, 2),
         }
 
 

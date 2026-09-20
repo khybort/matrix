@@ -24,11 +24,22 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 
 from matrix_shared import local_session_scope, shared_session_scope
-from matrix_shared.allocation import expected_value, load_pair_edges, risk_multiplier
+from matrix_shared.allocation import (
+    expected_value,
+    kelly_fraction_of_equity,
+    kelly_notional,
+    load_pair_edges,
+    risk_multiplier,
+)
 from matrix_shared.exchange_shadow import shadow_close_position, shadow_open_position
 from matrix_shared.graph_overlay import link_outcome_node
 from matrix_shared.markets import all_markets
-from matrix_shared.trading import apply_slippage, funding_pnl_usd, virtual_pnl_pct
+from matrix_shared.trading import (
+    apply_slippage,
+    execution_cost_bps,
+    funding_pnl_usd,
+    virtual_pnl_pct,
+)
 from matrix_shared.models import (
     StrategyConfig,
     MarketBar,
@@ -567,6 +578,53 @@ async def _record_virtual_outcomes(pred_ids: list) -> int:
     return written
 
 
+async def _kelly_fractions(
+    strategy_ids: set[str], *, asset_class: str, concurrency: int
+) -> dict[str, float]:
+    """Quarter-Kelly fraction of equity per strategy, keyed by strategy_id.
+
+    Only strategies the controlled study calls `pays` get an entry; everything
+    else is absent from the dict and keeps the existing sizing. Advisory by
+    construction: any failure in the study drops that strategy, it never fails
+    the tick.
+    """
+    from matrix_shared.edge_study import strategy_edge, verdict
+
+    out: dict[str, float] = {}
+    for sid in strategy_ids:
+        try:
+            row = await strategy_edge(sid, asset_class)
+        except Exception as e:  # noqa: BLE001 — sizing must never break opening
+            logger.debug(f"kelly: edge study unavailable for {sid} ({e})")
+            continue
+        if not row:
+            continue
+        cost_bps = float(execution_cost_bps(asset_class) * 2)  # round trip
+        if verdict(row, cost_bps=cost_bps) != "pays":
+            continue
+        # Size on whichever null the strategy actually beat: knowing *when* and
+        # knowing *which way* are both edges, and `verdict` accepts either.
+        if row.get("t_side", 0.0) > row.get("t", 0.0):
+            edge_bps, t_stat = row.get("side_edge_bps", 0.0), row.get("t_side", 0.0)
+        else:
+            edge_bps, t_stat = row.get("edge_bps", 0.0), row.get("t", 0.0)
+        f = kelly_fraction_of_equity(
+            edge_bps=float(edge_bps),
+            sd_bps=float(row.get("sd_bps") or 0.0),
+            n=int(row.get("n") or 0),
+            cost_bps=cost_bps,
+            t_stat=float(t_stat),
+            concurrency=int(concurrency or 1),
+        )
+        if f:
+            out[sid] = f
+            logger.info(
+                f"kelly {sid}/{asset_class}: {f * 100:.2f}% of equity "
+                f"(edge {edge_bps} bps, t={t_stat}, sd={row.get('sd_bps')}, n={row.get('n')})"
+            )
+    return out
+
+
 async def open_due_positions() -> int:
     """Open positions per market — each asset_class has its own wallet +
     concurrent-position slots, so one market's signal flood can't starve
@@ -642,6 +700,19 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
                 )
             ).scalars()
         }
+
+        # Quarter-Kelly size for strategies whose edge survived both nulls.
+        # Sizing by `risk_multiplier` alone is sizing by trailing realised PnL,
+        # which is exactly the signal that broken fills corrupt. Kelly answers
+        # a different question — how much does the *measured* edge justify —
+        # and only ever raises size here, never suppresses a trade the slot
+        # gate already allowed. The wallet's `max_position_pct` stays the
+        # ceiling in every branch.
+        kelly_f = await _kelly_fractions(
+            {sid for sid in slot_configs},
+            asset_class=wallet.asset_class,
+            concurrency=wallet.max_concurrent_positions,
+        )
 
         # Skip predictions whose horizon already lapsed before we could open
         # them. Without this filter, a backlog (e.g. after a crash or queue
@@ -795,6 +866,14 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             consecutive_losses=cfg.consecutive_losses if cfg is not None else 0,
         )
         notional = (max_notional * risk).quantize(Decimal("0.01"))
+        kn = kelly_notional(
+            equity=equity, max_notional=max_notional, kelly_f=kelly_f.get(p.strategy_id)
+        )
+        if kn is not None and kn > notional:
+            logger.debug(
+                f"kelly size {p.strategy_id}: {notional} -> {kn} (gate {max_notional:.2f})"
+            )
+            notional = kn
 
         try:
             booked = await _book_position(p, notional=notional, entry=entry, shadow=shadow)
