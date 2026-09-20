@@ -85,12 +85,43 @@ markout −0.06 bp vs −1.16 bp at the back on Binance BTC perp. Prerequisite:
 L2 snapshots at ≤ 1 s — **blocked until capture is upgraded**. Only worth doing
 after #1 works.
 
-## 7. Deflated Sharpe + BHY as the promotion bar
-Our 13 tests share overlapping data, so Benjamini-Hochberg's independence
-assumption is violated; BHY is ~3.2× stricter at M=13 and `momentum_xs` clears
-it anyway. *Action:* pre-register the trade count at which a halved
-(winner's-curse) edge would still be significant — about 900 trades — and kill
-the hypothesis if unreached.
+## 7. ~~Deflated Sharpe + BHY as the promotion bar~~ — SHIPPED 2026-09-20
+`matrix_shared/promotion.py`. Three guards against one failure, a number that
+looked significant because we went looking for it:
+
+- **Benjamini-Yekutieli** replaces BH for significance. Every strategy is scored
+  on the same bars, symbols and overlapping windows, so BH's independence
+  assumption does not hold; BHY is valid under arbitrary dependence and costs a
+  factor H(13) = 3.18. `momentum_xs` clears it anyway.
+- **Deflated Sharpe** subtracts the expected maximum Sharpe of thirteen
+  worthless strategies before asking whether ours is real, and corrects for the
+  skew and fat tails of trade returns.
+- **A pre-registered stopping rule.** At first sight of an edge we fix how many
+  trades *half* of it would need to stay detectable, and the registry never
+  rewrites an entry — a target that moves after seeing the data is not a target.
+
+Only `confirmed` — past its own registered count, still significant, still
+convincing after deflation — yields the `pays` verdict that Kelly sizing
+([[methods]]) and the EV floor act on. A row without a status keeps the old
+behaviour, so an unreadable registry can never starve the book.
+
+Standing on 2026-09-20 (14-day window):
+
+| strategy | n | registered target | edge vs random entry | DSR | status |
+|---|---|---|---|---|---|
+| momentum_xs/crypto | 1989 | 936 | +29.7 bps (t=7.85) | 1.000 | **confirmed** |
+| bist_news_event/bist | 33 | 200 | +21.2 bps (t=5.43) | 0.534 | provisional |
+| funding_reversion/crypto | 2499 | 13039 | +2.2 bps (t=1.55) | 0.984 | unproven |
+
+`funding_reversion` is the rule working as intended: a 3.5 bps edge registers a
+13 000-trade target and will almost certainly never confirm.
+
+*Two errors the live data caught in the first cut,* both worth keeping in mind
+for anything similar: a large measured effect size registered a 30-trade target
+so `confirmed` arrived on 33 trades at a DSR of 0.53 (there is now a floor of
+200 and a 0.95 deflation threshold); and the study capped at 800 signals per
+strategy while `momentum_xs` registered 936, making its own target unreachable
+by construction (the cap is now 2500 and must stay above the largest target).
 
 ## Judged dead ends for this system
 VPIN (mechanically a function of trading intensity); liquidation-cascade

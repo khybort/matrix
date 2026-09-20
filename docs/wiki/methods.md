@@ -58,6 +58,11 @@ response to a measured failure, never as decoration), and what is queued.
   than in the variance, so a point estimate plus full Kelly is a reliable way
   to go broke while being directionally right. We take the 95% lower bound,
   quarter it, and keep the risk gate above it. See [[research-backlog]] #5.
+- **Correct for having searched.** Thirteen strategies scored on the same bars
+  are not thirteen independent tests, and the best of them is biased upward
+  even if all are worthless. Significance is Benjamini-Yekutieli, Sharpe is
+  deflated for the number of trials, and the sample size a strategy needs is
+  registered before the data can argue about it. See [[research-backlog]] #7.
 - **A tie is an answer** — a challenger indistinguishable from its champion
   after ≥100 outcomes each (|z| < 0.5) is retired rather than run to its
   14-day limit. One challenger slot per strategy means an inconclusive
