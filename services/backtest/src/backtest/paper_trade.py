@@ -115,6 +115,38 @@ ORPHAN_STALE_THRESHOLD_S = 86400  # 24h past close_by
 WALLET_SNAPSHOT_INTERVAL_S = float(os.environ.get("WALLET_SNAPSHOT_INTERVAL_S", "60"))
 
 
+# A signal is only worth trading while it is still fresh. Measured 2026-09-20:
+# the average fill happened 53% (momentum_xs), 41% (dca), 40% (grid) of the way
+# through the prediction's own horizon, because unfilled predictions kept
+# competing for slots until `close_by`. The controlled study
+# (matrix_shared.edge_study) scored momentum_xs's *signals* +36 bps against
+# random entry while its *fills* came in at −36 bps: the queue delay, not the
+# signal, was destroying the edge. Candidates past MAX_SIGNAL_AGE_FRAC of their
+# horizon are left unfilled (they still earn a virtual outcome, so the learning
+# loop keeps the evidence for free), and EV decays with age so fresh candidates
+# outrank stale ones.
+MAX_SIGNAL_AGE_FRAC = float(os.environ.get("MATRIX_MAX_SIGNAL_AGE_FRAC", "0.20"))
+MIN_SIGNAL_WINDOW_S = float(os.environ.get("MATRIX_MIN_SIGNAL_WINDOW_S", "45"))
+
+
+def signal_age_frac(generated_at: datetime, horizon_seconds: int | None, now: datetime) -> float:
+    """How far into its own horizon a prediction already is (0 = brand new)."""
+    horizon = float(horizon_seconds or 0)
+    if horizon <= 0:
+        return 0.0
+    return max(0.0, (now - generated_at).total_seconds() / horizon)
+
+
+def is_fresh_enough(generated_at: datetime, horizon_seconds: int | None, now: datetime) -> bool:
+    """Trade it only if little of the horizon has burned. Short-horizon signals
+    keep an absolute floor so they remain fillable at all."""
+    horizon = float(horizon_seconds or 0)
+    if horizon <= 0:
+        return True
+    elapsed = (now - generated_at).total_seconds()
+    return elapsed <= max(horizon * MAX_SIGNAL_AGE_FRAC, MIN_SIGNAL_WINDOW_S)
+
+
 async def _latest_funding_rate(symbol: str) -> Decimal | None:
     """Latest funding rate for a crypto perp from the LOCAL ticker snapshot table.
 
