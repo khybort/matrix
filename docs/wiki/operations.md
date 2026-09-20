@@ -57,5 +57,18 @@ it ran for months and deleted almost nothing — see [[incidents]]):
 SELECT min(trade_ts) FROM market_trades WHERE symbol = 'BTCUSDT';
 ```
 
+Deleting rows does not shrink the file. Space goes to Postgres' free-space map,
+and only VACUUM puts it there, so autovacuum has to keep pace with retention or
+the table extends on disk while rows disappear. `market_trades` carries
+`autovacuum_vacuum_scale_factor = 0.02` (migration 0040) for exactly that
+reason: the default 0.2 means waiting for ~64M dead tuples on a 322M-row table,
+and autovacuum had never run on it at all.
+
+```sql
+-- has autovacuum ever touched it, and how far behind is it?
+SELECT relname, n_dead_tup, last_autovacuum, autovacuum_count
+FROM pg_stat_user_tables WHERE relname = 'market_trades';
+```
+
 `make retention-drain` forces a full catch-up; `make db-compact TABLE=…` runs
 VACUUM FULL to return space to the OS and **locks the table** while it does.
