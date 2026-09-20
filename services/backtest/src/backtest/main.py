@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import signal
 import sys
 import time
@@ -39,6 +40,8 @@ DEFAULT_INTERVAL_S = 10.0
 # infrequently — once per hour is plenty; eligibility changes on a days
 # timescale (60-day observation gate).
 CERT_CHECK_INTERVAL_S = 3600.0
+# Idle heartbeat: log freshness is how we tell a live engine from a dead one.
+HEARTBEAT_INTERVAL_S = float(os.environ.get("MATRIX_ENGINE_HEARTBEAT_S", "120"))
 
 
 async def _check_certificates() -> None:
@@ -112,11 +115,27 @@ async def run(interval_s: float) -> None:
         logger.exception(f"ensure_shadow_wallets failed (challengers disabled this run): {e}")
 
     last_cert_check = 0.0
+    # A silent engine and a dead engine look identical from outside, and that
+    # ambiguity has cost this system twice: three days in September when the
+    # child died inside a container that still reported "Up", and twenty-two
+    # minutes on 2026-09-20 when a maintenance command stopped it and never
+    # reached its restart step. Both times the container was running and the
+    # last log line was simply old. A heartbeat on an idle loop makes log
+    # freshness a reliable liveness signal rather than a guess.
+    last_heartbeat = time.monotonic()
+    ticks_since_heartbeat = 0
     while not stop.is_set():
         try:
             opened, closed, expired = await _tick()
+            ticks_since_heartbeat += 1
             if opened or closed or expired:
                 logger.info(f"tick: opened={opened} closed={closed} expired={expired}")
+                last_heartbeat = time.monotonic()
+                ticks_since_heartbeat = 0
+            elif time.monotonic() - last_heartbeat >= HEARTBEAT_INTERVAL_S:
+                logger.info(f"heartbeat: idle, {ticks_since_heartbeat} tick(s) with nothing to do")
+                last_heartbeat = time.monotonic()
+                ticks_since_heartbeat = 0
         except Exception as e:
             logger.exception(f"tick error: {e}")
 
