@@ -111,10 +111,12 @@ Standing on 2026-09-20 (14-day window):
 |---|---|---|---|---|---|
 | momentum_xs/crypto | 1989 | 936 | +29.7 bps (t=7.85) | 1.000 | **confirmed** |
 | bist_news_event/bist | 33 | 200 | +21.2 bps (t=5.43) | 0.534 | provisional |
-| funding_reversion/crypto | 2499 | 13039 | +2.2 bps (t=1.55) | 0.984 | unproven |
+| funding_reversion/crypto | 1500 | 13039 | +2.2 bps (t=1.55) | 0.984 | unprovable |
 
 `funding_reversion` is the rule working as intended: a 3.5 bps edge registers a
-13 000-trade target and will almost certainly never confirm.
+13 000-trade target against a study that simulates at most 1 500, so it is
+marked **unprovable** — an edge that small cannot be proven with the data we
+can hold. Saying that once is better than deferring it every run.
 
 *Two errors the live data caught in the first cut,* both worth keeping in mind
 for anything similar: a large measured effect size registered a 30-trade target
