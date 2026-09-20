@@ -416,6 +416,11 @@ edge-report: ## Entry-timing edge vs random entry, per strategy: make edge-repor
 	$(DC) $(DC_DEV) exec -T backtest uv run --no-sync python /workspace/scripts/edge_report.py \
 		--days $(or $(DAYS),14) $(if $(STRATEGY),--strategy $(STRATEGY),) $(if $(DRAWS),--draws $(DRAWS),)
 
+.PHONY: horizon-report
+horizon-report: ## Alpha decay: which holding period does each signal actually pay at?
+	$(DC) $(DC_DEV) exec -T backtest uv run --no-sync python /workspace/scripts/barrier_report.py \
+		--horizon --days $(or $(DAYS),14) $(if $(STRATEGY),--strategy $(STRATEGY),)
+
 .PHONY: execution-report
 execution-report: ## Post-only entry vs crossing: make execution-report [DAYS=14] [WAIT=1]
 	$(DC) $(DC_DEV) exec -T backtest uv run --no-sync python /workspace/scripts/execution_report.py \

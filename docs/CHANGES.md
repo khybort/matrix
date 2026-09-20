@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-09-20 — Alfa bozunma (ufuk) çalışması: momentum_xs 60 → 90 dk önerildi
+- `make horizon-report`: her sinyalin AYNI sembolde rastgele girişe göre FAZLA getirisi 1…120 dk ufuklarında ölçülür (sürüklenme çıkarılmadan bakmak yükselen piyasada her long'u alfa gibi gösteriyordu; sembol başına 40 rastgele çekilişle drift tahmin edilip çıkarılıyor), maliyet düşülür, her ufuk için t verilir.
+- Tek belirleyici sonuç: `momentum_xs` 90 dk'da +37.0 bps (t=3.59), mevcut 60 dk'da −26.8. Diğerlerinin "daha iyi" ufku kendi gürültüsünü aşmıyor (t<2) — özellikle uzun ufuklarda varyans devasa olduğu için nokta tahmini her zaman uzun ufku seçer; rapor bunu `act` sütunuyla açıkça ayırır.
+- Değişiklik doğrudan uygulanmadı: sistemin kendi hattından `param_tune` önerisi açıldı (horizon_s 3600 → 5400, kanıt metrics_window'da). momentum_xs'in halihazırda bir challenger'ı (v3) olduğu için öneri sırada bekliyor — "aynı anda tek challenger" kuralı. Efficacy v3'ü kapattığında uygulanacak.
+
 ## 2026-09-20 — Post-only giriş testi: genel kazanç var ama EDGE'İ OLAN stratejide yok
 - `matrix_shared/execution_study.py` + `make execution-report`: her sinyal için sinyal barının kapanışına limit konur, `WAIT` bar beklenir, dolarsa maker (1 bps) doldu sayılır, dolmazsa piyasadan geçilir (taker). Bracket kalan ufukla oynatılır; bekleme süresi ufuktan düşülür.
 - Sonuç (14 g, 1 bar bekleme): dolum oranı %82–91. Çoğu stratejide +2…+16 bps kazanç. **Ama `momentum_xs`'te −2.9 bps (t=−0.35)** — momentum sinyalinde limit emri ancak fiyat geri geldiğinde doluyor, yani tam da momentum bozulduğunda: ters seçim. Kabul kriteri (net edge ≥ +10 bps) sağlanmadı, bu yüzden **uygulanmadı**.

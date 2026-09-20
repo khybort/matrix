@@ -183,3 +183,145 @@ def format_report(rows: list[dict], *, days: float, grid: tuple[float, ...]) -> 
         "into a horizon exit at minus cost."
     )
     return head + "\n".join(lines) + tail
+
+
+# ---------------------------------------------------------------- alpha decay
+
+HORIZON_GRID_MIN = tuple(int(x) for x in os.environ.get(
+    "MATRIX_HORIZON_GRID", "1,2,3,5,10,15,20,30,45,60,90,120").split(","))
+DRIFT_DRAWS = int(os.environ.get("MATRIX_HORIZON_DRIFT_DRAWS", "40"))
+
+
+def signed_return_bps(bars: list[Bar], idx: int, side: str, horizon_bars: int) -> float | None:
+    """Plain signed return over the horizon, no barriers: the alpha itself."""
+    j = idx + horizon_bars
+    if idx < 0 or j >= len(bars) or bars[idx].close <= 0:
+        return None
+    raw = (bars[j].close - bars[idx].close) / bars[idx].close
+    return (raw if side != "short" else -raw) * _BPS
+
+
+async def run_horizon_study(*, days: float = 14.0, strategy_id: str | None = None) -> list[dict]:
+    """Where does each strategy's signal actually pay, and for how long?
+
+    57% of this book's exits are time exits at roughly minus cost, which is the
+    signature of a horizon that does not match the signal's decay. This measures
+    the signal's **excess** return over a random entry in the same symbol at
+    each candidate horizon, net of the round trip, and reports the argmax — the
+    holding period the data asks for rather than the one the config carries.
+    Subtracting the per-symbol drift is what stops a rising tape from being
+    mistaken for slow alpha.
+    """
+    rows_in = await _load_candidates(days, strategy_id)
+    if not rows_in:
+        return []
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for r in rows_in:
+        grouped.setdefault((r["strategy_id"], r["asset_class"]), []).append(r)
+    sampled = [r for g in grouped.values() for r in subsample(g, MAX_PER_STRATEGY)]
+
+    from datetime import UTC, datetime, timedelta
+
+    since = datetime.now(UTC) - timedelta(days=days + 1)
+    by_class: dict[str, set[str]] = {}
+    for t in sampled:
+        by_class.setdefault(t["asset_class"], set()).add(t["symbol"])
+    bars: dict[tuple[str, str], list[Bar]] = {}
+    for ac, syms in by_class.items():
+        for sym, b in (await _load_bars(syms, ac, since)).items():
+            bars[(ac, sym)] = b
+
+    # Per-symbol drift at each horizon: what a random entry would have earned.
+    # Without this the profile measures the market, not the signal — over 90
+    # minutes in a rising tape every long looks like alpha.
+    import random as _random
+
+    rng = _random.Random(11)
+    drift: dict[tuple[str, str, int], float] = {}
+    for (ac, sym), series in bars.items():
+        for h in HORIZON_GRID_MIN:
+            if len(series) < h + 20:
+                continue
+            draws = []
+            for _ in range(DRIFT_DRAWS):
+                i = rng.randint(0, len(series) - h - 1)
+                v = signed_return_bps(series, i, "long", h)
+                if v is not None:
+                    draws.append(v)
+            if draws:
+                drift[(ac, sym, h)] = sum(draws) / len(draws)
+
+    acc: dict[tuple[str, str], dict] = {}
+    for t in sampled:
+        series = bars.get((t["asset_class"], t["symbol"]))
+        if not series:
+            continue
+        idx = _index_at(series, t["generated_at"])
+        if idx <= 0:
+            continue
+        key = (t["strategy_id"], t["asset_class"])
+        a = acc.setdefault(key, {"n": 0, "cur": int((t["horizon_seconds"] or 600) // 60),
+                                 "by_h": {h: [] for h in HORIZON_GRID_MIN}})
+        a["n"] += 1
+        sign = 1.0 if t["side"] != "short" else -1.0
+        for h in HORIZON_GRID_MIN:
+            v = signed_return_bps(series, idx, t["side"], h)
+            d = drift.get((t["asset_class"], t["symbol"], h))
+            if v is not None and d is not None:
+                a["by_h"][h].append(v - sign * d)   # excess over a random entry
+
+    cost = float(execution_cost_bps("crypto")) * 2
+    out = []
+    for (sid, ac), a in acc.items():
+        if a["n"] < 100:
+            continue
+        means, tstats = {}, {}
+        for h, v in a["by_h"].items():
+            if len(v) < 50:
+                continue
+            mu = sum(v) / len(v)
+            var = sum((x - mu) ** 2 for x in v) / (len(v) - 1)
+            se = math.sqrt(var / len(v)) if var > 0 else 0.0
+            means[h] = mu - cost
+            tstats[h] = (mu - cost) / se if se > 0 else 0.0
+        if not means:
+            continue
+        best_h = max(means, key=lambda h: means[h])
+        # A horizon is only "better" if the improvement is visible above the
+        # noise at that horizon; long horizons have huge variance and will
+        # always win on the point estimate alone.
+        cur_h = a["cur"] if a["cur"] in means else best_h
+        decisive = bool(tstats[best_h] >= 2.0 and means[best_h] > means[cur_h])
+        out.append({
+            "strategy": sid, "market": ac, "n": a["n"],
+            "current_h_min": a["cur"],
+            "current_net_bps": round(means[cur_h], 1),
+            "best_h_min": best_h, "best_net_bps": round(means[best_h], 1),
+            "t_best": round(tstats[best_h], 2), "decisive": decisive,
+            "by_h": {h: round(v, 1) for h, v in sorted(means.items())},
+            "t_by_h": {h: round(v, 2) for h, v in sorted(tstats.items())},
+        })
+    out.sort(key=lambda r: r["best_net_bps"], reverse=True)
+    return out
+
+
+def format_horizon_report(rows: list[dict], *, days: float) -> str:
+    if not rows:
+        return "horizon study: no data"
+    head = (
+        f"Alpha decay — excess return over a random entry, by holding period, "
+        f"last {days:g}d, net of round-trip cost\n"
+        f"{'strategy':<24}{'mkt':<7}{'n':>6}{'now':>6}{'now bps':>9}{'best':>6}{'best bps':>10}{'t':>7}  act  by horizon (min:bps)\n"
+    )
+    lines = []
+    for r in rows:
+        by_h = " ".join(f"{h}:{v:+.0f}" for h, v in r["by_h"].items())
+        lines.append(
+            f"{r['strategy']:<24}{r['market']:<7}{r['n']:>6}{r['current_h_min']:>6}"
+            f"{r['current_net_bps']:>9.1f}{r['best_h_min']:>6}{r['best_net_bps']:>10.1f}"
+            f"{r['t_best']:>7.2f}  {'YES' if r['decisive'] else '   '}  {by_h}"
+        )
+    return head + "\n".join(lines) + (
+        "\nact=YES only when the better horizon clears its own noise (t >= 2). "
+        "Long horizons have large variance and always win on the point estimate alone."
+    )

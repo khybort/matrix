@@ -46,3 +46,13 @@ def test_row_picks_the_multiple_with_the_best_net_and_reports_the_gain():
     assert row["best_m"] == 0.5 and row["best_net_bps"] == 15.0
     assert row["best_horizon_share"] == 0.2
     assert row["by_m"][2.0] == -10.0
+
+
+def test_signed_return_is_directional_and_bounded_by_the_series():
+    from matrix_shared.barrier_study import signed_return_bps
+
+    bars = _series([100, 101, 102])
+    assert signed_return_bps(bars, 0, "long", 2) == 200.0
+    assert signed_return_bps(bars, 0, "short", 2) == -200.0
+    assert signed_return_bps(bars, 0, "long", 5) is None      # past the end
+    assert signed_return_bps(bars, -1, "long", 1) is None
