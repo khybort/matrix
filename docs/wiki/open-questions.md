@@ -54,6 +54,22 @@ how much the answer would change.
   author's work that has not reached git, so there is no HEAD to commit it
   against. Land it the moment their floor lands — until then it exists only in
   the working tree and would be lost by a hard reset.
+- **`shared_buffers` is 128 MB against a 49 GB table.** That is the Postgres
+  default and nobody has revisited it. Measured 2026-09-20: a 60.4% buffer
+  cache hit rate across 880M block reads, which means most of the trading
+  path's reads go to disk. Raising it to a few GB is very likely the single
+  largest infrastructure lever left, and it costs a database restart — brief,
+  non-destructive, and everything reconnects, but disruptive enough that it
+  should be a deliberate act rather than a side effect of a working session.
+  *Test:* set it, watch `cache_hit_pct` and the feature-path query times.
+- **A time-only index changes plans elsewhere.** `ix_market_trades_ts` (0039)
+  made `WHERE symbol = $1 ORDER BY trade_ts DESC LIMIT n` switch from the
+  composite index to a backward scan of the time index with a symbol filter.
+  For a liquid symbol that is fine; for a rare one it walks most of the index
+  and ran over nine minutes. `ANALYZE` fixed the rare case, and
+  `autovacuum_analyze_scale_factor = 0.02` (0040) keeps the statistics fresh
+  so it stays fixed. Worth re-checking after the backlog drains, because the
+  distribution will shift again.
 - **Operator-blocked**: only `TELEGRAM_BOT_TOKEN` remains — without it every
   alert is invisible, which is what let the three-day outage pass unnoticed.
   The wallet refund was applied 2026-09-19 and lid sleep was disabled

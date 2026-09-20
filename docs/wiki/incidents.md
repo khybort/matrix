@@ -177,3 +177,28 @@ the existing registries were merged by earliest registration.
 that matters is the one nobody reads twice. Both failures here were invisible
 from inside a single container: everything wrote successfully, every log line
 said so, and the file simply was not the same file.
+
+## 2026-09-20 — The index that fixed retention broke price lookups
+
+Adding `ix_market_trades_ts` so retention could sweep in time order changed the
+plan for a query that had nothing to do with retention:
+`SELECT price FROM market_trades WHERE symbol = $1 ORDER BY trade_ts DESC
+LIMIT n`, the feature path's latest-price lookup. The planner switched from the
+composite `(symbol, trade_ts)` index, which answers both the predicate and the
+ordering, to a backward scan of the new time index with a filter on symbol.
+
+For a liquid symbol that is harmless. For a rare one — and with ~900 symbols
+most are rare — it walks most of a 322M-row index looking for fifty rows. Three
+such lookups were sitting at nine to twelve minutes on `DataFileRead`.
+
+`ANALYZE` fixed it: with current statistics the planner picks the composite
+index for rare symbols and the time index only where it is genuinely cheap. A
+fresh liquid lookup measured 603 ms including client startup.
+`autovacuum_analyze_scale_factor = 0.02` from migration 0040 keeps the
+statistics current as the backlog drains and the distribution shifts.
+
+**The lesson:** an index is not a local change. It is a new option offered to
+the planner for *every* query touching that table, and the planner will take it
+wherever its estimates say so. After adding one to a large table, re-check the
+plans of the queries that were already fast — and ANALYZE, because a new index
+with stale statistics is how a good plan becomes a bad one.
