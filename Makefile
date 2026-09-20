@@ -416,6 +416,11 @@ edge-report: ## Entry-timing edge vs random entry, per strategy: make edge-repor
 	$(DC) $(DC_DEV) exec -T backtest uv run --no-sync python /workspace/scripts/edge_report.py \
 		--days $(or $(DAYS),14) $(if $(STRATEGY),--strategy $(STRATEGY),) $(if $(DRAWS),--draws $(DRAWS),)
 
+.PHONY: barrier-report
+barrier-report: ## Volatility-scaled (triple-barrier) TP/SL vs the fixed ones: make barrier-report [DAYS=14]
+	$(DC) $(DC_DEV) exec -T backtest uv run --no-sync python /workspace/scripts/barrier_report.py \
+		--days $(or $(DAYS),14) $(if $(STRATEGY),--strategy $(STRATEGY),)
+
 .PHONY: method-ab
 method-ab: ## Realised PnL by decision method (rule / llm / llm+rule / conflict / +explore / +lesson), last DAYS (default 7)
 	$(PSQL_SHARED) -c "SELECT coalesce(p.context->>'method','(none)') AS method, count(*) AS n, round(sum(o.pnl_usd),2) AS pnl_usd, round(avg((o.pnl_usd>0)::int),3) AS win_rate, round(avg(o.pnl_usd),4) AS avg_pnl FROM outcomes o JOIN predictions p ON p.id=o.prediction_id WHERE p.strategy_id='matrix_agent' AND o.observed_at >= now() - make_interval(days => $(or $(DAYS),7)) AND o.reason <> 'orphan_flat_close' GROUP BY 1 ORDER BY pnl_usd;"

@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-09-20 — Vol-ölçekli triple barrier (López de Prado) uygulandı
+- `make barrier-report`: her geçmiş sinyal, bareler m·σ_h olacak şekilde yeniden oynatılır (σ_h = 1m getirilerin std'si × √ufuk). Ölçüm: mevcut take-profit'ler ufuk volatilitesinin **8.8σ** (grid), 6.8σ (matrix_agent/crypto), 6.3σ (matrix_agent/us), 5.6σ (bist_volume_breakout) uzağında — yani ufuk içinde ulaşılamaz. Çıkışların %57'sinin "hit_horizon ≈ eksi maliyet" olmasının sebebi bu.
+- Sweep sonucu (14 g, maliyet düşülmüş net bps): `oi_breakout` −6.7 → **+14.1** (m=1.5), `momentum_xs` +15.7 → **+26.9** (m=3), `bist_intraday_reversion` −6.1 → +5.1, `funding_reversion` −12.8 → −2.2. `grid`/`dca`/`oi_delta`/`matrix_agent` hiçbir m'de pozitif değil — bare geometrisi sinyalsizliği kurtarmıyor.
+- `matrix_shared/barriers.py`: tp/sl artık sembolün güncel volatilitesinden türetiliyor (`MATRIX_BARRIER_M`=1.5, [0.15%, 3%] kıskacı, 60 s cache). Strategy dispatch'inde tüm draft'lara, agent'ta prediction'a uygulanır; carry/delta-neutral bacaklara dokunulmaz, volatilite bilinmiyorsa stratejinin kendi baresi kalır. `MATRIX_VOL_BARRIERS=0` ile kapatılır. Her prediction `context.barrier` altında eski/yeni değerleri taşır.
+
 ## 2026-09-20 — Asıl kayıp mekanizması: sinyal dolana kadar ölüyordu
 - Edge çalışması artık DOLDURULAN işlemleri değil TÜM sinyalleri değerlendiriyor (14 günde 5 281 sinyal / 997 dolum; predictions'ın yalnızca %12'si pozisyona dönüşüyor). Tablo tersine döndü: `momentum_xs` sinyalleri rastgele girişten **+36.0 bps** iyi (t=6.04, n=799) — oysa DOLUMLARI −35.8 bps'ti. `oi_delta` sinyal bazında +1.3 (t=0.34); dolum bazındaki +19.4'ü seçim katmanının şansıydı.
 - Nedeni ölçüldü: ortalama dolum, prediction'ın kendi ufkunun **%53'ü** (momentum_xs), %41 (dca), %40 (grid), %32 (oi_delta) geçtikten sonra oluyor — slot dolu olduğu için aday kuyrukta bekliyor ve `close_by`'a kadar taze adaylarla eşit yarışıyor. Sinyal dolana kadar bozuluyor.

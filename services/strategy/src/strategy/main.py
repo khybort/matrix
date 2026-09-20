@@ -137,6 +137,43 @@ def _instantiate_for_market(
     return out
 
 
+async def _apply_vol_barriers(drafts: list) -> int:
+    """Rewrite each draft's tp/sl to m·σ_h for its symbol (matrix_shared.barriers).
+
+    Fixed-percentage barriers mean different things in different regimes: the
+    2026-09-20 barrier study found take-profits sitting 8.8σ (grid) and 6.8σ
+    (matrix_agent) out, unreachable inside their own horizon, which is why 57%
+    of exits were time exits at minus the round trip. Strategies that set no
+    barriers, and symbols with unknown volatility, are left untouched.
+    """
+    from matrix_shared.barriers import ENABLED, vol_scaled_barriers
+
+    if not ENABLED:
+        return 0
+    rescaled = 0
+    for d in drafts:
+        if d.tp_pct is None and d.sl_pct is None:
+            continue  # carry / delta-neutral legs have no price barrier
+        try:
+            scaled = await vol_scaled_barriers(d.symbol, d.asset_class, d.horizon_seconds)
+        except Exception as e:  # noqa: BLE001 — never block a tick on this
+            logger.debug(f"vol barrier skipped for {d.symbol}: {e}")
+            continue
+        if scaled is None:
+            continue
+        tp, sl = scaled
+        d.context = {
+            **(d.context or {}),
+            "barrier": {"mode": "vol_scaled", "tp_pct": str(tp), "sl_pct": str(sl),
+                        "was_tp_pct": str(d.tp_pct), "was_sl_pct": str(d.sl_pct)},
+        }
+        d.tp_pct, d.sl_pct = tp, sl
+        rescaled += 1
+    if rescaled:
+        logger.debug(f"vol-scaled barriers applied to {rescaled}/{len(drafts)} draft(s)")
+    return rescaled
+
+
 async def _tick() -> int:
     configs = await _active_configs()
     # Resolve the crypto active universe once per tick (async — the sync path
@@ -173,6 +210,7 @@ async def _tick() -> int:
     except Exception as e:  # noqa: BLE001
         logger.debug(f"regime tag skipped: {e}")
 
+    await _apply_vol_barriers(drafts)
     drafts = await filter_drafts(drafts)
     return await persist_drafts(drafts)
 

@@ -316,6 +316,16 @@ async def _tick(symbols: list[str]) -> int:
             continue
 
         now = datetime.now(UTC)
+        # Barriers scaled to the symbol's current volatility; matrix_agent's
+        # fixed take-profit measured 6.8σ out on 2026-09-20, i.e. unreachable
+        # inside its own horizon (matrix_shared.barriers).
+        try:
+            from matrix_shared.barriers import vol_scaled_barriers
+
+            barriers = await vol_scaled_barriers(symbol, asset_class, cfg.horizon_seconds)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"vol barrier skipped for {symbol}: {e}")
+            barriers = None
         pred = Prediction(
             strategy_id=AGENT_STRATEGY_ID,
             strategy_version=cfg.version,
@@ -328,10 +338,12 @@ async def _tick(symbols: list[str]) -> int:
             horizon_seconds=cfg.horizon_seconds,
             close_by=now + timedelta(seconds=cfg.horizon_seconds),
             entry_price_ref=decision.last_price,
-            tp_pct=cfg.tp_pct,
-            sl_pct=cfg.sl_pct,
+            tp_pct=barriers[0] if barriers else cfg.tp_pct,
+            sl_pct=barriers[1] if barriers else cfg.sl_pct,
             thesis=decision.thesis,
-            context={**decision.feature_dump, "agent_version": cfg.version, "method": decision.method},
+            context={**decision.feature_dump, "agent_version": cfg.version, "method": decision.method,
+                     **({"barrier": {"mode": "vol_scaled", "tp_pct": str(barriers[0]),
+                                     "sl_pct": str(barriers[1])}} if barriers else {})},
             status="open",
         )
         async with shared_session_scope() as session:
