@@ -113,7 +113,25 @@ quantity it is supposed to move — here, the age of the oldest surviving row �
 not whether it ran. Same shape as [[open-questions]]' contested bot token:
 the signal that would have told us was itself broken.
 
-**Still open:** deleted space returns to Postgres' free-space map, not to the
-OS. New inserts reuse it, so the disk trend flattens rather than falls;
+**Still open, and larger than the plan bug:** per-symbol deletion is
+structurally slow on this table. `market_trades` is append-only and ~900
+symbols interleave, so the oldest rows of any single symbol are scattered
+across the whole 97 GB heap. Deleting 10 000 of them touches 10 000 distinct
+cold pages: measured at ~1 s warm but **three to six minutes cold**, and the
+budget is only checked between batches, so one run does roughly one batch.
+That is ~1.8M rows/day against ~4.3M/day arriving — the pruner still loses.
+The structural answers are time partitioning (drop a day, do not delete rows)
+or a one-time rewrite keeping the last seven days, which would return ~90 GB
+at once. Both are operator decisions: the rewrite drops a table.
+
+Deleted space also returns to Postgres' free-space map, not to the OS. New
+inserts reuse it, so at best the disk trend flattens rather than falls;
 `make db-compact TABLE=market_trades` (VACUUM FULL) is the operator-run,
 table-locking way to give it back.
+
+**Side note worth its own fix one day:** every restart of `bars-aggregator`
+leaves its Postgres backend still executing the DELETE it was in the middle
+of — visible as two concurrent prune statements from the same client address,
+with a shutdown traceback in the connection pool. Editing anything under
+`packages/python-shared/src` restarts that container, so a working session
+quietly stacks orphaned backends against the table it is trying to drain.
