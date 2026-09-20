@@ -262,3 +262,23 @@ async def test_repeated_negatives_file_one_dev_task(monkeypatch):
             await session.execute(text("DELETE FROM dev_tasks WHERE description LIKE :m"),
                                   {"m": f"%[efficacy:{sid}/crypto]%"})
         await _cleanup(sid)
+
+
+def test_a_challenger_that_changed_nothing_is_retired_not_run_forever():
+    """One challenger slot per strategy: a measured tie must release it."""
+    from reflection.efficacy import INDIFFERENCE_MIN_N, Sample, challenger_verdict
+
+    n = INDIFFERENCE_MIN_N + 5
+    champ = Sample(n=n, mean=-0.1361, var=0.5, total=-15.6)
+    tie = Sample(n=n, mean=-0.1218, var=0.5, total=-12.9)      # |z| ~ 0.1
+    assert challenger_verdict(champ, tie, age_h=164) == "retire"
+
+    # thin samples are still undecided, not a tie
+    thin = Sample(n=60, mean=-0.12, var=0.5, total=-7.0)
+    assert challenger_verdict(Sample(n=60, mean=-0.136, var=0.5, total=-8.0), thin, age_h=164) == "pending"
+
+    # a real difference is never mistaken for a tie
+    better = Sample(n=n, mean=0.30, var=0.5, total=31.0)
+    assert challenger_verdict(champ, better, age_h=164) == "cutover"
+    worse = Sample(n=n, mean=-0.60, var=0.5, total=-63.0)
+    assert challenger_verdict(champ, worse, age_h=164) == "retire"

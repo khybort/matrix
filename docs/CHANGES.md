@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-09-20 — Berabere biten challenger slotu bırakır; ufuk değişikliği devrede
+- Her stratejinin tek challenger slotu var ve sıra önceliği yoktu: kanıtsız bir vol_filter tweak'i (106 sonuç sonrası |z|=0.08, yani ölçülmüş FARK YOK) t=3.59'luk ufuk değişikliğini bir hafta daha bekletiyordu. `challenger_verdict`'e eşdeğerlik kuralı eklendi: her iki taraf da `INDIFFERENCE_MIN_N` (100) örneğe ulaşmış ve |z| < 0.5 ise challenger emekli edilir — beraberlik de bir cevaptır, slot sıradaki öneriye daha çok yarar.
+- Canlıda zincir tamamlandı: v3 emekli → labs bekleyen öneriyi uyguladı → **momentum_xs v4 (horizon_s 5400) shadow olarak koşuyor**, şampiyon v2'ye (3600) karşı. Efficacy gerçekleşmiş PnL ile karar verecek. Ölçüm → öneri → challenger → karar döngüsü ilk kez uçtan uca kanıtla işledi.
+
 ## 2026-09-20 — Sembol bazlı ölçülmüş işlem maliyeti (düz 2 bps slippage kalktı)
 - `matrix_shared/symbol_costs.py`: kendi order book snapshot'larımızdan sembol başına medyan spread ölçülür, geçiş maliyeti spread'in yarısı olarak alınır (`MIN_SLIPPAGE_BPS`=0.5, `MAX`=25 kıskacı), paylaşılan volume'da JSON'a yazılır, reflection tick'inde tazelenir. Ölçülmemiş sembol düz değere düşer — model yalnız iyileştirir, hiçbir kapıyı bozmaz.
 - Ölçüm (3 saat, 24 sembol): medyan spread 1.16 bps (UNIUSDT) … 5.95 bps (BRUSDT), 5 kat fark. Gidiş-dönüş maliyeti artık BTCUSDT 12.0 bps, ADAUSDT 15.5, BRUSDT 16.9 — eski düz 15 bps majorlarda fazla sert, illikit altcoin'lerde fazla cömertti ve EV tabanını iki yönde de bozuyordu.

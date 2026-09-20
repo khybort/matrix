@@ -49,6 +49,14 @@ EFFICACY_MAX_HOURS = float(os.environ.get("MATRIX_EFFICACY_MAX_HOURS", "336"))  
 EFFICACY_MIN_N = int(os.environ.get("MATRIX_EFFICACY_MIN_N", "50"))
 EFFICACY_BEFORE_WINDOW_HOURS = float(os.environ.get("MATRIX_EFFICACY_BEFORE_WINDOW_HOURS", "168"))
 Z_NEG = float(os.environ.get("MATRIX_EFFICACY_Z_NEG", "1.0"))
+# "No difference detected" is a result, not a reason to keep measuring. A
+# challenger that has matched its champion over a decent sample is occupying
+# the one challenger slot its strategy gets, and the queue behind it may hold a
+# change with real evidence — on 2026-09-20 a vol-filter tweak (|z|=0.08 after
+# 106 outcomes) was set to block a horizon change measured at t=3.59 for
+# another week. Retire the tie and let the next proposal run.
+INDIFFERENCE_Z = float(os.environ.get("MATRIX_CHALLENGER_INDIFFERENCE_Z", "0.5"))
+INDIFFERENCE_MIN_N = int(os.environ.get("MATRIX_CHALLENGER_INDIFFERENCE_MIN_N", "100"))
 Z_POS = float(os.environ.get("MATRIX_EFFICACY_Z_POS", "1.0"))
 REVERT_COOLDOWN_DAYS = float(os.environ.get("MATRIX_EFFICACY_REVERT_COOLDOWN_DAYS", "7"))
 AUTO_ROLLBACK = os.environ.get("MATRIX_EFFICACY_AUTO_ROLLBACK", "true").strip().lower() != "false"
@@ -301,8 +309,12 @@ def challenger_verdict(champion: Sample, challenger: Sample, *, age_h: float) ->
     """cutover | retire | pending.
 
     cutover: enough samples, challenger significantly better (z >= Z_POS) and
-             not loss-making; retire: significantly worse, or time is up
-             without a win; pending: keep running.
+             not loss-making.
+    retire:  significantly worse, time is up without a win, or the two are
+             indistinguishable after a decent sample — a tie is an answer, and
+             the slot is worth more to the next proposal than another week of
+             confirming nothing.
+    pending: still genuinely undecided.
     """
     if challenger.n < CHALLENGER_MIN_N or champion.n < 2:
         return "retire" if age_h >= CHALLENGER_MAX_HOURS else "pending"
@@ -312,6 +324,12 @@ def challenger_verdict(champion: Sample, challenger: Sample, *, age_h: float) ->
         return "cutover"
     if z <= -Z_NEG or age_h >= CHALLENGER_MAX_HOURS:
         return "retire"
+    if (
+        abs(z) < INDIFFERENCE_Z
+        and challenger.n >= INDIFFERENCE_MIN_N
+        and champion.n >= INDIFFERENCE_MIN_N
+    ):
+        return "retire"  # measured, and it changed nothing — free the slot
     return "pending"
 
 
