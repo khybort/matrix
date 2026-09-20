@@ -123,9 +123,19 @@ async def prune_policy(
             if col:
                 where += f" AND {col} = CAST(:key AS {'uuid' if col == 'wallet_id' else 'text'})"
                 params["key"] = key
+            # ORDER BY the timestamp is not cosmetic — it is the difference
+            # between this module working and this module lying. Without it the
+            # planner sees `LIMIT` over a predicate it estimates as tens of
+            # millions of rows and picks a sequential scan; for a symbol with
+            # nothing old left the LIMIT never fills, so the scan runs the whole
+            # 300M-row table and one query eats the entire budget. Measured on
+            # 2026-09-20: 0.9 ms with the ORDER BY against minutes without it,
+            # and the backlog had sat undrained since June while retention
+            # logged a couple of hundred rows every five minutes and looked fine.
             sql = text(
                 f"DELETE FROM {policy.table} WHERE ctid IN ("
-                f"  SELECT ctid FROM {policy.table} WHERE {where} LIMIT :lim)"
+                f"  SELECT ctid FROM {policy.table} WHERE {where} "
+                f"  ORDER BY {policy.ts_col} LIMIT :lim)"
             )
             async with scope() as session:
                 result = await session.execute(sql, params)

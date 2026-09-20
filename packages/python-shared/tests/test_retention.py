@@ -100,3 +100,50 @@ async def test_prune_once_respects_budget_and_reports(monkeypatch):
     calls.clear()
     report = await prune_once(budget_s=0)
     assert report == {} and calls == []
+
+
+async def test_prune_uses_the_index_and_not_a_sequential_scan():
+    """The pruner's inner SELECT must be orderable by the timestamp column, or
+    Postgres answers a LIMIT over a huge estimated match set with a sequential
+    scan. For a symbol with nothing old left the LIMIT never fills, so the scan
+    reads the whole table and one query consumes the entire budget — which is
+    how retention ran for months, logging a couple of hundred rows every five
+    minutes while `market_trades` kept data back to June.
+
+    Asserted against the planner itself, because this is a plan bug, not a
+    logic bug: the Python is identical either way.
+    """
+    import asyncpg
+
+    dsn = os.environ.get("LOCAL_DATABASE_URL", "")
+    if not dsn:
+        pytest.skip("LOCAL_DATABASE_URL unset")
+    # Its own connection on purpose: the shared engine is bound to whichever
+    # event loop created it, and this assertion is about the planner, not about
+    # session plumbing.
+    conn = await asyncpg.connect(dsn.replace("postgres://", "postgresql://"))
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        absent = f"NOSUCH{uuid.uuid4().hex[:8].upper()}USDT"
+        rows = await conn.fetch(
+            "EXPLAIN SELECT ctid FROM market_trades "
+            "WHERE trade_ts < $1 AND symbol = $2 "
+            "ORDER BY trade_ts LIMIT 10000",
+            cutoff, absent,
+        )
+        plan = "\n".join(r[0] for r in rows)
+    finally:
+        await conn.close()
+    assert "Index Scan" in plan, plan
+    assert "Seq Scan" not in plan, plan
+
+
+async def test_the_shipped_statement_orders_by_the_policy_timestamp():
+    """Guard the actual SQL the module builds, so a future edit cannot drop the
+    ORDER BY and silently reintroduce the sequential scan."""
+    import inspect
+
+    from matrix_shared import retention as R
+
+    src = inspect.getsource(R.prune_policy)
+    assert "ORDER BY {policy.ts_col}" in src
