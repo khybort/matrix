@@ -4,11 +4,19 @@ The book loses ~18 bps a trade (docs/wiki/pnl-reality.md). Tuning only helps if
 the entries carry signal at all, so this module answers the prior question with
 a controlled experiment rather than another aggregate.
 
-Design — one simulator, two entry-time distributions:
+Design — one simulator, three arms:
 
-  treatment : the strategy's real entry bar
-  control   : K random entry bars for the same symbol, drawn from the same
-              period, with the SAME side, take-profit, stop-loss and horizon
+  treatment    : the strategy's real entry bar and real side
+  control-time : K random entry bars, SAME side, barriers and horizon
+                 → tests whether the strategy times its entries
+  control-side : the SAME entry bar, random side
+                 → tests whether the strategy picks its direction
+
+Both nulls are needed and they answer different questions. A strategy can time
+entries well while having no directional view (it would beat control-time and
+lose to control-side), or pick direction well at arbitrary times (the reverse).
+Judging on one null alone — as this module did until 2026-09-20 — risks
+deleting a strategy that has the other kind of edge.
 
 Both are replayed on 1m bars by `simulate_bracket`, so fees, slippage, exit
 rules, holding time and symbol mix are identical by construction and the only
@@ -150,13 +158,16 @@ class StrategyEdge:
     n_filled: int = 0
     treatment: list[float] = field(default_factory=list)
     control: list[float] = field(default_factory=list)
+    control_side: list[float] = field(default_factory=list)
     realised_net_bps: float = 0.0
     tp_rate: float = 0.0
 
     def as_row(self) -> dict:
         t_mean = sum(self.treatment) / len(self.treatment) if self.treatment else 0.0
         c_mean = sum(self.control) / len(self.control) if self.control else 0.0
+        s_mean = sum(self.control_side) / len(self.control_side) if self.control_side else 0.0
         diff, se, t = welch(self.treatment, self.control)
+        diff_s, se_s, t_s = welch(self.treatment, self.control_side)
         return {
             "strategy": self.strategy_id,
             "market": self.asset_class,
@@ -166,9 +177,12 @@ class StrategyEdge:
             "control_bps": round(c_mean, 2),
             "edge_bps": round(diff, 2),
             "t": round(t, 2),
+            "side_edge_bps": round(diff_s, 2),
+            "t_side": round(t_s, 2),
             "p": round(two_sided_p(t), 5),
             # provisional; run_edge_study replaces it with the FDR-corrected call
             "significant": abs(t) >= 1.96 and self.n >= MIN_TRADES,
+            "control_side_bps": round(s_mean, 2),
             "realised_net_bps": round(self.realised_net_bps, 2),
             "sim_tp_rate": round(self.tp_rate, 3),
         }
@@ -296,6 +310,14 @@ async def run_edge_study(
             )
             if c.reason != "no_data":
                 e.control.append(c.ret_bps)
+            # Same moment, coin-flipped direction: does the strategy know which
+            # way to go, independently of when?
+            flip = "short" if rng.random() < 0.5 else "long"
+            cs = simulate_bracket(
+                series, idx, side=flip, tp_pct=tp, sl_pct=sl, horizon_bars=horizon_bars
+            )
+            if cs.reason != "no_data":
+                e.control_side.append(cs.ret_bps)
 
     rows = []
     for e in acc.values():
@@ -307,11 +329,15 @@ async def run_edge_study(
     # Multiple-testing correction across every strategy tested in this run.
     testable = [r for r in rows if r["n"] >= MIN_TRADES]
     keep = benjamini_hochberg([r["p"] for r in testable])
-    for r, k in zip(testable, keep):
+    keep_side = benjamini_hochberg([two_sided_p(r["t_side"]) for r in testable])
+    for r, k, ks in zip(testable, keep, keep_side):
         r["significant"] = bool(k)
+        r["significant_side"] = bool(ks)
+        # The bar for keeping a strategy: beat at least one null convincingly.
+        r["has_edge"] = bool((k and r["edge_bps"] > 0) or (ks and r["side_edge_bps"] > 0))
     for r in rows:
         if r["n"] < MIN_TRADES:
-            r["significant"] = False
+            r["significant"] = r["significant_side"] = r["has_edge"] = False
     rows.sort(key=lambda r: r["edge_bps"], reverse=True)
     if skipped:
         logger.info(f"edge study: {skipped} prediction(s) skipped (no bar coverage)")
@@ -325,23 +351,25 @@ def format_report(rows: list[dict], *, days: float, cost_bps: float) -> str:
         f"Entry-timing edge vs random entry — last {days:g}d, "
         f"{sum(r['n'] for r in rows)} signals ({sum(r['n_filled'] for r in rows)} filled), "
         f"round-trip cost {cost_bps:g} bps\n"
-        f"{'strategy':<24}{'mkt':<8}{'n':>7}{'fill':>6}{'gross':>9}{'control':>9}{'edge':>8}{'t':>7}  FDR\n"
+        f"{'strategy':<24}{'mkt':<7}{'n':>6}{'gross':>8}{'vs time':>9}{'t':>6}{'vs side':>9}{'t':>6}  edge\n"
     )
     lines = [
-        f"{r['strategy']:<24}{r['market']:<8}{r['n']:>7}{r['n_filled']:>6}{r['gross_bps']:>9.1f}"
-        f"{r['control_bps']:>9.1f}{r['edge_bps']:>8.1f}{r['t']:>7.2f}  {'YES' if r['significant'] else ''}"
+        f"{r['strategy']:<24}{r['market']:<7}{r['n']:>6}{r['gross_bps']:>8.1f}"
+        f"{r['edge_bps']:>9.1f}{r['t']:>6.2f}{r['side_edge_bps']:>9.1f}{r['t_side']:>6.2f}"
+        f"  {'YES' if r.get('has_edge') else ''}"
         for r in rows
     ]
     total_t = [r for r in rows if r["n"] >= MIN_TRADES]
     tail = ""
     if total_t:
         best = max(total_t, key=lambda r: r["edge_bps"])
-        n_sig = sum(1 for r in rows if r["significant"])
+        n_sig = sum(1 for r in rows if r.get("has_edge"))
         tail = (
             f"\nbest: {best['strategy']}/{best['market']} edge {best['edge_bps']:+.1f} bps "
             f"(t={best['t']:.2f}, p={best['p']:.4f}, n={best['n']}). "
-            f"{n_sig}/{len(total_t)} survive Benjamini-Hochberg at FDR 5% across "
-            f"{len(total_t)} simultaneous tests. An edge must also exceed "
+            f"{n_sig}/{len(total_t)} beat a null at FDR 5% (two families: random entry time "
+            f"with the same side, and random side at the same time). A strategy that beats "
+            f"neither has no measured reason to hold capital; an edge must also exceed "
             f"{cost_bps:g} bps to pay for itself."
         )
     return head + "\n".join(lines) + tail
@@ -358,17 +386,22 @@ def clear_cache() -> None:
 
 
 def verdict(row: dict | None, *, cost_bps: float, min_t: float = 2.0) -> str:
-    """`pays` | `harmful` | `unproven`.
+    """`pays` | `harmful` | `unproven`, judged against BOTH nulls.
 
-    `pays`    — entries beat random by more than the round trip costs, at |t| ≥ min_t.
-    `harmful` — entries are significantly WORSE than random; the module is not
-                mistimed, it is anti-timed, and no sizing change fixes that.
+    `pays`    — beats a null (random entry time, or random side) by more than
+                the round trip, at |t| >= min_t. Either kind of edge counts:
+                knowing *when* and knowing *which way* are both tradeable.
+    `harmful` — significantly WORSE than a null. A strategy whose direction
+                loses to a coin flip is not mistuned, it is inverted, and no
+                sizing or threshold change repairs that.
     """
     if not row or row["n"] < MIN_TRADES:
         return "unproven"
-    if row["t"] >= min_t and row["edge_bps"] >= cost_bps:
+    t_time, t_side = row["t"], row.get("t_side", 0.0)
+    e_time, e_side = row["edge_bps"], row.get("side_edge_bps", 0.0)
+    if (t_time >= min_t and e_time >= cost_bps) or (t_side >= min_t and e_side >= cost_bps):
         return "pays"
-    if row["t"] <= -min_t:
+    if (t_time <= -min_t and e_time < 0) or (t_side <= -min_t and e_side < 0):
         return "harmful"
     return "unproven"
 

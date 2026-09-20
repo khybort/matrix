@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-09-20 — Edge testine ikinci null: rastgele ZAMAN yetmez, rastgele YÖN de gerekiyor
+- Metodolojik hata düzeltildi (dış araştırma ajanının tespiti): test yönü sabit tutup zamanı rastgeleliyordu, yani yalnız zamanlamayı sınıyordu. Bir strateji yön bilgisine sahip olup zamanlama edge'i olmayabilir (veya tersi); tek null'a bakıp strateji silmek yanlış karar riski taşıyordu. Artık iki aile test ediliyor: (a) rastgele giriş zamanı, aynı yön; (b) aynı an, rastgele yön. Her ikisine de BH/FDR uygulanıyor.
+- Sonuç (14 g, 5 277 sinyal): `momentum_xs` her iki null'ı da yeniyor — zamana karşı +31.2 bps (t=5.25), yöne karşı +33.0 bps (t=5.55). `bist_news_event` de yeniyor ama n=33. Diğer 11'i hiçbir null'ı yenmiyor. Ayrıca `oi_breakout` (−14.9, t=−2.46) ve `dca` (−5.8, t=−2.56) yön olarak yazı-turadan KÖTÜ — ters çalışıyorlar.
+- Sermaye kapısı (`verdict`) artık iki null'a birden bakıyor: bir null'ı maliyetin üstünde yenen korunur, herhangi birinde anlamlı negatif olan kitaptan çıkar.
+
 ## 2026-09-20 — Vol-ölçekli bare stratejinin ödeme oranını korur (simetrik bare kitabı durdurmuştu)
 - İlk sürüm tp=sl=m·σ_h veriyordu. Simetrik bir bare EV tabanını ancak %60 isabetle geçer; kitap 40 dakika boyunca hiç pozisyon açmadı. `preserve_ratio`: volatilite ÖLÇEĞİ belirler (stop gürültü bandının dışına), tp:sl oranı stratejinin tezidir ve korunur ([0.5, 4] kıskacıyla). Örnek: grid 0.024/0.015 → 0.0024/0.0015 (oran 1.6 sabit).
 - Bunun ortaya çıkardığı gerçek: eski EV hesabı ULAŞILAMAZ barelerle şişiyordu (8.8σ'lık bir tp, conf×tp olarak EV'ye tam puan veriyordu). Gerçekçi barelerle EV tabanı kitabın çoğunu doğru şekilde reddediyor — çünkü edge yok. Öğrenme durmuyor: sinyal bazlı çalışmalar ve virtual outcome'lar dolum gerektirmiyor.

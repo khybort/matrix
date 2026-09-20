@@ -83,16 +83,22 @@ def test_verdict_separates_paying_harmful_and_unproven():
     from matrix_shared.edge_study import verdict
 
     def row(**kw):
-        base = {"n": 200, "edge_bps": 0.0, "t": 0.0}
+        base = {"n": 200, "edge_bps": 0.0, "t": 0.0, "side_edge_bps": 0.0, "t_side": 0.0}
         base.update(kw)
         return base
 
-    assert verdict(row(edge_bps=18.1, t=2.74), cost_bps=15) == "pays"
-    # beats random but not by enough to pay the spread
+    # timing edge alone is enough, and so is directional edge alone
+    assert verdict(row(edge_bps=31.2, t=5.25), cost_bps=15) == "pays"
+    assert verdict(row(side_edge_bps=33.0, t_side=5.55), cost_bps=15) == "pays"
+    # beats a null but not by enough to pay the spread
     assert verdict(row(edge_bps=8.0, t=3.0), cost_bps=15) == "unproven"
-    # big edge, no significance
+    # big number, no significance
     assert verdict(row(edge_bps=40.0, t=1.1), cost_bps=15) == "unproven"
+    # direction loses to a coin flip → inverted, not mistuned
+    assert verdict(row(side_edge_bps=-14.9, t_side=-2.46), cost_bps=15) == "harmful"
     assert verdict(row(edge_bps=-35.8, t=-2.78), cost_bps=15) == "harmful"
+    # a strategy that pays on one null is kept even if the other is mildly negative
+    assert verdict(row(edge_bps=31.0, t=5.0, side_edge_bps=-3.0, t_side=-0.5), cost_bps=15) == "pays"
     # too few trades to conclude anything
     assert verdict(row(n=5, edge_bps=99.0, t=9.0), cost_bps=15) == "unproven"
     assert verdict(None, cost_bps=15) == "unproven"
@@ -131,3 +137,29 @@ def test_benjamini_hochberg_controls_the_false_discovery_rate():
     # nothing survives when everything is noise
     assert benjamini_hochberg([0.4, 0.5, 0.9], q=0.05) == [False, False, False]
     assert benjamini_hochberg([]) == []
+
+
+def test_both_nulls_are_reported_and_either_can_establish_edge():
+    import random
+
+    from matrix_shared.edge_study import StrategyEdge
+
+    rng = random.Random(5)
+
+    def noisy(mean: float, n: int = 400) -> list[float]:
+        return [rng.gauss(mean, 60) for _ in range(n)]
+
+    # times entries well, no directional view: beats the random-time control,
+    # indistinguishable from a coin-flipped side at the same moments
+    e = StrategyEdge("timer", "crypto", n=400)
+    e.treatment, e.control, e.control_side = noisy(30), noisy(0), noisy(29)
+    row = e.as_row()
+    assert row["edge_bps"] > 15 and row["t"] > 3
+    assert abs(row["t_side"]) < 2
+
+    # picks direction well but any entry time would do
+    d = StrategyEdge("picker", "crypto", n=400)
+    d.treatment, d.control, d.control_side = noisy(30), noisy(29), noisy(0)
+    row = d.as_row()
+    assert abs(row["t"]) < 2
+    assert row["side_edge_bps"] > 15 and row["t_side"] > 3
