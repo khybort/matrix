@@ -36,3 +36,32 @@ How the services get a model, what it costs, and how that is bounded.
   `MATRIX_LLM_DAILY_BUDGET_USD` (default 25). Typical day: ~$1–2.
 - **Director** runs one hourly review; since 2026-09-14 it resumes its cadence
   from the ledger instead of reviewing on every container restart.
+
+## What the LLM layer actually costs (2026-09-20)
+
+Imputed from `agent.usage` log lines, normalised to a day by each container's
+uptime:
+
+| service | calls | $/day (imputed) |
+|---|---|---|
+| graph (extraction) | 2599 in 4.7 h | 60.99 |
+| synthesis | 47 in 4.6 h | 8.59 |
+| agent (trading decisions) | 433 in 41 h | 2.94 |
+
+That is ~$72/day of notional model cost against a paper book earning roughly
+$20/day — a ratio worth knowing. Two caveats keep it from being an emergency,
+and both matter:
+
+- Every call runs `backend=subscription`, so the dollar figure is **imputed,
+  not billed**. The real constraint is the rate budget, exactly as
+  `CLAUDE.md` frames it.
+- No rate pressure is visible. A first pass appeared to find rate-limit errors
+  in `graph`; they were a grep matching `429` inside cost figures like
+  `cost_usd=0.004291`. There are none. Agent decision latency is a median of
+  16.6 s (p90 26.9 s) over 110 calls, which is the model's own latency rather
+  than queueing.
+
+So graph extraction is the dominant consumer by a wide margin, and it is
+research infrastructure rather than a trading signal. The lever exists if the
+rate budget ever binds — cut extraction frequency before touching anything the
+decision loop uses. Until then this is a number to watch, not to act on.
