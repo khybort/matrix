@@ -70,5 +70,24 @@ SELECT relname, n_dead_tup, last_autovacuum, autovacuum_count
 FROM pg_stat_user_tables WHERE relname = 'market_trades';
 ```
 
+**Deleting faster than VACUUM can reclaim makes the file grow, not shrink.**
+A deleted row becomes a dead tuple and still occupies its page until VACUUM
+returns it to the free-space map. On 2026-09-20 the first, unthrottled version
+of the time-ordered sweep deleted ~155M rows/day while autovacuum had not
+finished a single pass, and the database grew 12.5 GB in two hours — the
+opposite of the intent. The sustainable shape is a drain that outpaces
+ingestion by a few times, not by thirty, with autovacuum given room to run:
+
+| knob | value | why |
+|---|---|---|
+| `MATRIX_RETENTION_BUDGET_S` | 15 | ~20M rows/day, about 5x the inflow |
+| `autovacuum_vacuum_scale_factor` | 0.02 | wakes at ~6.5M dead, not ~64M |
+
+A full autovacuum pass on this table measured ~4 hours at the default throttle
+and reclaims far more than a pass-worth of deletions creates, so the two
+balance. Watch `pg_stat_progress_vacuum` and `pg_database_size` together — the
+number that matters is whether the file has stopped growing, not how many rows
+retention reports.
+
 `make retention-drain` forces a full catch-up; `make db-compact TABLE=…` runs
 VACUUM FULL to return space to the OS and **locks the table** while it does.
