@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-09-20 — Telegram canlı
+- Bot @Khybortbot doğrulandı (token'da fazladan bir karakter vardı, temizlendi), operatörün chat_id'si allowlist'e alındı, onay mesajı gönderildi. Uyarılar artık loga değil telefona düşüyor: paper engine durması, sinyal/ingestion bayatlaması, devre kesici, sertifika, günlük LLM bütçesi, dev_agent görevleri. Komutlar: /status /strategies /circuit /circuit_reset /dev_tasks /dev_accept /dev_discard /dev_revise, serbest metin → Brain.
+- Not: chat_id'yi `getUpdates` ile yakalamaya çalışan yardımcı izleyici hiçbir şey görmedi çünkü notify'ın kendi long-polling'i update'leri tüketiyor. Doğru kaynak notify'ın kendi logu: "ignoring message from unauthorized chat_id=...".
+
 ## 2026-09-20 — Alfa bozunma (ufuk) çalışması: momentum_xs 60 → 90 dk önerildi
 - `make horizon-report`: her sinyalin AYNI sembolde rastgele girişe göre FAZLA getirisi 1…120 dk ufuklarında ölçülür (sürüklenme çıkarılmadan bakmak yükselen piyasada her long'u alfa gibi gösteriyordu; sembol başına 40 rastgele çekilişle drift tahmin edilip çıkarılıyor), maliyet düşülür, her ufuk için t verilir.
 - Tek belirleyici sonuç: `momentum_xs` 90 dk'da +37.0 bps (t=3.59), mevcut 60 dk'da −26.8. Diğerlerinin "daha iyi" ufku kendi gürültüsünü aşmıyor (t<2) — özellikle uzun ufuklarda varyans devasa olduğu için nokta tahmini her zaman uzun ufku seçer; rapor bunu `act` sütunuyla açıkça ayırır.
