@@ -96,3 +96,15 @@ def test_verdict_separates_paying_harmful_and_unproven():
     # too few trades to conclude anything
     assert verdict(row(n=5, edge_bps=99.0, t=9.0), cost_bps=15) == "unproven"
     assert verdict(None, cost_bps=15) == "unproven"
+
+
+def test_subsample_spans_the_window_and_preserves_order():
+    from matrix_shared.edge_study import subsample
+
+    items = [{"i": i} for i in range(1000)]
+    got = subsample(items, 10)
+    assert len(got) == 10
+    assert got[0]["i"] == 0 and got[-1]["i"] >= 890          # last decile represented
+    assert [g["i"] for g in got] == sorted(g["i"] for g in got)
+    assert subsample(items, 0) is items                      # disabled
+    assert subsample(items[:5], 10) == items[:5]             # smaller than cap

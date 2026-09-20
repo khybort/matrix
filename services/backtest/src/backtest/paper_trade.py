@@ -634,6 +634,13 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             .where(Prediction.asset_class == asset_class)
             .where(Prediction.side.in_(allowed_sides))
             .where(Prediction.close_by > now)
+            # Fresh signals only — see MAX_SIGNAL_AGE_FRAC.
+            .where(
+                text(
+                    "extract(epoch from (:as_of - predictions.generated_at)) <= "
+                    "greatest(predictions.horizon_seconds * :age_frac, :min_window)"
+                )
+            )
             .where(
                 text("coalesce(predictions.context->>'is_shadow', 'false') = :is_shadow")
             )
@@ -645,7 +652,13 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             .limit(wallet_slots_left * 5)
         )
         candidates_raw = list((await session.execute(
-            pred_stmt, {"is_shadow": "true" if shadow else "false"}
+            pred_stmt,
+            {
+                "is_shadow": "true" if shadow else "false",
+                "as_of": now,
+                "age_frac": MAX_SIGNAL_AGE_FRAC,
+                "min_window": MIN_SIGNAL_WINDOW_S,
+            },
         )).scalars())
 
         # Batch-load per-symbol potential scores for the edge multiplier.
@@ -674,7 +687,7 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             tp = float(p.tp_pct) if p.tp_pct is not None else float(SCORE_CAP_PCT)
             sl = float(p.sl_pct) if p.sl_pct is not None else float(SCORE_CAP_PCT)
             cfg = slot_configs.get(p.strategy_id)
-            return expected_value(
+            ev = expected_value(
                 confidence=float(p.confidence),
                 tp_pct=tp,
                 sl_pct=sl,
@@ -682,6 +695,10 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
                 strategy_perf=cfg.perf_score if cfg is not None else None,
                 pair_edge=pair_edges.get((p.strategy_id, p.symbol)),
             )
+            # Decay with age: what is left of the horizon is what can still be
+            # earned, and a stale candidate must not outrank a fresh one just
+            # because it was optimistic when it was born.
+            return ev * max(0.0, 1.0 - signal_age_frac(p.generated_at, p.horizon_seconds, now))
 
         candidates = sorted(candidates_raw, key=_ev, reverse=True)
 

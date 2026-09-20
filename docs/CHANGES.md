@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-09-20 — Asıl kayıp mekanizması: sinyal dolana kadar ölüyordu
+- Edge çalışması artık DOLDURULAN işlemleri değil TÜM sinyalleri değerlendiriyor (14 günde 5 281 sinyal / 997 dolum; predictions'ın yalnızca %12'si pozisyona dönüşüyor). Tablo tersine döndü: `momentum_xs` sinyalleri rastgele girişten **+36.0 bps** iyi (t=6.04, n=799) — oysa DOLUMLARI −35.8 bps'ti. `oi_delta` sinyal bazında +1.3 (t=0.34); dolum bazındaki +19.4'ü seçim katmanının şansıydı.
+- Nedeni ölçüldü: ortalama dolum, prediction'ın kendi ufkunun **%53'ü** (momentum_xs), %41 (dca), %40 (grid), %32 (oi_delta) geçtikten sonra oluyor — slot dolu olduğu için aday kuyrukta bekliyor ve `close_by`'a kadar taze adaylarla eşit yarışıyor. Sinyal dolana kadar bozuluyor.
+- `paper_trade`: ufkunun `MATRIX_MAX_SIGNAL_AGE_FRAC`'ından (vars. %20, kısa ufuklar için `MATRIX_MIN_SIGNAL_WINDOW_S`=45 s taban) fazlası geçmiş aday artık açılmaz; EV yaşla sönümlenir, böylece bayat aday taze adayı geçemez. Açılmayanlar zaten virtual outcome üretiyor — kanıt bedavaya kalıyor.
+
 ## 2026-09-20 — Kapak uykusu kapatıldı: G1 sayacı yeniden başladı
 - Operatör `sudo pmset -a disablesleep 1` çalıştırdı; `pmset -g` artık `SleepDisabled 1`. Son dört kesintinin ikisinin nedeni (kapak kapalı uyku: 11 s, 21 s) ortadan kalktı, diğer ikisininki (sessiz ölen worker) 095b2c4 supervisor'ı ile. Sistem ilk kez kesintisiz örneklem biriktirebilir. Kalan tek operatör eksiği: `TELEGRAM_BOT_TOKEN`.
 

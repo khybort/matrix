@@ -34,6 +34,12 @@ from sqlalchemy import text
 from matrix_shared.db import local_session_scope, shared_session_scope
 
 CONTROL_DRAWS = int(os.environ.get("MATRIX_EDGE_CONTROL_DRAWS", "20"))
+# Evaluate signals, not fills. Only ~12% of predictions ever become positions
+# (slots, cash, backpressure), so judging a strategy by its fills throws away
+# seven eighths of the evidence it produced — and a demoted strategy at zero
+# slots would never generate any evidence again. The simulator does not care
+# whether capital was committed, so every prediction is replayed.
+MAX_PER_STRATEGY = int(os.environ.get("MATRIX_EDGE_MAX_PER_STRATEGY", "800"))
 MIN_TRADES = int(os.environ.get("MATRIX_EDGE_MIN_TRADES", "30"))
 DEFAULT_TP_PCT = 0.01
 DEFAULT_SL_PCT = 0.005
@@ -105,6 +111,7 @@ class StrategyEdge:
     strategy_id: str
     asset_class: str
     n: int = 0
+    n_filled: int = 0
     treatment: list[float] = field(default_factory=list)
     control: list[float] = field(default_factory=list)
     realised_net_bps: float = 0.0
@@ -118,6 +125,7 @@ class StrategyEdge:
             "strategy": self.strategy_id,
             "market": self.asset_class,
             "n": self.n,
+            "n_filled": self.n_filled,
             "gross_bps": round(t_mean, 2),
             "control_bps": round(c_mean, 2),
             "edge_bps": round(diff, 2),
@@ -128,19 +136,21 @@ class StrategyEdge:
         }
 
 
-async def _load_trades(days: float, strategy_id: str | None) -> list[dict]:
+async def _load_candidates(days: float, strategy_id: str | None) -> list[dict]:
+    """Every non-hold prediction in the window, filled or not, with its realised
+    outcome when there was one."""
     sql = (
         "SELECT p.strategy_id, p.asset_class, p.symbol, p.side, p.horizon_seconds, "
-        "       p.tp_pct, p.sl_pct, pp.opened_at, o.pnl_pct "
-        "FROM outcomes o "
-        "JOIN predictions p ON p.id = o.prediction_id "
-        "JOIN paper_positions pp ON pp.prediction_id = p.id "
-        "WHERE o.observed_at >= now() - make_interval(secs => :secs) "
-        "  AND o.reason <> 'orphan_flat_close' "
-        "  AND coalesce(p.context->>'is_shadow','false') = 'false' "
+        "       p.tp_pct, p.sl_pct, p.generated_at, "
+        "       (pp.id IS NOT NULL) AS filled, o.pnl_pct "
+        "FROM predictions p "
+        "LEFT JOIN paper_positions pp ON pp.prediction_id = p.id "
+        "LEFT JOIN outcomes o ON o.prediction_id = p.id AND o.reason <> 'orphan_flat_close' "
+        "WHERE p.generated_at >= now() - make_interval(secs => :secs) "
         "  AND p.side IN ('long','short') "
+        "  AND coalesce(p.context->>'is_shadow','false') = 'false' "
         + ("  AND p.strategy_id = :sid " if strategy_id else "")
-        + "ORDER BY pp.opened_at"
+        + "ORDER BY p.generated_at"
     )
     params = {"secs": days * 86400}
     if strategy_id:
@@ -148,6 +158,15 @@ async def _load_trades(days: float, strategy_id: str | None) -> list[dict]:
     async with shared_session_scope() as s:
         rows = (await s.execute(text(sql), params)).mappings().all()
     return [dict(r) for r in rows]
+
+
+def subsample(items: list[dict], cap: int) -> list[dict]:
+    """Evenly spaced subsample, preserving order — keeps the whole window
+    represented instead of only its first hours."""
+    if cap <= 0 or len(items) <= cap:
+        return items
+    step = len(items) / cap
+    return [items[int(i * step)] for i in range(cap)]
 
 
 async def _load_bars(symbols: set[str], asset_class: str, since: datetime) -> dict[str, list[Bar]]:
@@ -186,10 +205,14 @@ async def run_edge_study(
     """Compare every strategy's real entries against random entries. One row per
     (strategy, market); rows are sorted by measured edge, best first."""
     rng = random.Random(seed)
-    trades = await _load_trades(days, strategy_id)
-    if not trades:
-        logger.warning("edge study: no closed trades in window")
+    rows_in = await _load_candidates(days, strategy_id)
+    if not rows_in:
+        logger.warning("edge study: no predictions in window")
         return []
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for r in rows_in:
+        grouped.setdefault((r["strategy_id"], r["asset_class"]), []).append(r)
+    trades = [r for g in grouped.values() for r in subsample(g, MAX_PER_STRATEGY)]
     since = datetime.now(UTC) - timedelta(days=days + 1)
     by_class: dict[str, set[str]] = {}
     for t in trades:
@@ -209,7 +232,7 @@ async def run_edge_study(
         horizon_bars = max(1, int((t["horizon_seconds"] or 600) // 60))
         tp = float(t["tp_pct"]) if t["tp_pct"] is not None else DEFAULT_TP_PCT
         sl = float(t["sl_pct"]) if t["sl_pct"] is not None else DEFAULT_SL_PCT
-        idx = _index_at(series, t["opened_at"])
+        idx = _index_at(series, t["generated_at"])
         if idx < 0 or idx >= len(series) - 1:
             skipped += 1
             continue
@@ -221,7 +244,9 @@ async def run_edge_study(
         e = acc.setdefault(key, StrategyEdge(t["strategy_id"], t["asset_class"]))
         e.n += 1
         e.treatment.append(treat.ret_bps)
-        e.realised_net_bps += float(t["pnl_pct"]) * _BPS
+        if t["filled"] and t["pnl_pct"] is not None:
+            e.n_filled += 1
+            e.realised_net_bps += float(t["pnl_pct"]) * _BPS
         if treat.reason == "hit_tp":
             e.tp_rate += 1
         upper = len(series) - horizon_bars - 1
@@ -236,13 +261,14 @@ async def run_edge_study(
 
     rows = []
     for e in acc.values():
+        if e.n_filled:
+            e.realised_net_bps /= e.n_filled
         if e.n:
-            e.realised_net_bps /= e.n
             e.tp_rate /= e.n
         rows.append(e.as_row())
     rows.sort(key=lambda r: r["edge_bps"], reverse=True)
     if skipped:
-        logger.info(f"edge study: {skipped} trade(s) skipped (no bar coverage)")
+        logger.info(f"edge study: {skipped} prediction(s) skipped (no bar coverage)")
     return rows
 
 
@@ -251,11 +277,12 @@ def format_report(rows: list[dict], *, days: float, cost_bps: float) -> str:
         return "edge study: no data"
     head = (
         f"Entry-timing edge vs random entry — last {days:g}d, "
-        f"{sum(r['n'] for r in rows)} trades, round-trip cost {cost_bps:g} bps\n"
-        f"{'strategy':<24}{'mkt':<8}{'n':>6}{'gross':>9}{'control':>9}{'edge':>8}{'t':>7}  sig\n"
+        f"{sum(r['n'] for r in rows)} signals ({sum(r['n_filled'] for r in rows)} filled), "
+        f"round-trip cost {cost_bps:g} bps\n"
+        f"{'strategy':<24}{'mkt':<8}{'n':>7}{'fill':>6}{'gross':>9}{'control':>9}{'edge':>8}{'t':>7}  sig\n"
     )
     lines = [
-        f"{r['strategy']:<24}{r['market']:<8}{r['n']:>6}{r['gross_bps']:>9.1f}"
+        f"{r['strategy']:<24}{r['market']:<8}{r['n']:>7}{r['n_filled']:>6}{r['gross_bps']:>9.1f}"
         f"{r['control_bps']:>9.1f}{r['edge_bps']:>8.1f}{r['t']:>7.2f}  {'YES' if r['significant'] else ''}"
         for r in rows
     ]
