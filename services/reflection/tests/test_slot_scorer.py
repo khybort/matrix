@@ -293,3 +293,21 @@ async def test_a_strategy_with_measured_edge_gets_at_least_a_full_share(monkeypa
     assert max(weak, 8) == 8
     assert await SS._entry_edge_verdict("momentum_xs", "crypto") == "pays"
     assert seen["called"] == ("momentum_xs", "crypto")
+
+
+async def test_unknown_edge_holds_an_allocation_instead_of_clawing_it_back(monkeypatch):
+    """A restart empties the edge cache, so `strategy_edge` answers None for a
+    while. On 2026-09-20 that took momentum_xs from 7 slots to 3 seconds after
+    the previous pass had promoted it on a confirmed +29.7 bps edge. An
+    allocation granted on evidence is not reduced because the evidence is
+    momentarily unreadable — but a realised loser is still demoted, because
+    that branch stands on evidence of its own and the edge verdict may only
+    rescue it, never be missing in its favour."""
+    async def no_answer(strategy_id, asset_class, **kw):
+        return None
+
+    import matrix_shared.edge_study as E
+
+    monkeypatch.setattr(E, "strategy_edge", no_answer)
+    v = await _ss._entry_edge_verdict("anything", "crypto")
+    assert v == "unknown"

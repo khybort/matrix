@@ -53,8 +53,16 @@ def _slots_for_score(score: float, base_share: int) -> int:
 
 
 async def _entry_edge_verdict(strategy_id: str, asset_class: str) -> str:
-    """`pays` | `harmful` | `unproven` for this strategy's entry timing, from the
-    controlled study in `matrix_shared.edge_study` (cached 6 h).
+    """`pays` | `harmful` | `unproven` | `unknown` for this strategy's entry
+    timing, from the controlled study in `matrix_shared.edge_study`.
+
+    `unknown` means the study has no answer yet — a cold cache after a restart,
+    or a strategy it has not reached. That is NOT `unproven`, and the
+    difference cost real capital: on 2026-09-20 a reload emptied the cache and
+    this pass took momentum_xs from 7 slots to 3 seconds after the previous
+    pass had promoted it on a confirmed +29.7 bps edge. An allocation granted
+    on evidence is never reduced because the evidence is temporarily
+    unreadable.
 
     Realised PnL and entry quality are different questions, and the slot pass
     needs both answers. `pays` protects a strategy from the realised-loss
@@ -72,10 +80,12 @@ async def _entry_edge_verdict(strategy_id: str, asset_class: str) -> str:
 
         cost = float(execution_cost_bps(asset_class)) * 2
         row = await strategy_edge(strategy_id, asset_class)
+        if row is None:
+            return "unknown"
         v = verdict(row, cost_bps=cost)
     except Exception as e:  # noqa: BLE001 — advisory; never block the slot pass
         logger.debug(f"edge guard unavailable for {strategy_id}/{asset_class} ({e})")
-        return "unproven"
+        return "unknown"
     if v == "pays":
         logger.warning(
             f"slot demote SKIPPED for {strategy_id}/{asset_class}: entry edge "
@@ -198,6 +208,10 @@ async def score_strategy_slots() -> int:
 
             score = _perf_score(win_rate, avg_pnl_pct, total_pnl_usd)
             old_slots = config.allocated_slots
+            # Asked once per config rather than at each branch that wants it:
+            # the answers could otherwise disagree within one pass if a
+            # background refresh of the study landed between two of them.
+            edge_v = await _entry_edge_verdict(config.strategy_id, config.asset_class)
 
             if consec >= CONSECUTIVE_LOSS_AUTO_CUT:
                 new_slots = 1
@@ -214,7 +228,19 @@ async def score_strategy_slots() -> int:
                 continue
             else:
                 new_slots = _slots_for_score(score, base_share)
-                if await _entry_edge_verdict(config.strategy_id, config.asset_class) == "pays":
+                if edge_v == "unknown" and old_slots > new_slots:
+                    # Hold what evidence already bought. On 2026-09-20 a reload
+                    # emptied the edge cache and this pass took momentum_xs from
+                    # 7 slots to 3, seconds after the previous pass had promoted
+                    # it on a confirmed +29.7 bps edge. `perf_score` alone would
+                    # claw back an allocation while the study is merely silent.
+                    logger.info(
+                        f"slot hold: {config.strategy_id}/{config.asset_class} keeps "
+                        f"{old_slots} (score would say {new_slots}) — edge study has no "
+                        "answer yet, which is not the same as no edge"
+                    )
+                    new_slots = old_slots
+                elif edge_v == "pays":
                     # Allocate on evidence, not on trailing PnL. `perf_score`
                     # is a rearview mirror: momentum_xs sat at one slot — the
                     # floor — while the controlled study put its entries +31
