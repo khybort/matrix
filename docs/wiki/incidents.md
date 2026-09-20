@@ -75,5 +75,8 @@ channel that reports health was itself impaired, silently.
 
 **Fix:** conflicts are counted and collapsed to one line, an urgent alert goes
 out hourly over the path that still works, and `scripts/rotate_telegram_token.sh`
-makes the swap a single command once BotFather has issued a new token. The
-rotation itself is operator-only and still pending. See [[open-questions]].
+makes the swap a single command. The operator revoked the token the same day;
+the old one now answers `getMe` with `Unauthorized`, which is how a revoke is
+verified. The replacement was installed by the script and the channel confirmed
+working. Watch the conflict counter rather than the traceback: if it climbs
+again on a fresh token, the leak is somewhere that keeps getting the new one.

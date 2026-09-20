@@ -34,21 +34,16 @@ how much the answer would change.
 - **Should BIST and US be running at all right now?** They add surface area,
   cost and attention while crypto has no edge. The argument for keeping them is
   regime diversification; there is no evidence yet either way.
-- **Someone else holds this bot token.** ~~Why does one Telegram poller
-  conflict with itself?~~ — answered 2026-09-20, and the answer is that it
-  never was conflicting with itself. Measured from three vantage points with
-  every local consumer stopped: a lone traced poller inside the container took
-  3 conflicts in 240 s while its own in-flight request count never exceeded 1;
-  plain host-side long polls returned 409 on 2 of 8; and no running container
-  or host process held the token. Telegram hands each update to exactly one
-  `getUpdates` caller, so the other consumer is not merely noisy — it can
-  **receive the operator's commands instead of us**, and sending still works,
-  which is why nothing looked broken. The token was created and pasted on
-  2026-09-20; treat it as leaked. *Remedy, operator-only:* `/revoke` in
-  BotFather, then `scripts/rotate_telegram_token.sh` (validates with getMe,
-  writes `.env` without echoing, recreates notify, and reports whether the new
-  token is clean). Until then `notify` counts conflicts, logs one line each
-  instead of a traceback, and pushes an urgent alert hourly.
+- ~~**Someone else holds this bot token.**~~ — closed 2026-09-20 by rotation.
+  The finding stands and is recorded in [[incidents]]: with every local consumer
+  stopped, a lone traced poller took 3 conflicts in 240 s at an in-flight count
+  of 1, host-side long polls returned 409 on 2 of 8 and later 1 of 4, and no
+  container or process here held the token. The operator revoked it in
+  BotFather — proof the revoke landed is that the old token began answering
+  `getMe` with `Unauthorized` — and `scripts/rotate_telegram_token.sh` installed
+  the replacement. *The lesson that outlives the incident:* a bot token pasted
+  into a chat window is a leaked credential, and the failure it causes is
+  silent, because sending keeps working while receiving is stolen.
 
 - **Uncommitted, live, and mine to land later:** the EV floor lets a
   *measured* edge outrank the model's own `confidence x tp_pct` estimate. The
