@@ -83,10 +83,18 @@ how much the answer would change.
   file should stop extending on its own. Measured while it ran: the worker
   reads ~6.7 MB/s of index under the throttle and `num_dead_tuples` sat at
   11,184,524, exactly the 64 MB work_mem capacity — which is the three-pass
-  prediction confirmed from the other side. Roughly 30 GiB of indexes puts a
-  pass near 75 minutes and the whole vacuum near 3.7 hours, during which the
-  file gains under a GiB. Revisit only if a pass fails to complete or the
-  runway drops under a week.
+  prediction confirmed from the other side. The indexes measure **54 GiB**, not
+  the 30 first guessed here: `ix_market_trades_exchange_id` alone is 29 GiB,
+  `market_trades_pkey` 13, `ix_market_trades_symbol_ts` 8.3, and the new
+  `ix_market_trades_ts` 3.5. That puts a pass near 2.3 hours and the whole
+  vacuum near 7, during which the file gains about 1.5 GiB against ~120 GiB
+  free. Revisit only if a pass fails to complete or the runway drops under a
+  week.
+
+  Worth noticing separately: 54 GiB of index against a table meant to hold
+  seven days of data, and more than half of it is a unique index that exists
+  only to deduplicate inserts. Both shrink in proportion as the backlog
+  drains — check again once it has.
 - **A time-only index changes plans elsewhere.** `ix_market_trades_ts` (0039)
   made `WHERE symbol = $1 ORDER BY trade_ts DESC LIMIT n` switch from the
   composite index to a backward scan of the time index with a symbol filter.
