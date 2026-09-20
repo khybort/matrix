@@ -30,7 +30,19 @@ def execution_cost_bps(asset_class: str | None, symbol: str | None = None) -> De
         fees = get_market(asset_class).fees(symbol or "")
     except Exception:  # noqa: BLE001 — unknown market → legacy allowance, never crash a tick
         return SLIPPAGE_BPS
-    return Decimal(fees.taker_bps) + Decimal(fees.slippage_bps)
+    # Prefer the slippage we have actually measured for this symbol over the
+    # market's flat allowance (matrix_shared.symbol_costs): median spreads in
+    # this universe range 1.2–6.0 bps, so one constant misprices both ends.
+    slip = Decimal(fees.slippage_bps)
+    try:
+        from matrix_shared.symbol_costs import slippage_bps_for
+
+        measured = slippage_bps_for(symbol)
+        if measured is not None:
+            slip = Decimal(str(measured))
+    except Exception:  # noqa: BLE001 — measurement is an optional refinement
+        pass
+    return Decimal(fees.taker_bps) + slip
 
 
 def round_trip_cost_pct(asset_class: str | None, symbol: str | None = None) -> Decimal:

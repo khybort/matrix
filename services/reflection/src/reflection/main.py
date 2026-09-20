@@ -250,6 +250,15 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
             f"({draft.proposal_type}, source={draft.source})"
         )
 
+    # Keep the per-symbol execution cost current: every "does this edge pay for
+    # itself" judgement downstream is denominated in it.
+    try:
+        from matrix_shared.symbol_costs import refresh as refresh_costs
+
+        await refresh_costs()
+    except Exception as e:  # noqa: BLE001 — a refinement, never a blocker
+        logger.debug(f"symbol cost refresh skipped: {e}")
+
     # Auto-grant pass — independent of mutation logic. A strategy version
     # that hits eligibility thresholds gets a paper_trade_certificate so
     # Phase 5 execution can unblock without manual SQL. Failures here MUST
