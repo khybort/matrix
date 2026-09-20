@@ -578,6 +578,11 @@ async def _record_virtual_outcomes(pred_ids: list) -> int:
     return written
 
 
+# Last logged Kelly fraction per (strategy, market): this runs every tick and
+# the number only moves when the 6 h edge cache refreshes.
+_KELLY_LOGGED: dict[tuple[str, str], float] = {}
+
+
 async def _kelly_fractions(
     strategy_ids: set[str], *, asset_class: str, concurrency: int
 ) -> dict[str, float]:
@@ -618,10 +623,14 @@ async def _kelly_fractions(
         )
         if f:
             out[sid] = f
-            logger.info(
-                f"kelly {sid}/{asset_class}: {f * 100:.2f}% of equity "
-                f"(edge {edge_bps} bps, t={t_stat}, sd={row.get('sd_bps')}, n={row.get('n')})"
-            )
+            key = (sid, asset_class)
+            if abs(_KELLY_LOGGED.get(key, -1.0) - f) > 1e-4:
+                _KELLY_LOGGED[key] = f
+                logger.info(
+                    f"kelly {sid}/{asset_class}: {f * 100:.2f}% of equity "
+                    f"(edge {edge_bps} bps, t={t_stat}, sd={row.get('sd_bps')}, "
+                    f"n={row.get('n')}, concurrency={concurrency})"
+                )
     return out
 
 
@@ -711,7 +720,13 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
         kelly_f = await _kelly_fractions(
             {sid for sid in slot_configs},
             asset_class=wallet.asset_class,
-            concurrency=wallet.max_concurrent_positions,
+            # The divisor is how many bets the book *actually* carries at once,
+            # not the cap it is allowed to reach. Dividing by an 80-slot cap
+            # that a ~9-position book never approaches understates every size
+            # by an order of magnitude. Correlation between crypto perps is
+            # handled by staying at a quarter of full Kelly, not by pretending
+            # the book is denser than it is.
+            concurrency=total_open + 1,
         )
 
         # Skip predictions whose horizon already lapsed before we could open
@@ -866,10 +881,16 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             consecutive_losses=cfg.consecutive_losses if cfg is not None else 0,
         )
         notional = (max_notional * risk).quantize(Decimal("0.01"))
+        # When the measured edge has an opinion, it *is* the size: betting
+        # above Kelly lowers long-run growth just as surely as betting below
+        # it does, and the confidence-and-streak multiplier was never a claim
+        # about growth-optimal size. A zero fraction (the edge's lower bound
+        # does not clear costs) is not an opinion — it keeps the old sizing
+        # rather than silently suppressing a trade the slot gate allowed.
         kn = kelly_notional(
             equity=equity, max_notional=max_notional, kelly_f=kelly_f.get(p.strategy_id)
         )
-        if kn is not None and kn > notional:
+        if kn:
             logger.debug(
                 f"kelly size {p.strategy_id}: {notional} -> {kn} (gate {max_notional:.2f})"
             )

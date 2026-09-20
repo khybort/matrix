@@ -108,3 +108,9 @@
   shrink_pair_edge / edge_multiplier / expected_value / risk_multiplier). Diff `0 deletion` gösterdiği için gözden
   kaçıyordu. Kural: staged blob'u commit'ten ÖNCE AST ile tara — top-level `def`/`class` adlarında tekrar varsa
   sınır yanlıştır. (Aynı ailedeki eski hata: sınırın *dışında* kalan tanımın hiç commit edilmemesi, 03e52ea.)
+
+- **2026-09-20 — Backtest testleri canlı motorla aynı shared DB'yi paylaşıyor.** `test_open_skips_expired_predictions`
+  deterministik olarak fail ediyordu: fixture'ın ürettiği prediction'ı, 5 saniyede bir tik atan **canlı** `matrix-backtest`
+  konteyneri `expired` yapıyor. `docker compose stop backtest` ile aynı test anında geçiyor. Yani suite yeşil/kırmızı
+  sinyali, o an motorun açık olup olmamasına bağlı — regresyon avı buraya kilitlenip saat yakabilir. Şimdilik kural:
+  backtest suite'ini motor kapalıyken koş. Kalıcı çözüm test'lere ayrı şema/DB (açık madde).
