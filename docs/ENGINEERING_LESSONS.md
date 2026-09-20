@@ -122,3 +122,10 @@
   "running" diyordu çünkü konteyner ayaktaydı, içindeki süreç yoktu (aynı arıza şekli 16 Eylül'deki üç
   günlük kesinti). Kural: durdurma ve başlatma **ayrı, kısa** komutlar olsun; motoru kapatan her komuttan
   sonra ilk iş `docker compose ps` değil, **son log satırının tazeliğine** bakmak.
+
+- **2026-09-20 — `EXPLAIN ANALYZE` planı görmek için değil, sorguyu KOŞMAK içindir.** 300M satırlık
+  `market_trades` üzerinde "bu global sıralı süpürme indeksi kullanıyor mu" diye `EXPLAIN (ANALYZE)`
+  çalıştırdım; indeks henüz geçerli olmadığı için planlayıcı Gather Merge sort seçti ve sorgu
+  **24 dakika** koşup 6.18M buffer okudu — üstelik tam da beklediğim indeksin kurulumuyla yarışarak.
+  Planı görmek için `ANALYZE` olmadan düz `EXPLAIN` yeter ve hiçbir şey çalıştırmaz. Büyük tabloda
+  `ANALYZE`'ı yalnız sonucu kesin küçük olan (LIMIT'i indeksle dolacak) sorgularda kullan.
