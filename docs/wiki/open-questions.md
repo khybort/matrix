@@ -68,9 +68,20 @@ how much the answer would change.
   over — and one of those indexes is now 3.5 GiB. Raising it to a few hundred
   MB would make it a single pass. Unlike `shared_buffers` this needs only
   `ALTER SYSTEM` plus `pg_reload_conf()`, no restart, but it is still a global
-  change and the current pass would not pick it up. Not urgent: the disk has
-  ~120 GB free and the pass does finish. *Test:* set it, then compare
-  `index_vacuum_count` at the end of the next pass.
+  change and the current pass would not pick it up. *Test:* set it, then
+  compare `index_vacuum_count` at the end of the next pass.
+
+  The other half of the same picture is the throttle: the worker's wait event
+  sits at `Timeout/VacuumDelay`, i.e. it is sleeping on
+  `autovacuum_vacuum_cost_delay = 2 ms` against `vacuum_cost_limit = 200`.
+  Raising the limit for this table would multiply its throughput. It was
+  deliberately **not** done on 2026-09-20: an unthrottled maintenance job on
+  this table is exactly what degraded the feature path earlier the same day
+  ([[incidents]]), and the arithmetic says no rescue is needed — ~120 GB free
+  against 8.7 GiB/day of lag-driven growth is 14 days, and once the pass lands
+  the deletions free roughly sixteen times what ingestion consumes, so the
+  file should stop extending on its own. Revisit only if a pass fails to
+  complete or the runway drops under a week.
 - **A time-only index changes plans elsewhere.** `ix_market_trades_ts` (0039)
   made `WHERE symbol = $1 ORDER BY trade_ts DESC LIMIT n` switch from the
   composite index to a backward scan of the time index with a symbol filter.
