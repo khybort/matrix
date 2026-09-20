@@ -77,7 +77,15 @@ POLICIES: tuple[Policy, ...] = (
 # 10k, not 50k: the budget is only checked between batches and one cold 50k
 # `DELETE ... WHERE ctid IN (...)` on market_trades ran > 45 s of DataFileRead.
 DEFAULT_BATCH = int(os.environ.get("MATRIX_RETENTION_BATCH", "10000"))
-DEFAULT_BUDGET_S = float(os.environ.get("MATRIX_RETENTION_BUDGET_S", "45"))
+# 15 s, not 45. Once the sweep became time-ordered it deleted ~155M rows/day
+# against ~4.3M/day arriving — 35x more than it needs to — and the I/O that
+# bought showed up as five-minute `market_trades` reads in the feature path and
+# hourly signal production falling from 84 to 28 (2026-09-20). A third of the
+# budget still drains ~50M rows/day, more than ten times the inflow, and the
+# backlog is finite while the trading loop is not. Raise it with
+# MATRIX_RETENTION_BUDGET_S for a deliberate catch-up, or use `make
+# retention-drain`, which is the operator path for exactly that.
+DEFAULT_BUDGET_S = float(os.environ.get("MATRIX_RETENTION_BUDGET_S", "15"))
 
 
 def _scope(tier: str):
