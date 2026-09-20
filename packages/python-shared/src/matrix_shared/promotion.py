@@ -35,9 +35,9 @@ from pathlib import Path
 
 from loguru import logger
 
-REGISTRY_PATH = Path(
-    os.environ.get("MATRIX_MODEL_DIR") or "/var/lib/matrix/models"
-) / "edge_registry.json"
+from matrix_shared.model_store import model_path
+
+REGISTRY_PATH = model_path("edge_registry.json")
 
 # The winner's-curse haircut: assume the true edge is this fraction of the
 # measured one. Half is the conventional, deliberately harsh choice.

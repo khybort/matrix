@@ -42,6 +42,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from matrix_shared.model_store import model_path
 from matrix_shared.promotion import Registry, deflated_sharpe
 from matrix_shared.promotion import status as promotion_status
 from sqlalchemy import text
@@ -480,9 +481,7 @@ _EDGE_TTL_S = float(os.environ.get("MATRIX_EDGE_CACHE_TTL_S", "21600"))  # 6 h
 # 2026-09-20 that demoted momentum_xs from 7 slots to 3 within seconds of a
 # reload, the one strategy whose edge is confirmed. Wall-clock timestamps, not
 # monotonic, because the whole point is to outlive the process.
-_CACHE_PATH = Path(
-    os.environ.get("MATRIX_MODEL_DIR") or "/var/lib/matrix/models"
-) / "edge_cache.json"
+_CACHE_PATH = model_path("edge_cache.json")
 _loaded_from_disk = False
 _edge_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
 # Keys whose refresh is already in flight, so a 5-second trading loop cannot

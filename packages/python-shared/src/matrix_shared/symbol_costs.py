@@ -29,10 +29,9 @@ from loguru import logger
 from sqlalchemy import text
 
 from matrix_shared.db import local_session_scope
+from matrix_shared.model_store import model_path
 
-COSTS_PATH = Path(os.environ.get("MATRIX_MODEL_DIR") or
-                  os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
-                               "matrix_models")) / "symbol_costs.json"
+COSTS_PATH = model_path("symbol_costs.json")
 MIN_SLIPPAGE_BPS = float(os.environ.get("MATRIX_MIN_SLIPPAGE_BPS", "0.5"))
 MAX_SLIPPAGE_BPS = float(os.environ.get("MATRIX_MAX_SLIPPAGE_BPS", "25"))
 IMPACT_MULT = float(os.environ.get("MATRIX_SPREAD_IMPACT_MULT", "1.0"))
