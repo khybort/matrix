@@ -113,16 +113,28 @@ quantity it is supposed to move — here, the age of the oldest surviving row �
 not whether it ran. Same shape as [[open-questions]]' contested bot token:
 the signal that would have told us was itself broken.
 
-**Still open, and larger than the plan bug:** per-symbol deletion is
-structurally slow on this table. `market_trades` is append-only and ~900
+**Resolved 2026-09-20, in two parts.** The plan bug first, then the structural
+one: per-symbol deletion is simply wrong for this table. `market_trades` is append-only and ~900
 symbols interleave, so the oldest rows of any single symbol are scattered
 across the whole 97 GB heap. Deleting 10 000 of them touches 10 000 distinct
 cold pages: measured at ~1 s warm but **three to six minutes cold**, and the
 budget is only checked between batches, so one run does roughly one batch.
-That is ~1.8M rows/day against ~4.3M/day arriving — the pruner still loses.
-The structural answers are time partitioning (drop a day, do not delete rows)
-or a one-time rewrite keeping the last seven days, which would return ~90 GB
-at once. Both are operator decisions: the rewrite drops a table.
+That was ~1.8M rows/day against ~4.3M/day arriving, so the pruner still lost.
+
+The fix is to sweep in **time order across all symbols** rather than per
+symbol: the same 10 000 rows then come from ~180 contiguous pages instead of
+10 000 scattered ones. Three batches of 20 000 measured 1.1 to 2.1 seconds
+each. That needed an index on `(trade_ts)` alone (migration 0039, built
+CONCURRENTLY over ~80 minutes, 3.5 GB), because the ordered sweep is *worse*
+than what it replaces without one — with the index still building, the planner
+answered the same query with a Gather Merge sort that ran 24 minutes across
+6.18M buffers. With the index valid both regimes are index scans: cost 844 for
+20 000 rows while the backlog lasts, cost 4.59 once the predicate matches
+nothing.
+
+Time partitioning remains the cleaner long-run shape, and a one-time rewrite
+keeping seven days would return ~90 GB at once rather than to the free-space
+map. Both are operator decisions and neither is needed now.
 
 Deleted space also returns to Postgres' free-space map, not to the OS. New
 inserts reuse it, so at best the disk trend flattens rather than falls;

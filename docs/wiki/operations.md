@@ -47,8 +47,10 @@ is nearly all of it. Retention lives in `matrix_shared/retention.py`, runs
 inside `bars-aggregator` every 5 minutes, and keeps raw prints 7 days, L2
 snapshots 2 days, ticker snapshots 30 days, wallet snapshots 30 days.
 
-Check that it is actually working, not merely running (2026-09-20 it ran for
-eight days and deleted nothing — see [[incidents]]):
+`market_trades` is swept globally in time order through `ix_market_trades_ts`;
+the other tables are swept per symbol, which is right for them because they are
+small. Check that retention is actually working, not merely running (2026-09-20
+it ran for months and deleted almost nothing — see [[incidents]]):
 
 ```sql
 -- should be within the policy window, not months ago
