@@ -121,7 +121,12 @@ for anything similar: a large measured effect size registered a 30-trade target
 so `confirmed` arrived on 33 trades at a DSR of 0.53 (there is now a floor of
 200 and a 0.95 deflation threshold); and the study capped at 800 signals per
 strategy while `momentum_xs` registered 936, making its own target unreachable
-by construction (the cap is now 2500 and must stay above the largest target).
+by construction (the cap is now 1500 and must stay above the largest reachable
+target). Raising it exposed a third: `strategy_edge` ran the study *inline*,
+and its caller is the paper engine's 5-second tick, so thirteen studies in
+series stalled the engine for twenty minutes. It now answers from cache and
+refreshes behind, with an in-flight guard. A stale edge is a fine input to a
+sizing decision; the loop stopping is not.
 
 ## Judged dead ends for this system
 VPIN (mechanically a function of trading intensity); liquidation-cascade
