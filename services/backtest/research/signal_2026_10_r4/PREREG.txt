@@ -116,3 +116,11 @@ LOG
    settle at the 30-min spot TWAP (tracking 0 for those 45 expiries). Still no cell statistic computed.
  2026-10-09 18:20 UTC  TRAIN verdicts written to the ledger: 52 of 66 cells pass (all 30 INV cells; LIN at 1x except
    BTC Y5/Y8 HOLD and ETH Y5; LIN 2x only BTC Y12; no LIN 3x). Holdout opens for the 52 passers next, after this commit.
+ 2026-10-09 18:25 UTC  correction to the 18:20 line: 40 of 66 cells passed train, not 52 (all 30 INV; LIN 1x: BTC Y5/Y8 EARLY,
+   BTC Y12 HOLD/EARLY, ETH Y8 HOLD/EARLY, ETH Y12 HOLD/EARLY; LIN 2x: BTC Y12 HOLD/EARLY). Holdout opened for those 40
+   (d588687), results written, then finals (6f32e41).
+ 2026-10-09 18:40 UTC  HOLDOUT verdict (ledger, q at m = 174): 27 cells survive, all coin-margined: INVB_BTC x6, INVB_ETH x6,
+   INVD_BTC x6, INVD_ETH Y5/Y8 x4, INVB_ALT x5 (not Y12 EARLY, q 0.087). INVD_ETH Y12 rejected on q (0.075 / 0.19,
+   only 35 tranches). Every LIN cell is rejected (1x holdout mean -1.6 .. +0.8 %/yr; BTC Y12 2x +2.95 %/yr, t 3.45,
+   q 0.087). Record views (contract-clustered t, sizes, half-years, risk): record.py; write-up docs/wiki/signal-research-2026-10.md
+   "Round 4: dated-futures basis".

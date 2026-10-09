@@ -581,3 +581,15 @@
   quote was the one the signal priced 4 s earlier (×1.00). Tagging the position un-executable on that would drop an
   episode on post-entry information, and since a rising borrow is a cost, bias the evidence up. Replays take every input
   as of the decision time (`db_book(..., at=)`, `db_borrow_quote(..., at=)`); a post-entry move is a hold cost.
+- **2026-10-09 — A carry's return is on TOTAL capital against a real rate; and a locked-yield trade's t lives in contracts, not weeks.**
+  Round 4 (dated-futures basis): the same basis that pays +3…+9 %/yr over USDT lending coin-margined (spot = collateral,
+  capital N, liquidation impossible by construction: coin equity = C/P_t) is negative USDT-margined at 1× (capital N + N
+  halves it) and at 2×/3× liquidates 26–42 % of tranches without top-ups. Rules: (1) divide by every dollar the trade
+  locks (spot + margin), subtract a public lending series over the same hold (OKX `lending-rate-history`, 2021-12+),
+  never zero; (2) daily tranches on one contract share its regime and settlement — week-clustered t 5–17 became 3–6 over
+  4–7 contracts; report contract-clustered t; (3) annualising short holds inflates means (EARLY +40 %/yr vs money-weighted
+  +15) — read the money-weighted figure. Data traps: expired dated contracts are on data.binance.vision (1h + mark klines,
+  no API weight) and Deribit `get_tradingview_chart_data`; Bybit v5 and OKX serve nothing for delivered symbols; Binance
+  `/futures/data/delivery-price` stamps the DATE (00:00 UTC, so an 08:00 match finds nothing) and keeps only ~12–18
+  deliveries, and its averaging window changed 60 → 30 min. Source: `services/backtest/research/signal_2026_10_r4/`,
+  wiki "Round 4: dated-futures basis".

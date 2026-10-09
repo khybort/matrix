@@ -706,6 +706,155 @@ arms, evaluates the three revisit rules over `series` episodes only, and sends `
 'neg_funding_carry' AND status <> 'open' GROUP BY 1` (shared) tells series from fallback; an episode
 charged at `stressed_entry` or `mixed` tells nothing (or only part) about real borrow.
 
+## Round 4: dated-futures basis — 2026-10-09: 27 of 66 cells survive, all coin-margined; flat all of 2026
+Question: every funding carry failed because its yield floats. Long spot + short a **dated** future held to delivery locks
+the yield at entry: the future converges to the index. Does it beat a stablecoin lending rate out of sample, net of
+costs, on total capital? Scripts, pre-registration (committed alone in 17edd54 before any data) and its log:
+`services/backtest/research/signal_2026_10_r4/`. The 66 cells were registered in `docs/research/ledger.jsonl` (98bcd2d)
+before any return was computed; q comes from the ledger (**m = 174** at finalisation).
+
+**Design.**
+- Data: Binance's public archive (data.binance.vision) for every dated contract: 52 USD-M and 222 COIN-M, 1h klines
+  plus mark klines, 2020-08 to now. Deribit 1h candles for 54 BTC/ETH quarterlies, from 2020; expired instruments are
+  still served. Binance spot 1h, plus spot 1m on expiry days. Published delivery prices. Today's books on Binance,
+  Deribit, Bybit and OKX. Bybit's v5 API and OKX do not serve candles for delivered contracts, so those two venues
+  appear only in today's capacity and basis check.
+- Structures:
+  - **LIN**: Binance spot + short Binance USD-M quarterly on isolated margin N/L, L ∈ {1, 2, 3}. Capital is N + N/L.
+  - **INV**: Binance spot, used as collateral, + short coin-margined quarterly on Binance COIN-M or Deribit. The
+    contract count C = N·F0/S0 locks the USD value at N·F0/S0. Capital is N.
+- Underlyings: BTC, ETH, and ALT. ALT means the COIN-M alts BNB, SOL and XRP. ADA, BCH, DOT, LINK and LTC have no live
+  quarterly today, so there is no book to price them: excluded and counted.
+- Rule: a daily decision at 08:00 UTC on the best quarterly with 14 ≤ DTE ≤ 200. Net annualised basis
+  ((F/S − 1) − 4 taker fees − walks at $5k) × 365/DTE must be ≥ Y, Y ∈ {5, 8, 12} %/yr. Then open one tranche at the
+  09:00 closes.
+- Exits:
+  - HOLD to delivery: spot is sold as a TWAP over the venue's averaging window against the published delivery price.
+  - EARLY when the remaining gross basis is ≤ 2 %/yr.
+- Fees: spot 10 bps, futures 5 bps, and delivery charged as a taker leg. No funding and no borrow.
+- Metric per tranche: annualised return on total capital minus the **OKX USDT Simple Earn lending rate** over the same
+  hold. The rate is a public hourly series, 2021-12 onward. Before that, its first-month mean (1.4 %) is used, which
+  flatters 2021 train.
+- Split by entry: train 2021-01 to 2024-06, holdout 2024-07 to 2026-10-09. Pass: mean > 0 with week-clustered t ≥ 2,
+  then the holdout gate plus ledger BHY q ≤ 0.05.
+
+**Data fixes before any cell statistic** (logged in PREREG):
+- Binance's delivery-price API stamps the date at 00:00, and it keeps only about the last 12–18 deliveries.
+- Its averaging window changed from 60 to 30 min. For each expiry, the window whose spot TWAP matches the published
+  price is used.
+- Where no price is published (2021 to mid-2022), settlement is at the 30-min spot TWAP. Where prices exist, the
+  measured tracking is 1 ± 6 bps. The futures' last 1h close is off by ± 80 bps.
+
+**Results** ($5k per leg, HOLD; EARLY is within 0.4 %/yr on BTC/ETH). e = excess annualised return on capital, in %/yr
+over USDT lending. t_ctr = t clustered by contract. mw = money-weighted excess.
+
+| cell | train e (t_wk) | n | holdout e (t_wk) | t_ctr (contracts) | n | mw | gross ann vs rf | q | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| INVD_BTC Y5 | +7.7 (8.1) | 670 | **+2.9 (8.2)** | 3.7 (6) | 471 | +2.8 | 8.3 vs 5.5 | 4e-9 | survives |
+| INVD_BTC Y8 | +9.4 (7.6) | 483 | **+4.6 (7.5)** | 3.9 (4) | 178 | +4.5 | 11.2 vs 6.6 | 1e-6 | survives |
+| INVD_BTC Y12 | +15.3 (9.4) | 256 | +6.8 (6.2) | 5.5 (3) | 51 | +7.0 | 14.2 vs 7.4 | 0.002 | survives |
+| INVB_BTC Y5 | +8.6 (8.6) | 703 | **+3.0 (6.8)** | 2.9 (6) | 450 | +3.0 | 8.6 vs 5.5 | 3e-7 | survives |
+| INVB_BTC Y8 | +10.9 (8.4) | 498 | **+5.6 (8.2)** | 4.1 (4) | 177 | +5.5 | 11.8 vs 6.1 | 3e-7 | survives |
+| INVB_BTC Y12 | +16.8 (10.6) | 280 | +8.8 (16.9) | 17.0 (3) | 77 | +8.9 | 14.1 vs 5.3 | 4e-8 | survives |
+| INVB_ETH Y5 / Y8 / Y12 | +10.1 / +12.8 / +17.4 | 613 / 473 / 292 | +2.8 (5.6) / +5.6 (8.1) / +8.0 (5.7) | 3.3 / 6.0 / 6.1 | 368 / 145 / 41 | +2.6 / +5.2 / +8.5 | | ≤ 0.024 | survive |
+| INVD_ETH Y5 / Y8 | +8.6 / +11.1 | 601 / 439 | +2.4 (5.3) / +5.0 (7.2) | 2.9 / 4.2 | 342 / 131 | +2.3 / +4.9 | | ≤ 1e-4 | survive |
+| INVD_ETH Y12 | +15.9 (10.0) | 265 | +7.5 (4.9) | 10.4 (3) | 35 | +8.0 | | 0.075 | rejected (q) |
+| INVB_ALT Y5 / Y8 / Y12 | +10.0 / +12.4 / +17.4 | 745 / 580 / 344 | +2.7 (4.1) / +5.0 (4.9) / +8.3 (5.3) | 3.9 / 5.7 / 14.7 | 514 / 227 / 79 | +2.4 / +4.8 / +8.5 | | ≤ 0.007 | survive (Y12 EARLY q 0.087) |
+| LIN_BTC 1× Y5 / Y8 / Y12 | +1.5 (1.7) / +2.0 (1.8) / +5.8 (4.3) | 553 / 422 / 245 | −1.6 / −0.7 / +0.7 (0.9) | | 447 / 164 / 57 | −1.5 / −0.6 / +1.4 | 4.0–6.9 vs 5.6–6.3 | 1 | rejected |
+| LIN_BTC 2× Y12 | +7.1 (3.4) | 245 | +3.0 (3.5) | 2.2 (3) | 57 | +3.5 | | 0.087 | rejected (q) |
+| LIN_ETH 1× Y8 / Y12 | +3.2 (2.9) / +5.4 (3.5) | 385 / 250 | −0.6 / −0.4 | | 140 / 39 | −0.5 / +1.0 | | 1 | rejected |
+| LIN 2×/3× Y5–Y8 | −1.1 … −16.5 | | −4 … −14 | | | | | 1 | rejected (train) |
+
+### Claims
+- **The locked basis beats USDT lending, but only by +2.5 … +9 %/yr, and only when it is wide.**
+  - In the holdout the coin-margined trade grossed 8–15 %/yr on capital, against 5.3–7.6 % for lending over the same
+    windows.
+  - Excess return is positive in every half-year: 2024H2 +1.9 … +2.6, 2025H1 +2.4 … +4.3, 2025H2 +2.4 … +3.8 (Y5).
+  - **The rule has not been in the market on a single day of 2026.** Median best-quarterly gross basis per year
+    (BTC Deribit): 2021 11.2 %, 2022 1.9, 2023 4.5, 2024 11.2, 2025 6.9, **2026 2.8**.
+  - Days in market at Y5 (BTC): 2021 90 %, 2022 13 %, 2023 32–41 %, 2024 100 %, 2025 73–79 %, 2026 0 %. This is a
+    regime trade on leverage demand. Lending rates move with it (OKX USDT: 12.8 % in 2023H2–24H1, 1.5–2.3 % now).
+- **Today (books 16:59 UTC) it is flat.**
+  - BTC quarterlies: 4.4–4.8 %/yr gross at 77 DTE and 4.9–5.3 % at 168 DTE, on Binance, Deribit, Bybit and OKX alike.
+    Venues agree within about 0.5 %/yr.
+  - ETH: 3.2–4.5 %. SOL and XRP COIN-M: 2.0–3.1 %.
+  - Net of four fees, BTC is about 3.3 / 4.4 %/yr, below Y = 5. USDT lending today is 2.9 %.
+- **Coin-margined is the only structure that pays; USDT-margined at any leverage does not.**
+  - LIN at 1× ties up N + N on two balances, which halves the yield. Holdout excess was −1.6 … +0.8 %/yr.
+  - At 2× or 3× without top-ups, **26–42 % of Y5 tranches are liquidated** (BTC 2× 26 %, 3× 32 %; ETH 33 % / 42 %).
+    These are bull-market tranches: the short leg's mark rose a median 15 % (BTC) / 26 % (ETH) within the hold, p90
+    76 % / 87 %, max +111 % / +166 %.
+  - Never being liquidated would need a top-up of p90 29 % / 40 % of notional at 2×, and up to 65 % / 126 %.
+  - INV cannot be liquidated by construction. Equity in coin is C/P_t, the value of the position itself, so equity /
+    maintenance = 1/mm at every price, even when the short marked +175 % (BTC) or +1 569 % (an alt).
+  - A unified or portfolio-margin account that counts spot BTC as collateral for a USDT future would get INV's economics
+    on linear contracts. Untested here: the haircut and its liquidation rules are venue-specific.
+- **Capacity is not the constraint on BTC.**
+  - Per leg, walk costs are $500 0.0 / $5k 0.0–0.6 / $50k 1.2–5.1 bps on Binance and Deribit BTC quarterlies, and
+    0.0 / 0.0 / ≤ 0.6 on BTC spot.
+  - Holdout excess at $500 / $5k / $50k: INVD_BTC Y5 +2.87 / +2.86 / +2.83; INVB_BTC Y8 +5.64 / +5.62 / +5.56.
+  - ETH on Deribit thins at $50k (Y5 +2.43 → +1.39); Binance COIN-M ETH holds (+2.75 → +2.63).
+  - Alts lose about 20 % at $50k: SOL and XRP quarterlies walk 15–30 bps at $5k.
+  - Bybit and OKX linear quarterlies are thin beyond the front month: OKX USD-margined next quarter walks 121 bps even at
+    $500.
+- **The t-statistics overstate the evidence.** Tranches on one contract share their regime and their settlement. With
+  contract clustering, t is 2.9–6 for the Y5/Y8 survivors, but over only 4–7 contracts each. The week-clustered gate is
+  what was pre-registered, and that gate passed. The honest effective sample is a handful of quarterly regimes. EARLY
+  annualises short holds: train ALT EARLY shows +40 %/yr against a money-weighted +15. Read mw, not the mean, for
+  EARLY.
+- Settlement is clean. Spot TWAP against the published delivery price: 1 ± 6 bps (Binance), 1 ± 7 bps (Deribit).
+
+**Verdict: survives the pre-registered bar (27 cells, all coin-margined). It is a real but modest, regime-bound yield:
+about +3 %/yr over USDT lending at Y5 and +5 %/yr at Y8 when in market, nearly zero tail risk in the payoff, the risk
+being custody. It is idle now and has been all of 2026.** Best cells for routing: **INV BTC, Y8, HOLD** (Binance COIN-M or
+Deribit): highest holdout excess with ≥ 4 contracts and flat capacity to $50k/leg. Y5 trades 3–5× more days for about
+half the excess. EARLY adds nothing on BTC/ETH.
+
+**Counterparty / operational (qualitative).**
+- Capital sits on one exchange for 2–6 months per tranche, in coin.
+- Deribit needs the spot coin withdrawn from where it was bought (a withdrawal fee and latency, not modelled).
+- The spot leg is bought with USDT and the future settles on a USD index, so USDT/USD drift is unhedged and not
+  modelled.
+- Binance COIN-M's delivery fee is charged as a 5 bps taker leg, which is conservative. Deribit's current futures taker
+  is 3.5 bps (5 charged).
+
+### Strategy module design (for routing; no code written)
+- `dated_basis_carry`, crypto, shadow first. Universe: BTC (then ETH) quarterlies on one coin-margined venue. Data comes
+  from public endpoints: Binance `dapi` ticker/depth and `/futures/data/delivery-price`, Deribit `get_order_book` /
+  `get_delivery_prices`.
+- Entry: decide daily at 08:00 UTC. Best quarterly with 14 ≤ DTE ≤ 200. b_net = ((F_mid/S_mid − 1) − 4 fees − both
+  walks at the intended size − the TWAP exit walk) × 365/DTE ≥ Y (8 %), and b_net − current USDT lending ≥ 0. Execute
+  after a full bar.
+- One tranche per day: spot buy N, short C = N·F0/S0 USD of contracts.
+- Exit: hold to delivery. In the last 30 min before 08:00 UTC, sell spot by TWAP (Binance's window is 30 min since
+  2024; read it off the published price each time). The future settles at D. No roll logic: new tranches go to whichever
+  quarterly the rule picks, and delivered collateral returns to cash.
+- Sizing is capital-bound, not risk-bound. N per tranche = a fixed slice. Cap total locked capital at a share of equity,
+  because it is illiquid for months. The per-trade risk gate still bounds N. No leverage beyond coin-margined 1×. The
+  payoff has no stop-loss path; the kill switch should flatten both legs together, never the short alone.
+- **What the paper engine lacks:**
+  1. A dated-future instrument: expiry, contract size, an inverse payoff in coin, and a delivery-price source.
+  2. A two-leg position held to expiry whose short leg has **no funding**. The carry book today assumes spot + perp
+     with funding; it needs a "dated" leg kind and a **settlement event** at expiry that books the future at D and
+     the spot at its TWAP.
+  3. A mark for equity and the kill switch: value = (N/S0)·S_t·F0/F_t, marked at both mids. This follows the 2026-10-09
+     rule: a mark changes in the same commit as the close.
+  4. Collateral accounting: the spot leg *is* the margin. The wallet must not double-count it as free cash, and it must
+     lock N until delivery.
+  5. Ingestion of quarterly tickers and books (only Bybit perps, a Binance funding poller and spot stream today).
+  6. An evidence path: carries reach `status` only via closed realised episodes (net_of_costs). A tranche's natural
+     null is the lending rate, not zero, and its clustering unit is the contract. The bar's registered n (≥ 200) means
+     ~1 year in market at one tranche a day.
+- Expected contribution, read honestly:
+  - At Y8 in a 2024-like year: about +5 %/yr over lending on the capital committed, i.e. ~$500/yr per $10k, nearly
+    riskless in price.
+  - In 2026 so far: $0, because the rule never fires.
+  - It is worth building only as a cheap, mostly idle sleeve that switches on when basis widens. It is not a fix for
+    today's PnL.
+
+Data stays in the session scratchpad `r4/data/` (Binance archive pickles, Deribit candles, delivery prices, OKX lending,
+books, `tranches_{500,5000,50000}.pkl`).
+
 ## Round 5: options-implied — 2026-10-09: 14 cells, nothing survives
 Question: do extremes in Deribit option prices (volatility risk premium, 25-delta skew, DVOL spikes, IV
 term inversion, put/call demand) predict the BTC / ETH perp over 3–7 days by enough to pay a taker round
