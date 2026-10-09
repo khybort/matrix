@@ -563,3 +563,10 @@
   sum to `should_submit_live`, so at the 2 % cap a $196.82 paper KAIA carry executes $98.41 a leg. Bps compare;
   dollars do not. Any live-vs-paper comparison of carries must state which size it uses
   (`docs/wiki/carry-execution.md`).
+- **2026-10-09 — Paper and live must size a multi-leg position by the same rule, and the clamp goes after every sizing branch.**
+  The paper engine applied the per-trade cap to each carry leg while the live gate applies it to both legs together, so
+  paper booked 2x the dollars live would (bps unaffected). Fixed in the conservative direction: `paper_trade.carry_leg_cap`
+  = `max_position_pct` x min(marked, cash+locked equity) / 2, applied to every CARRY_SIDES side after the risk-multiplier
+  and Kelly branches (a later branch would re-widen it). The equity choice makes the paper leg never exceed the executor's
+  and equal it to the cent; the test pins `paper leg == CarryExecutor._wallet_leg_cap`. A new sizing branch for carries
+  must sit above that clamp.

@@ -234,7 +234,7 @@ async def test_open_stamps_book_and_sizes_to_impact(book_wallet, monkeypatch):
         pred = await session.get(Prediction, pid)
     cap = CB.leg_cap_usd(DEEP, thin)
     assert CB.MIN_LEG_USD <= float(pos.notional_usd) <= cap + 0.01
-    assert float(pos.notional_usd) <= 200  # wallet risk gate: 2 % of $10k
+    assert 2 * float(pos.notional_usd) <= 200  # both legs within the risk gate: 2 % of $10k
     bo = pred.context["book_open"]
     assert bo["notional_usd"] == pytest.approx(float(pos.notional_usd), abs=0.01)
     assert bo["spot_sell_bps"] <= CB.MAX_LEG_IMPACT_BPS + 1e-6

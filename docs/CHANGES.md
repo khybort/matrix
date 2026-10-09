@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-10-09 — Risk boyutlandırma: paper carry'nin iki bacağı birlikte işlem başı tavanın içinde (canlıyla aynı kural)
+- `backtest.paper_trade.carry_leg_cap`: her CARRY_SIDES pozisyonunda bacak notional'ı = min(mevcut bacak sınırları — risk çarpanı ya da Kelly, $500 confirmed-öncesi tavan, kitap etki tavanı —, `max_position_pct` × min(marklı equity, cash+locked) / 2). İki bacağın toplamı artık işlem başı tavanı aşamaz; bu `live_gate.should_submit_live` + `CarryExecutor`'ın combined-notional kuralıyla aynı → paper bacağı = canlı bacağı (ör. equity $9 841, %2: bacak $196.82 → $98.41). Paper carry dolar PnL'i yarıya iner, bps değişmez (shadow tracker / carry kanıtı etkilenmez). Yönlü boyutlandırma değişmedi; hiçbir tavan gevşetilmedi. Açık pozisyonlar eski boyutla bitene kadar koşar.
+
 ## 2026-10-09 — İki bacaklı carry yürütme yolu (`CarryExecutor`), varsayılan dry-run; paper carry'lerin dry-run aynası
 - `matrix_shared.carry_executor` + `matrix_shared.carry_venues` (execution facade: `execution.carry`): ödünç → spot sat → perp al (kapanış: spot al → perp sat → geri öde), Limit-IOC fiyat bandı, ikinci bacak düşerse ilk bacak hemen geri alınır, geri alma da düşerse alarm + kill switch (süreç kilidi + cüzdanın `circuit_tripped_at`'i). Her emir `live_gate.should_submit_live`'dan **iki bacağın toplam notional'ıyla** geçer → canlı bacak = paper bacağının yarısı. Modlar: `MATRIX_CARRY_EXEC_MODE=dry_run` (varsayılan, `NeverSend`) | `testnet` (yalnız `api-testnet.bybit.com`; Binance margin'in testnet'i yok → reddedilir). Mainnet modu yok.
 - `backtest.paper_trade`: book-priced carry açılış/kapanışından sonra `mirror_paper_open/close` (hep dry-run, 5 s, asla raise etmez) → log satırı `carry_exec[dry_run] …` + `predictions.context.carry_exec_dry_run.{open,close}` (bacak dolumları, `gap_bps`). Kapatma: `MATRIX_CARRY_MIRROR=false`.

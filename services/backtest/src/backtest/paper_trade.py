@@ -243,6 +243,19 @@ def _carry_sign(side: str) -> Decimal:
     return Decimal("-1") if side == "inverse_carry" else Decimal("1")
 
 
+def carry_leg_cap(equity: Decimal, wallet: Wallet) -> Decimal:
+    """Per-leg ceiling for a two-leg carry: both legs TOGETHER within the
+    per-trade cap, which is how `live_gate.should_submit_live` caps a carry
+    (on its combined notional) and how `CarryExecutor` sizes the leg. Sizing
+    each leg against the full cap booked 2x the dollars live would.
+
+    Equity is the gate's (cash + locked) unless the marked equity is lower, so
+    the paper leg never exceeds the executable one and equals it at the cent."""
+    book = Decimal(wallet.cash_usd) + Decimal(wallet.locked_usd)
+    cap = min(equity, book) * Decimal(wallet.max_position_pct) / 2
+    return cap.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+
+
 async def _latest_funding_rate_on(symbol: str, exchange: str) -> Decimal | None:
     """Latest funding rate for `symbol` on a specific `exchange` (cross-exchange
     accrual reads bybit and binance separately). None when no snapshot exists."""
@@ -915,6 +928,7 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
 
         equity, _unrealized, _n = await _current_equity(session, wallet)
         max_notional = equity * wallet.max_position_pct
+        carry_leg_max = carry_leg_cap(equity, wallet)
 
         # Pre-fetch open counts per strategy for this wallet
         strategy_open_rows = (
@@ -1242,6 +1256,10 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
                 f"kelly size {p.strategy_id}: {notional} -> {kn} (gate {max_notional:.2f})"
             )
             notional = kn
+        # A carry is two legs of `notional` each: the per-trade cap binds their
+        # sum (the live gate's rule), whichever branch sized it above.
+        if _is_carry(p.side):
+            notional = min(notional, carry_leg_max)
 
         # A carry that names its spot leg is priced and sized on both books
         # (backtest.carry_books): no spot book means no hedge, so no position;

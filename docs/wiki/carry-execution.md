@@ -47,12 +47,17 @@ dry-run, and there is no mainnet mode. See [[risk-gates]] and
   If the borrow is rejected, the carry aborts before any trade.
 - **Caps on a two-leg position.** The gate is called with the **combined
   notional of both legs**. The per-leg size is the minimum of: the paper size,
-  $500 until `confirmed`, and `max_position_pct × equity / 2`. So **live legs
-  are half the paper legs**: paper books a $196.82 KAIA carry against the 2 %
-  cap, while the executor sizes $98.41 a leg (the first live dry-run,
-  2026-10-09). `LIVE_CAPITAL_CAP_USD`, the certificate, posture, circuit and
-  slot caps apply unchanged through `should_submit_live`. Closes call it with
-  `closing=True`.
+  $500 until `confirmed`, and `max_position_pct × equity / 2`. Since
+  2026-10-09 the paper engine sizes carries by the same rule
+  (`paper_trade.carry_leg_cap`, every carry side, every sizing branch incl.
+  Kelly), so the paper leg **equals** the executor's leg: at equity $9 841 and
+  the 2 % cap, $98.41 a leg on both sides. Before, paper booked $196.82 a leg
+  (KAIA, SKL) against the full cap, i.e. 2× live dollars; bps were never
+  affected. The dry-run mirror's remaining size gap is the qty-step rounding
+  (re-run on the three open neg_funding_carry positions: paper $98.40, executor
+  $98.35/$98.37/$98.40). `LIVE_CAPITAL_CAP_USD`, the certificate, posture,
+  circuit and slot caps apply unchanged through `should_submit_live`. Closes
+  call it with `closing=True`.
 - **Idempotency.** Client order ids are deterministic per (prediction,
   action, leg, attempt), 24 chars: `orderLinkId` on Bybit, `newClientOrderId`
   on Binance. A duplicate-id answer is resolved by querying that id. Each
@@ -120,8 +125,6 @@ FROM predictions WHERE strategy_id = 'neg_funding_carry' AND context->'carry_exe
 - The simulated gap compares fills on the same book seconds apart. So it
   measures rounding, the band and the half-size, not latency or queue
   position. Only testnet or live fills measure those.
-- Live sizing is half of paper (combined cap). Either paper should book
-  carries against the combined notional, or the gate's per-trade cap should
-  be read per leg for a hedged pair. That is a human risk decision, and until
-  it is made paper dollar PnL per carry is 2× what live would book (bps are
-unaffected).
+- ~~Live sizing is half of paper~~ — decided 2026-10-09: paper books carries
+  against the combined notional (the conservative direction; no cap was
+  loosened). Positions opened before the change run off at their old size.

@@ -65,7 +65,12 @@ bugs corrupt every downstream conclusion.
   `xexch_carry` are booked as one family, with one carry per underlying per
   wallet. A carry that names a spot leg is gated, sized and costed on both
   books (`backtest.carry_books`): no spot book means no position; size is
-  capped by book impact and by $500 a leg until the strategy is `confirmed`;
+  capped by book impact and by $500 a leg until the strategy is `confirmed`,
+  and both legs together by the per-trade cap: leg ≤ `max_position_pct` ×
+  min(marked, cash+locked equity) / 2 (`carry_leg_cap`, every carry side incl.
+  unpriced ones and Kelly-sized ones, since 2026-10-09: the live gate's
+  combined-notional rule, so paper dollars per carry equal live; before, paper
+  legs were 2× live);
   the cost is four taker fees plus walked fills. Borrow is charged per started
   hour from the recorded `margin_borrow_rates` series, or the entry quote × 3
   where the series misses (32dcadb; `context.borrow_source`). An open carry
