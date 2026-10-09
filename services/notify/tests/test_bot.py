@@ -164,3 +164,23 @@ def test_conflict_filter_leaves_unrelated_errors_alone():
     assert B._ConflictFilter().filter(rec) is True
     assert B.CONFLICTS["count"] == 0
     assert rec.msg == "network down"
+
+
+async def test_push_reports_undelivered_alerts_once_channel_returns(monkeypatch):
+    import notify.bot as bot
+
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "1")
+    monkeypatch.setattr(bot, "UNDELIVERED", {"count": 0, "urgent": 0, "first_at": 0.0, "last_at": 0.0})
+    app = MagicMock()
+    app.bot.send_message = AsyncMock(side_effect=OSError("network unreachable"))
+    assert await push(app, ALERT_URGENT, "a") == 0
+    assert await push(app, ALERT_INFO, "b") == 0
+    assert bot.UNDELIVERED["count"] == 2 and bot.UNDELIVERED["urgent"] == 1
+
+    app.bot.send_message = AsyncMock()
+    assert await push(app, ALERT_INFO, "c") == 1
+    texts = [c.kwargs["text"] for c in app.bot.send_message.await_args_list]
+    assert texts[0] == "c"
+    assert "2 alert(s), 1 URGENT, could not be delivered" in texts[1]
+    assert bot.UNDELIVERED["count"] == 0
+

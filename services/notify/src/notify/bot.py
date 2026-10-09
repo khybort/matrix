@@ -270,6 +270,29 @@ def build_application(token: str) -> Application:
 # ----------------------------------------------------------------- push API
 
 
+# Alerts that reached nobody. 2026-09-30 → 10-06 the VM had no egress and 810
+# alerts (145 URGENT) failed one by one, each with a full traceback, and when
+# the channel came back nothing said that anything had been missed. Count them
+# and say so once on the first delivery that works.
+UNDELIVERED: dict[str, float | int] = {"count": 0, "urgent": 0, "first_at": 0.0, "last_at": 0.0}
+
+
+async def _send_all(app: Application, allowlist: set[int], text: str) -> int:
+    sent = 0
+    for chat_id in allowlist:
+        try:
+            await app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True,
+            )
+            sent += 1
+        except Exception as e:  # noqa: BLE001 — one line, not a traceback per alert
+            logger.warning(f"push to chat_id={chat_id} failed: {type(e).__name__}: {e}")
+    return sent
+
+
 async def push(app: Application, level: str, text: str) -> int:
     """Fan-out a message to every allowed chat_id. Returns count sent.
 
@@ -281,19 +304,26 @@ async def push(app: Application, level: str, text: str) -> int:
     if not allowlist:
         logger.warning(f"push: no allowed chat_ids; dropping {level} alert: {text[:80]!r}")
         return 0
-    sent = 0
-    for chat_id in allowlist:
-        try:
-            await app.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode=ParseMode.MARKDOWN,
-                disable_web_page_preview=True,
-            )
-            sent += 1
-        except Exception as e:
-            logger.exception(f"push to chat_id={chat_id} failed: {e}")
+    sent = await _send_all(app, allowlist, text)
     logger.info(f"pushed {level} alert to {sent}/{len(allowlist)} chats")
+    now = time.time()
+    if sent == 0:
+        if not UNDELIVERED["count"]:
+            UNDELIVERED["first_at"] = now
+        UNDELIVERED["count"] = int(UNDELIVERED["count"]) + 1
+        UNDELIVERED["urgent"] = int(UNDELIVERED["urgent"]) + (level == ALERT_URGENT)
+        UNDELIVERED["last_at"] = now
+    elif UNDELIVERED["count"]:
+        fmt = "%m-%d %H:%M"
+        first = time.strftime(fmt, time.gmtime(float(UNDELIVERED["first_at"])))
+        last = time.strftime(fmt, time.gmtime(float(UNDELIVERED["last_at"])))
+        note = (
+            f"⚠️ {UNDELIVERED['count']} alert(s), {UNDELIVERED['urgent']} URGENT, could not be "
+            f"delivered {first} → {last} UTC — Telegram was unreachable from the VM. "
+            "They are in `docker compose logs notify`; the conditions may still hold."
+        )
+        if await _send_all(app, allowlist, note):
+            UNDELIVERED.update(count=0, urgent=0, first_at=0.0, last_at=0.0)
     return sent
 
 

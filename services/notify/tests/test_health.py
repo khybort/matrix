@@ -136,3 +136,14 @@ def test_llm_budget_alert_is_stateful_and_recovers(monkeypatch):
     assert again == []  # re-alert throttled
     recovered, _ = detect_health_alerts(flags, _healthy(llm_cost_today_usd=None))
     assert any("Recovered: llm budget" in t for _, t in recovered)
+
+
+def test_no_fills_for_a_day_is_its_own_alert():
+    alerts, flags = detect_health_alerts(HealthFlags(), _healthy(paper_fill_age_s=3 * 86400.0))
+    assert set(flags.active) == {"no_fills"}
+    assert alerts[0][0] == ALERT_WARNING and "No paper position opened" in alerts[0][1]
+
+    alerts, flags = detect_health_alerts(flags, _healthy(paper_fill_age_s=600.0))
+    assert flags.active == {}
+    assert alerts == [(ALERT_INFO, "ℹ️ Recovered: no fills.")]
+

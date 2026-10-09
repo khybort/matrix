@@ -33,6 +33,11 @@ PAPER_ENGINE_STALE_S = int(os.environ.get("MATRIX_HEALTH_PAPER_STALE_S", "180"))
 SIGNAL_STALE_S = int(os.environ.get("MATRIX_HEALTH_SIGNAL_STALE_S", "900"))
 INGEST_STALE_S = int(os.environ.get("MATRIX_HEALTH_INGEST_STALE_S", "300"))
 BARS_STALE_S = int(os.environ.get("MATRIX_HEALTH_BARS_STALE_S", "1500"))
+# No paper position opened anywhere for this long = the system is up but not
+# trading. 2026-09-29 → 10-09 nothing filled for ten days (slots at 0, EV floor
+# rejecting every candidate, then no data) and no detector said so, because
+# every other freshness signal — predictions, snapshots, ticks — stayed green.
+FILL_STALE_S = int(os.environ.get("MATRIX_HEALTH_FILL_STALE_S", "86400"))
 DEV_TASK_HEARTBEAT_STALE_S = int(os.environ.get("MATRIX_HEALTH_DEV_HEARTBEAT_STALE_S", "600"))
 DISK_FREE_MIN_PCT = float(os.environ.get("MATRIX_HEALTH_DISK_FREE_MIN_PCT", "15"))
 LLM_WINDOW_MIN = int(os.environ.get("MATRIX_HEALTH_LLM_WINDOW_MIN", "60"))
@@ -46,6 +51,7 @@ class HealthSample:
 
     now: datetime
     paper_snapshot_age_s: float | None = None
+    paper_fill_age_s: float | None = None   # newest paper_positions.opened_at
     crypto_prediction_age_s: float | None = None
     crypto_tick_age_s: float | None = None  # newest ticker snapshot (raw stream)
     crypto_bar_age_s: float | None = None   # newest 1m bar (bars-aggregator)
@@ -112,6 +118,11 @@ async def collect_health(prev: HealthFlags, now: datetime | None = None) -> Heal
             s.paper_snapshot_age_s = _age(now, ts)
 
             ts = (await session.execute(text(
+                "SELECT max(opened_at) FROM paper_positions"
+            ))).scalar()
+            s.paper_fill_age_s = _age(now, ts)
+
+            ts = (await session.execute(text(
                 "SELECT max(created_at) FROM predictions WHERE asset_class = 'crypto'"
             ))).scalar()
             s.crypto_prediction_age_s = _age(now, ts)
@@ -164,10 +175,12 @@ async def collect_health(prev: HealthFlags, now: datetime | None = None) -> Heal
     try:
         async with local_session_scope() as session:
             # Raw stream liveness: newest ticker snapshot for the most liquid
-            # symbol (index (symbol, snapshot_ts) makes this O(log n)).
+            # symbol (index (symbol, snapshot_ts) makes this O(log n)). Pinned
+            # to bybit: the Binance funding poller writes the same symbol, so
+            # an unpinned probe stays green while the Bybit stream is dead.
             ts = (await session.execute(text(
                 "SELECT snapshot_ts FROM market_ticker_snapshots "
-                "WHERE symbol = :sym ORDER BY snapshot_ts DESC LIMIT 1"
+                "WHERE symbol = :sym AND exchange = 'bybit' ORDER BY snapshot_ts DESC LIMIT 1"
             ), {"sym": os.environ.get("MATRIX_HEALTH_PROBE_SYMBOL", "BTCUSDT")})).scalar()
             s.crypto_tick_age_s = _age(now, ts)
             ts = (await session.execute(text(
@@ -203,7 +216,11 @@ def _fmt_age(age: float | None) -> str:
         return "unknown"
     if age < 120:
         return f"{age:.0f}s"
-    return f"{age / 60:.0f}m"
+    if age < 7200:
+        return f"{age / 60:.0f}m"
+    if age < 172800:
+        return f"{age / 3600:.0f}h"
+    return f"{age / 86400:.1f}d"
 
 
 def detect_health_alerts(
@@ -218,6 +235,13 @@ def detect_health_alerts(
             ALERT_URGENT,
             f"⚠️ Paper engine stalled: last wallet snapshot {_fmt_age(s.paper_snapshot_age_s)} ago "
             f"(> {PAPER_ENGINE_STALE_S}s). Positions are not being marked/closed.",
+        )
+    if s.paper_fill_age_s is not None and s.paper_fill_age_s > FILL_STALE_S:
+        conditions["no_fills"] = (
+            ALERT_WARNING,
+            f"⚡ No paper position opened for {_fmt_age(s.paper_fill_age_s)} "
+            f"(> {FILL_STALE_S // 3600}h). The loops run but nothing trades — check slot "
+            "allocations, the EV floor and backpressure.",
         )
     if s.crypto_prediction_age_s is not None and s.crypto_prediction_age_s > SIGNAL_STALE_S:
         conditions["signals_stalled"] = (
