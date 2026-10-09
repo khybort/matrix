@@ -512,17 +512,7 @@ async def _carry_borrow_accrued(pos: PaperPosition, ctx: dict, now: datetime) ->
     cached = _CARRY_BORROW.get(pos.id)
     if cached is not None and cached[0] == hours:
         return cached[1]
-    stress = float((ctx.get("book_open") or {}).get("borrow_stress", carry_books.BORROW_STRESS))
-    venue = ctx.get("borrow_venue") or ctx.get("spot_venue")
-    coin = str(ctx.get("spot_symbol") or pos.symbol).removesuffix("USDT")
-    if venue:
-        charge, _ = await carry_books.borrow_series_charge(
-            pos.notional_usd, str(venue), coin, opened, now, Decimal(str(borrow_h)), stress
-        )
-    else:
-        charge = carry_books.borrow_charge(
-            pos.notional_usd, Decimal(str(borrow_h)), stress, (now - opened).total_seconds()
-        )
+    charge, _ = await carry_books.carry_borrow(pos.notional_usd, pos.symbol, ctx, opened, now)
     _CARRY_BORROW[pos.id] = (hours, charge)
     return charge
 
@@ -1444,22 +1434,11 @@ async def _close_position(
         # rate the venue quoted for that hour (recorded series, margin_borrow_rates),
         # else the entry quote x the stress multiple (squeezed coins borrow
         # dearer than the calm-day quote; adversarial check 2026-10-09).
-        borrow_h = ctx.get("borrow_rate_hourly")
-        if borrow_h:
+        # Same helper as the open-carry mark (_carry_borrow_accrued).
+        if ctx.get("borrow_rate_hourly"):
             opened_b = pos.opened_at if pos.opened_at.tzinfo else pos.opened_at.replace(tzinfo=UTC)
-            stress = float((book_open or {}).get("borrow_stress", carry_books.BORROW_STRESS))
-            venue_b = ctx.get("borrow_venue") or ctx.get("spot_venue")
-            coin_b = str(ctx.get("spot_symbol") or pos.symbol).removesuffix("USDT")
-            if venue_b:
-                charge, borrow_info = await carry_books.borrow_series_charge(
-                    pos.notional_usd, str(venue_b), coin_b, opened_b, now, Decimal(str(borrow_h)), stress
-                )
-                context_patch.update(borrow_info)
-            else:
-                charge = carry_books.borrow_charge(
-                    pos.notional_usd, Decimal(str(borrow_h)), stress, (now - opened_b).total_seconds()
-                )
-                context_patch["borrow_source"] = "stressed_entry"
+            charge, borrow_info = await carry_books.carry_borrow(pos.notional_usd, pos.symbol, ctx, opened_b, now)
+            context_patch.update(borrow_info)
             pnl_usd -= charge
             context_patch["borrow_charged_usd"] = str(charge)
         # For scoring: express PnL as % of notional (analogous to pnl_pct

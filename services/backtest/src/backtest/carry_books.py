@@ -348,3 +348,22 @@ async def borrow_series_charge(
     except Exception as e:  # noqa: BLE001 — no series is the stressed fallback, not a failed close
         logger.warning(f"carry_books: borrow series {venue}/{coin} unavailable: {e}")
     return borrow_from_series(notional, series_rates(rows, opened, now), entry_hourly, stress)
+
+
+async def carry_borrow(
+    notional: Decimal, symbol: str, context: dict, opened: datetime, now: datetime
+) -> tuple[Decimal, dict]:
+    """Borrow a short-spot carry owes for its hold so far, and how it was
+    priced. The one entry point for both the close and the open-carry equity
+    mark, so the two cannot drift. (0, {}) when the carry borrows nothing."""
+    borrow_h = (context or {}).get("borrow_rate_hourly")
+    if not borrow_h:
+        return Decimal("0"), {}
+    stress = float((context.get("book_open") or {}).get("borrow_stress", BORROW_STRESS))
+    venue = context.get("borrow_venue") or context.get("spot_venue")
+    if venue:
+        coin = str(context.get("spot_symbol") or symbol).removesuffix("USDT")
+        return await borrow_series_charge(notional, str(venue), coin, opened, now, Decimal(str(borrow_h)), stress)
+    return borrow_charge(notional, Decimal(str(borrow_h)), stress, (now - opened).total_seconds()), {
+        "borrow_source": "stressed_entry"
+    }
