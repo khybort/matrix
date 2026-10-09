@@ -1,0 +1,103 @@
+Pre-registration — signal research 2026-10, round 2 (tick data)
+Written 2026-10-09 13:40 UTC, before any return was computed. Round 1: ../signal_2026_10/PREREG.txt.
+
+GOAL. Signals whose GROSS edge per episode is large enough (target >= 45 bps, 3x a taker round trip)
+to survive realistic costs. Smaller effects are recorded but cannot be implemented.
+
+------------------------------------------------------------------------------------------------
+DATA
+ T1 tick panel. Bybit public trade archive public.bybit.com/trading/<SYM>/<SYM><DATE>.csv.gz
+    (aggressor side per print; RPI prints dropped). 40 crypto USDT linear perps (symbolType '',
+    launched before 2026-03-01), chosen as the top 40 by Bybit turnover over 2026-04-01..04-30 from
+    round 1's 1h klines (no information after the train start). Days 2026-04-24 .. 2026-10-08
+    (the first 7 days are warm-up only). Each symbol-day is reduced to 1-minute bars and the raw file
+    is deleted: open/high/low/close, buy/sell aggressor USD, print counts, aggressor USD in prints
+    >= $10k / $50k / $250k / $1M per side, and a spread proxy (below).
+ T2 Binance USD-M 1m klines (data.binance.vision) for the same 40 symbols and days (H10 only).
+ K1 round 1's 1h klines, 1h premium index, funding settlements (791 perps, 2025-10-01..2026-10-09)
+    and 1h OI (top 200), plus Bybit 5m klines fetched for each H9 settlement window.
+ Survivorship: every source lists perps trading on 2026-10-09 only. Delisted coins are absent.
+
+SPLIT BY TIME (holdout evaluated once, only for train passers, rule frozen)
+ T1/T2 hypotheses: TRAIN 2026-05-01..2026-07-31, HOLDOUT 2026-08-01..2026-10-08 (by entry time).
+ K1 hypotheses:    TRAIN 2025-10-01..2026-05-31, HOLDOUT 2026-06-01..2026-10-08.
+
+EXECUTION AND COSTS
+ Decision at the close of the signal bar t (all inputs <= t). Tick hypotheses enter at the close of
+ minute t+1 (one full minute skipped) and exit at the close of minute t+1+H. Kline hypotheses skip
+ one full bar of their resolution (stated per hypothesis).
+ Cost per round trip = 2 x 5.5 bps taker + half the spread at entry + half the spread at exit.
+  - Tick spread proxy: at every print, bid = last sell-aggressor price, ask = last buy-aggressor
+    price, both <= 10 s old and ask > bid; spread = (ask-bid)/mid. Per minute: median. A minute
+    without a value uses that symbol-day's median. (Prints walk the book, so this overstates the
+    touch spread: conservative.)
+  - Kline hypotheses: spread from a map log(spread) = a + b log(daily turnover) fitted on every
+    tick symbol-day available (panel + 424 September symbol-days of the maker study), floored at
+    2 bps, applied with the coin's trailing-7d mean daily turnover.
+ Funding: every settlement crossed while a position is open is charged/credited at its actual rate.
+ One signal per episode: per (cell, symbol) no new entry before the previous exit.
+
+STATISTICS
+ Per cell: mean net bps per episode, n, number of days; t from a day-clustered standard error
+ (cluster = UTC entry date). Week-clustered t also reported for holds >= 24 h.
+ TRAIN PASS: net > 0 and day-clustered t >= 2.
+ HOLDOUT SURVIVE: net > 0 and day-clustered t >= 2.
+ IMPLEMENT only if it survives AND holdout one-sided p < 0.05 / k (k = cells sent to holdout) AND
+ holdout net >= +15 bps per episode. Every cell below counts toward m; BY q-values over all m train
+ p-values are reported.
+ Thresholds below may be changed ONLY on the basis of trigger COUNTS in train (target 100..5000
+ train episodes per cell), before any return of that cell is computed; every change is appended.
+
+------------------------------------------------------------------------------------------------
+HYPOTHESES (m = 28 cells)
+
+H8a-flow  aggressor imbalance (T1). Window W = last 15 min. B, S = buy/sell aggressor USD,
+  I = (B-S)/(B+S), V = B+S. Vbar = mean of 15-min V over the trailing 7 days.
+  Trigger |I| >= 0.35 and V >= 4 Vbar.
+  Cells: follow sign(I) H=60m; follow H=240m; fade H=60m; fade H=240m.              (4)
+
+H8a-large  large-print clusters (T1). Per symbol the "large" bucket is the smallest of
+  {$10k,$50k,$250k,$1M} whose train mean is <= 300 large prints per day (counts only).
+  L = net large aggressor USD over the last 15 min; sigma = std of L over the trailing 7 days
+  (one value per minute, rolling). Trigger |L| >= 5 sigma.
+  Cells: follow sign(L) H=60m; follow H=240m; fade H=60m; fade H=240m.              (4)
+
+H8b  liquidation-cascade proxy, bounce (T1). Always FADE the move.
+  (1m) minute return |r| >= max(1.0 %, 6 x std of 1m returns over trailing 24 h), same-side
+       aggressor share >= 0.70 in the direction of the move, minute volume >= 8x trailing-24h mean.
+  (5m) 5-min return |r| >= max(2.0 %, 5 x std of 5m returns over trailing 24 h), same-side share
+       >= 0.65, 5-min volume >= 5x trailing-24h mean 5-min volume.
+  Cells: {1m, 5m} x H in {30m, 60m, 240m}.                                          (6)
+  Bybit/Binance do not publish historical liquidations (Binance liquidationSnapshot: 404).
+
+H9  funding-settlement microstructure (K1 + 5m windows). Universe at settlement T: crypto perp
+  (symbolType '' or 'innovation'), listed >= 30 days, trailing-7d mean daily turnover >= $2M.
+  Predicted rate at T-30m: interval >= 2h: P = mean of the 1h premium-index closes of the bars
+  of the current interval that closed by T-1h; F^ = P + clamp(0.01 % x interval/8h - P, -0.05 %,
+  +0.05 %). Interval 1h: F^ = the rate settled at T-1h. Interval = gap from the previous settlement.
+  PRE: enter at the close of the 5m bar ending T-30m, exit at the close of the bar ending T (last
+       trade before settlement, no funding). Side against the payer: short if F^ > 0, long if F^ < 0.
+       Cells |F^| >= 0.10 %, |F^| >= 0.30 %.                                         (2)
+  POST: realised settled rate F (known at T). Enter at the close of the 5m bar ending T+5m
+       (skip 5 min), hold 30m or 240m; side = reversal of the payer pressure: long if F > 0, short
+       if F < 0. Cells |F| in {>= 0.10 %, >= 0.30 %} x {30m, 240m}.                   (4)
+
+H10  cross-venue lead-lag (T2 vs T1). g = Binance 5-min return - Bybit 5-min return at minute t
+  (both closes). Trigger |g| >= 30 bps. Trade Bybit in the direction of g.
+  Cells H=15m, H=60m.                                                                (2)
+
+H11  OI shock + price (K1 1h, OI top 200). At hour close T: dOI = log OI change over 4h,
+  r = log price change over 4h. Universe as H9. Entry at the close of the bar ending T+1h.
+  build-up: dOI >= +15 % and |r| >= 3 %  -> FOLLOW sign(r).
+  flush:    dOI <= -15 % and |r| >= 3 %  -> FADE.
+  Cells {build-up, flush} x H in {4h, 24h}.                                          (4)
+
+H12  new-listing short (K1 + instruments launchTime). Every crypto USDT perp launched
+  2025-10-01..2026-09-24. Decision at launch + 24 h, entry SHORT at the close of the 1h bar ending
+  launch + 25 h, hold 7 d or 14 d, funding charged. Split by entry date. Spread from the map with
+  the coin's mean daily turnover over its first 24 h. Delisted listings are absent (they mostly
+  fell, so this understates a short).
+  Cells H=7d, H=14d.                                                                 (2)
+
+------------------------------------------------------------------------------------------------
+LOG (append-only)
