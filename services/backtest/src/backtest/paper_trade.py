@@ -710,6 +710,23 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             ).scalars()
         }
 
+        # One position per bet: the same strategy on the same symbol and side is
+        # one thesis however many predictions queue for it. Over 40 days to
+        # 2026-10-09, 2 016 of funding_reversion's 3 101 fills (oi_delta 222/547,
+        # oi_breakout 90/208) stacked onto an identical open position of its
+        # own, multiplying exposure to one bet and every fill-based metric.
+        open_bets: set[tuple[str, str, str]] = {
+            (sid, sym, side)
+            for sid, sym, side in (
+                await session.execute(
+                    select(Prediction.strategy_id, PaperPosition.symbol, PaperPosition.side)
+                    .join(Prediction, Prediction.id == PaperPosition.prediction_id)
+                    .where(PaperPosition.wallet_id == wallet.id)
+                    .where(PaperPosition.status == "open")
+                )
+            ).all()
+        }
+
         # Quarter-Kelly size for strategies whose edge survived both nulls.
         # Sizing by `risk_multiplier` alone is sizing by trailing realised PnL,
         # which is exactly the signal that broken fills corrupt. Kelly answers
@@ -836,6 +853,9 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
         if opened >= wallet_slots_left:
             break
 
+        if (p.strategy_id, p.symbol, p.side) in open_bets:
+            continue
+
         # Per-symbol soft cap: one symbol uses at most ceil(max_concurrent * share)
         # of the wallet slots. share grows with score so high-conviction symbols
         # can legitimately dominate, but a single noisy asset can't eat everything.
@@ -910,6 +930,7 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
         wallet_id = booked
         newly_opened[p.strategy_id] = newly_opened.get(p.strategy_id, 0) + 1
         symbol_open_count[p.symbol] = symbol_open_count.get(p.symbol, 0) + 1
+        open_bets.add((p.strategy_id, p.symbol, p.side))
         opened += 1
         logger.info(
             f"opened {p.side} {p.symbol} [{p.asset_class}] notional={notional:.2f} "

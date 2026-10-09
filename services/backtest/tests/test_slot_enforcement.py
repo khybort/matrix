@@ -27,6 +27,8 @@ from matrix_shared.models import MarketTrade, PaperPosition, Prediction, Wallet
 from matrix_shared.models.slot_config import StrategySlotConfig
 
 SYM = "TEST_BTCUSDT"
+SYM2 = "TEST_ETHUSDT"
+SYM3 = "TEST_SOLUSDT"
 from tests.isolated_market import TEST_ASSET as ASSET, isolated_wallets  # noqa: E402
 
 
@@ -34,14 +36,14 @@ _TRADE_TAG = f"slot-test-{uuid.uuid4().hex[:8]}"
 _seeded_trade_ids: list[str] = []
 
 
-async def _seed_trade(price: str = "50000") -> None:
+async def _seed_trade(price: str = "50000", sym: str = SYM) -> None:
     trade_id = f"{_TRADE_TAG}-{datetime.now(timezone.utc).timestamp()}"
     async with local_session_scope() as session:
         session.add(MarketTrade(
             id=uuid.uuid4(),
             exchange="bybit",
             exchange_trade_id=trade_id,
-            symbol=SYM,
+            symbol=sym,
             trade_ts=datetime.now(timezone.utc),
             side="buy",
             price=Decimal(price),
@@ -50,7 +52,7 @@ async def _seed_trade(price: str = "50000") -> None:
     _seeded_trade_ids.append(trade_id)
 
 
-async def _seed_prediction(strategy_id: str, close_secs: int = 300) -> uuid.UUID:
+async def _seed_prediction(strategy_id: str, close_secs: int = 300, sym: str = SYM) -> uuid.UUID:
     pid = uuid.uuid4()
     async with shared_session_scope() as session:
         now = datetime.now(timezone.utc)
@@ -59,7 +61,7 @@ async def _seed_prediction(strategy_id: str, close_secs: int = 300) -> uuid.UUID
             strategy_id=strategy_id,
             strategy_version=1,
             asset_class=ASSET,
-            symbol=SYM,
+            symbol=sym,
             exchange="bybit",
             side="long",
             confidence=Decimal("0.8"),
@@ -118,9 +120,11 @@ async def test_per_strategy_slot_cap_respected(slotted_wallet):
     wallet_id, strat_a, strat_b = slotted_wallet
     await _seed_trade()
 
-    # Seed 3 predictions for strat_b (only 1 slot available)
-    for _ in range(3):
-        await _seed_prediction(strat_b)
+    # Seed 3 predictions for strat_b (only 1 slot available), on distinct
+    # symbols so the one-position-per-bet gate is not what limits it.
+    for sym in (SYM, SYM2, SYM3):
+        await _seed_trade(sym=sym)
+        await _seed_prediction(strat_b, sym=sym)
 
     from backtest.paper_trade import _open_for_market
     await _open_for_market(ASSET)
@@ -145,9 +149,10 @@ async def test_strategy_a_unaffected_by_strategy_b_cap(slotted_wallet):
     wallet_id, strat_a, strat_b = slotted_wallet
     await _seed_trade()
 
+    await _seed_trade(sym=SYM2)
     await _seed_prediction(strat_b)  # fills strat_b's 1 slot
     await _seed_prediction(strat_a)
-    await _seed_prediction(strat_a)
+    await _seed_prediction(strat_a, sym=SYM2)  # same symbol+side would be one bet
 
     from backtest.paper_trade import _open_for_market
     await _open_for_market(ASSET)
@@ -164,3 +169,32 @@ async def test_strategy_a_unaffected_by_strategy_b_cap(slotted_wallet):
         )).scalar_one()
 
     assert n_a == 2, f"strat_a should have opened 2 positions, got {n_a}"
+
+
+@pytest.mark.asyncio
+async def test_one_position_per_bet(slotted_wallet):
+    """The same strategy, symbol and side is one bet: neither a second
+    prediction in the same tick nor one on a later tick stacks onto it, even
+    with a free slot (funding_reversion stacked 2 016 of 3 101 fills)."""
+    wallet_id, strat_a, _strat_b = slotted_wallet
+    await _seed_trade()
+    await _seed_prediction(strat_a)
+    await _seed_prediction(strat_a)
+
+    from backtest.paper_trade import _open_for_market
+    await _open_for_market(ASSET)
+    await _seed_prediction(strat_a)
+    await _open_for_market(ASSET)
+
+    async with shared_session_scope() as session:
+        from sqlalchemy import func
+        from matrix_shared.models import Prediction as Pred
+        n = (await session.execute(
+            select(func.count(PaperPosition.id))
+            .join(Pred, Pred.id == PaperPosition.prediction_id)
+            .where(PaperPosition.wallet_id == wallet_id)
+            .where(Pred.strategy_id == strat_a)
+            .where(PaperPosition.status == "open")
+        )).scalar_one()
+
+    assert n == 1, f"one bet must hold one position, got {n}"
