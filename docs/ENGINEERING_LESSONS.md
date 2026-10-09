@@ -383,3 +383,15 @@
   üst sınır < 0 ile %5. Gerçek 42 strateji-gününde 35 → 12 bayrak. (5) Bir tüketicinin örneği, ondan öğrenen politikanın
   örneği olmalı: ε-probe'ları reflection'a girince bist'i 0 politika bölümüyle mutasyona soktu. Araçlar:
   `matrix_shared/evidence.py`, `labs/selection.py`, `labs/zero_edge_sim.py`. Kaynak: `docs/wiki/learning-loop-statistics.md`.
+
+- **2026-10-09 — Yeni bir yazıcı, paylaşılan tablonun "sembol için son satır" okuyucularını sessizce değiştirir; yeni bir taraf ailesi, `side IN ('long','short')` filtrelerini.**
+  Binance funding poller'ı (`exchange='binance'`, OI yok, ~60 s) ve carry spot bacakları (`bybit-spot`, `binance-spot`)
+  `market_ticker_snapshots` / `market_orderbook_snapshots`'a perp ile AYNI sembolle yazmaya başlayınca, `agent.features`
+  ("symbol için en yeni ticker") canlı evrende zamanın ~%8'inde Binance satırını okudu: Binance fonlaması, OI deltası yok,
+  venue'lar arası 5 dk fiyat değişimi; labs aynı fonksiyonu kullanıyor. Paper engine ve stratejiler `exchange`'e
+  sabitlenmişti, agent değil. Aynı gün `slot_scorer._is_live` "çalışıyor mu" sorusunu yalnız long/short tahminlere bakarak
+  cevaplıyordu → her carry stratejisi "çalışmıyor", slotu düşebilir ama hiç yükselemez. Kural: (1) Bir tabloya yeni bir
+  kaynak (venue, bacak, poller) yazdırmadan önce `grep -rn "<Model>\b\|<tablo_adı>"` ile her okuyucuyu bul; sembol-only
+  okuyanları aynı commit'te `exchange`'e sabitle. (2) Yeni bir `side` ailesi eklerken `grep -rn "'long','short'\|(\"long\", \"short\")"`
+  ile her filtreyi gözden geçir; "yön" mü soruyor (doğru), "işlem yapıyor mu" mu (carry'yi de saymalı). Kaynak: düzeltmeler
+  `fix(agent): read ticker and book features from the traded perp venue only`, `fix(slots): a carry strategy's signals count as running`.
