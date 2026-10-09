@@ -16,6 +16,12 @@ For each `pattern_kind`:
      bucket key) if one exists — keeps the table from accumulating
      redundant rows.
 
+One sample is one bet: a strategy that re-emits the same (symbol, side)
+inside its horizon made one call however many rows it left, so every count
+here goes through `edge_study.episode_summary` (n = episodes, n_raw = rows).
+Until 2026-10-09 n was rows, which inflated both the sample curve and the z
+score of `_confidence`.
+
 Pattern kinds: `symbol_specific` (symbol × side) and `regime` (market regime
 × side, from predictions.context.regime — matrix_shared.regime). Operator
 directives share the table but are never rewritten here.
@@ -31,10 +37,11 @@ from decimal import Decimal
 from typing import Any
 
 from loguru import logger
-from sqlalchemy import case, desc, func, select, update
+from sqlalchemy import desc, select, text, update
 
 from matrix_shared import shared_session_scope
-from matrix_shared.models import AgentLesson, Outcome, Prediction
+from matrix_shared.edge_study import episode_summary
+from matrix_shared.models import AgentLesson
 
 DEFAULT_STRATEGY_ID = "matrix_agent"
 LOOKBACK_HOURS = 24 * 7   # 7-day rolling window
@@ -57,6 +64,7 @@ class _PatternStat:
     total_pnl: Decimal
     win_rate: Decimal
     avg_pnl: Decimal
+    n_raw: int = 0
 
 
 def _verdict_for(win_rate: Decimal) -> str | None:
@@ -76,7 +84,8 @@ def _confidence(n: int, win_rate: Decimal | None = None) -> Decimal:
     scaled so z ≥ 2.5 counts fully and z ≤ 1 contributes nothing. A 39% win
     rate over 20 trades (z≈1.0) therefore stays below the 0.40 decision gate,
     while 5% over 20 (z≈4) clears it — previously both scored 0.30.
-    Below MIN_N → 0 (lesson won't fire).
+    Below MIN_N → 0 (lesson won't fire). `n` is a count of episodes, not
+    rows: re-emissions of one bet are not independent draws.
     """
     if n < MIN_N_PER_BUCKET:
         return Decimal("0")
@@ -90,6 +99,36 @@ def _confidence(n: int, win_rate: Decimal | None = None) -> Decimal:
     z = abs(Decimal(win_rate) - Decimal("0.5")) / se if se > 0 else Decimal("0")
     sig = max(Decimal("0"), min(Decimal("1"), (z - Decimal("1")) / Decimal("1.5")))
     return (base * sig).quantize(Decimal("0.0001"))
+
+
+# Scored decisions of one (strategy, market) in the window, one row per
+# outcome, with the fields `edge_study.episode_groups` needs.
+_ROWS_SQL = text(
+    "SELECT p.strategy_id, p.asset_class, p.symbol, p.side, p.generated_at, "
+    "       p.horizon_seconds, p.context->>'regime' AS regime, o.pnl_usd "
+    "FROM predictions p JOIN outcomes o ON o.prediction_id = p.id "
+    "WHERE p.strategy_id = :sid AND p.asset_class = :ac "
+    "  AND o.observed_at >= :since AND o.observed_at <= :until "
+    "  AND p.side IN ('long','short') AND o.reason <> 'orphan_flat_close'"
+)
+
+
+def _stats(rows: list[dict], *, key, bucket) -> list[_PatternStat]:
+    """Episode-counted `_PatternStat` per bucket. `bucket(k)` returns
+    (bucket_key, bucket_filter, description) for a summary key."""
+    out: list[_PatternStat] = []
+    for k, e in episode_summary(rows, key).items():
+        n = int(e["n"])
+        total = Decimal(str(round(e["sum"], 6)))
+        bucket_key, bucket_filter, description = bucket(k)
+        out.append(_PatternStat(
+            bucket_key=bucket_key, bucket_filter=bucket_filter, description=description,
+            n=n, wins=int(e["wins"]), total_pnl=total,
+            win_rate=(Decimal(int(e["wins"])) / Decimal(n)).quantize(Decimal("0.000001")),
+            avg_pnl=(total / Decimal(n)).quantize(Decimal("0.000001")),
+            n_raw=int(e["n_raw"]),
+        ))
+    return out
 
 
 async def _symbol_side_buckets(
@@ -108,41 +147,14 @@ async def _symbol_side_buckets(
     decision (and vice versa).
     """
     async with shared_session_scope() as session:
-        stmt = (
-            select(
-                Prediction.symbol,
-                Prediction.side,
-                func.count(Outcome.id).label("n"),
-                func.sum(case((Outcome.pnl_usd > 0, 1), else_=0)).label("wins"),
-                func.sum(Outcome.pnl_usd).label("total_pnl"),
-            )
-            .join(Outcome, Outcome.prediction_id == Prediction.id)
-            .where(Prediction.strategy_id == strategy_id)
-            .where(Prediction.asset_class == asset_class)
-            .where(Outcome.observed_at >= since)
-            .where(Outcome.observed_at <= until)
-            .where(Outcome.reason != "orphan_flat_close")
-            .where(Prediction.side.in_(("long", "short")))
-            .group_by(Prediction.symbol, Prediction.side)
-        )
-        rows = (await session.execute(stmt)).all()
-
-    out: list[_PatternStat] = []
-    for r in rows:
-        n = int(r.n)
-        if n == 0:
-            continue
-        wins = int(r.wins or 0)
-        total = Decimal(r.total_pnl or 0)
-        win_rate = (Decimal(wins) / Decimal(n)).quantize(Decimal("0.000001"))
-        avg = (total / Decimal(n)).quantize(Decimal("0.000001"))
-        out.append(_PatternStat(
-            bucket_key=f"{r.symbol}/{r.side}",
-            bucket_filter={"symbol": r.symbol, "side": r.side},
-            description=f"{r.side} on {r.symbol} (rolling 7d)",
-            n=n, wins=wins, total_pnl=total, win_rate=win_rate, avg_pnl=avg,
-        ))
-    return out
+        rows = (await session.execute(_ROWS_SQL, {
+            "sid": strategy_id, "ac": asset_class, "since": since, "until": until,
+        })).mappings().all()
+    return _stats(
+        [dict(r) for r in rows],
+        key=lambda r: (r["symbol"], r["side"]),
+        bucket=lambda k: (f"{k[0]}/{k[1]}", {"symbol": k[0], "side": k[1]}, f"{k[1]} on {k[0]} (rolling 7d)"),
+    )
 
 
 async def _regime_side_buckets(
@@ -151,32 +163,17 @@ async def _regime_side_buckets(
     """Aggregate by (regime, side) using predictions.context.regime. Answers
     "does this strategy lose when the market is high-vol and falling?" —
     something symbol buckets cannot see."""
-    from sqlalchemy import text as _text
     async with shared_session_scope() as session:
-        rows = (await session.execute(_text(
-            "SELECT p.context->>'regime' AS regime, p.side, count(o.id) AS n, "
-            "       sum(CASE WHEN o.pnl_usd > 0 THEN 1 ELSE 0 END) AS wins, sum(o.pnl_usd) AS total_pnl "
-            "FROM predictions p JOIN outcomes o ON o.prediction_id = p.id "
-            "WHERE p.strategy_id = :sid AND p.asset_class = :ac "
-            "  AND o.observed_at >= :since AND o.observed_at <= :until "
-            "  AND p.side IN ('long','short') AND p.context->>'regime' IS NOT NULL "
-            "  AND p.context->>'regime' <> 'unknown' AND o.reason <> 'orphan_flat_close' "
-            "GROUP BY 1, 2"
-        ), {"sid": strategy_id, "ac": asset_class, "since": since, "until": until})).all()
-    out: list[_PatternStat] = []
-    for regime, side, n, wins, total in rows:
-        n = int(n or 0)
-        if n == 0:
-            continue
-        wins = int(wins or 0)
-        total = Decimal(total or 0)
-        wr = (Decimal(wins) / Decimal(n)).quantize(Decimal("0.000001"))
-        out.append(_PatternStat(
-            bucket_key=f"{regime}/{side}", bucket_filter={"regime": regime, "side": side},
-            description=f"{side} in regime {regime} (rolling 7d)",
-            n=n, wins=wins, total_pnl=total, win_rate=wr, avg_pnl=(total / Decimal(n)).quantize(Decimal("0.000001")),
-        ))
-    return out
+        rows = (await session.execute(_ROWS_SQL, {
+            "sid": strategy_id, "ac": asset_class, "since": since, "until": until,
+        })).mappings().all()
+    # The bet's regime labels the episode, so unknown regimes drop after grouping.
+    stats = _stats(
+        [dict(r) for r in rows],
+        key=lambda r: (r["regime"], r["side"]),
+        bucket=lambda k: (f"{k[0]}/{k[1]}", {"regime": k[0], "side": k[1]}, f"{k[1]} in regime {k[0]} (rolling 7d)"),
+    )
+    return [s for s in stats if s.bucket_filter["regime"] not in (None, "unknown")]
 
 
 async def synthesize(
@@ -245,7 +242,7 @@ async def synthesize(
                 if abs(Decimal(existing.win_rate) - s.win_rate) < Decimal("0.05"):
                     # Close enough — keep it, but record that fresh outcomes still
                     # confirm the pattern so the TTL sweep doesn't expire it.
-                    await _touch_confirmed(existing.id, s.n, now)
+                    await _touch_confirmed(existing.id, s, now)
                     continue
             new_id = await _insert_lesson(
                 strategy_id=strategy_id, asset_class=asset_class, version=version, kind=kind,
@@ -256,7 +253,7 @@ async def synthesize(
             written += 1
             logger.info(
                 f"lesson {new_id} [{asset_class}/{kind}] ({verdict}): {s.description} "
-                f"n={s.n} win={float(s.win_rate)*100:.1f}% pnl=${float(s.total_pnl):.2f}"
+                f"n={s.n} episodes ({s.n_raw} rows) win={float(s.win_rate)*100:.1f}% pnl=${float(s.total_pnl):.2f}"
             )
     return written
 
@@ -364,12 +361,16 @@ async def _supersede_if_active(
     logger.info(f"lesson {existing.id} expired (pattern returned to neutral)")
 
 
-async def _touch_confirmed(lesson_id: uuid.UUID, n: int, at: datetime) -> None:
+async def _touch_confirmed(lesson_id: uuid.UUID, stat: _PatternStat, at: datetime) -> None:
+    """Re-confirm a lesson and re-score it on the fresh evidence. The
+    confidence is rewritten too: a kept lesson must not carry a confidence
+    measured on an older (or row-counted) sample."""
     async with shared_session_scope() as session:
         await session.execute(
             update(AgentLesson)
             .where(AgentLesson.id == lesson_id)
-            .values(observed_until=at, n_observations=n, updated_at=at)
+            .values(observed_until=at, n_observations=stat.n,
+                    confidence=_confidence(stat.n, stat.win_rate), updated_at=at)
         )
 
 
@@ -403,31 +404,33 @@ async def expire_stale_lessons(*, now: datetime | None = None, ttl_days: int = L
 async def retire_contradicted_lessons(*, min_n: int = BYPASS_MIN_N) -> int:
     """Lesson efficacy from the exploration corridor: trades that bypassed an
     `avoid` lesson (context.lesson_bypass = lesson id) are the counterfactual.
-    If ≥ min_n of them were scored and they were profitable with a ≥ 50% win
-    rate, the lesson is wrong → expired."""
-    from sqlalchemy import text as _text
+    If ≥ min_n bypass episodes were scored and they were profitable with a
+    ≥ 50% win rate, the lesson is wrong → expired. One bypassed bet re-filled
+    several times counts once."""
     async with shared_session_scope() as session:
-        rows = (await session.execute(_text(
-            "SELECT l.id, count(o.id) AS n, "
-            "       avg(CASE WHEN o.pnl_usd > 0 THEN 1.0 ELSE 0.0 END) AS wr, "
-            "       sum(o.pnl_usd) AS pnl "
+        rows = (await session.execute(text(
+            "SELECT l.id AS lesson_id, p.strategy_id, p.asset_class, p.symbol, p.side, "
+            "       p.generated_at, p.horizon_seconds, o.pnl_usd "
             "FROM agent_lessons l "
             "JOIN predictions p ON p.context->>'lesson_bypass' = l.id::text "
             "JOIN outcomes o ON o.prediction_id = p.id "
             "WHERE l.status = 'active' AND l.verdict = 'avoid' "
-            "  AND l.pattern_description NOT LIKE 'OPERATOR:%' "
-            "GROUP BY l.id HAVING count(o.id) >= :min_n"
-        ), {"min_n": min_n})).all()
+            "  AND l.pattern_description NOT LIKE 'OPERATOR:%'"
+        ))).mappings().all()
         retired = 0
-        for lid, n, wr, pnl in rows:
-            if wr is not None and Decimal(wr) >= Decimal("0.5") and Decimal(pnl or 0) > 0:
+        for lid, e in episode_summary([dict(r) for r in rows], "lesson_id").items():
+            n = int(e["n"])
+            if n < min_n:
+                continue
+            wr = e["wins"] / n
+            if wr >= 0.5 and e["sum"] > 0:
                 await session.execute(
                     update(AgentLesson).where(AgentLesson.id == lid)
                     .values(status="expired", updated_at=datetime.now(timezone.utc))
                 )
                 retired += 1
                 logger.info(
-                    f"lesson {lid} retired: {n} corridor trades contradicted it "
-                    f"(win {float(wr)*100:.0f}%, pnl ${float(pnl):.2f})"
+                    f"lesson {lid} retired: {n} corridor episodes ({int(e['n_raw'])} rows) "
+                    f"contradicted it (win {wr*100:.0f}%, pnl ${e['sum']:.2f})"
                 )
     return retired
