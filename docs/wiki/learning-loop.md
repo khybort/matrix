@@ -1,7 +1,7 @@
 ---
 title: Learning loop
-updated: 2026-09-20
-sources: [services/reflection/, services/labs/, services/agent_lessons/, packages/python-shared/src/matrix_shared/{setup_memory,regime,stats,backpressure}.py]
+updated: 2026-10-09
+sources: [services/reflection/, services/labs/, docs/wiki/learning-loop-statistics.md, services/agent_lessons/, packages/python-shared/src/matrix_shared/{setup_memory,regime,stats,backpressure}.py]
 status: current
 ---
 
@@ -12,15 +12,21 @@ is optimising noise.
 ## Claims
 - **Reflection (600 s)** builds a 24 h metrics window per active config and
   proposes at most one mutation. Gates, in order: the strategy must be
-  *underperforming*; there must be no live challenger and no pending proposal
+  *underperforming* — since 2026-10-09 the one-sided 95 % upper bound of
+  realised net USD per episode below zero, ε-probes excluded
+  ([[learning-loop-statistics]]); there must be no live challenger and no pending proposal
   for that version (otherwise the tick spends an LLM call on something that
   cannot be applied); deterministic strategies additionally need n ≥ 30 and a
   24 h cooldown between parameter tunes. The objective in the prompt is
   **realised total PnL after costs**, with win rate and score as diagnostics.
   The prompt also carries the exit-reason mix, which is the geometry signal
   ([[pnl-reality]]).
-- **Labs** runs a genetic search over parameters and scores genomes on
-  `mean − k·std/√n` so a lucky small sample cannot win. It auto-applies safe
+- **Labs** runs a genetic search over parameters. Until 2026-10-09 it ranked
+  and bred on `mean − k·std/√n` at n ≥ 5, which selected luck (a zero-edge
+  simulation promoted ~18 genomes a month); it now ranks on the
+  empirical-Bayes posterior of each genome's excess over the genomes trading
+  in the same hour, breeds only at ≥ 20 episodes and promotes on
+  pre-registered, day-clustered looks ([[learning-loop-statistics]]). It auto-applies safe
   proposal types; since 2026-09-13 LLM-authored `threshold_change`/`weight_tune`
   proposals also auto-apply — but only as **challengers**, and only if every key
   already exists in the champion's params.
@@ -30,13 +36,15 @@ is optimising noise.
   retirements for one strategy escalate into a `dev_tasks` row for the
   [[development]] to rewrite the signal logic.
 - **Efficacy** also measures every applied proposal before/after with a z-test
-  and auto-reverts negatives, marking the version `recently_reverted` so the
+  (same per-episode sample as the mutation trigger; challenger cutover at
+  z ≥ 1.645 since 2026-10-09) and auto-reverts negatives, marking the version `recently_reverted` so the
   tuner does not immediately re-propose it.
 - **Lessons** (`agent_lessons`) distil outcomes into `avoid`/`prefer` patterns
   per symbol/side/regime, with a confidence gate (0.4), a TTL (14 d) and
   contradiction retirement. An `avoid` veto is bypassed ~25 % of the time on
   exploration trades so the lesson keeps being tested rather than becoming a
-  self-fulfilling lock. Operator directives (`OPERATOR:` lessons, written from
+  self-fulfilling lock. (Measured 2026-10-09: the corridor has never fired;
+  ε is now spent mainly in corridor cells — [[learning-loop-statistics]].) Operator directives (`OPERATOR:` lessons, written from
   Telegram) are never bypassed.
 - **Setup memory** answers "the last k times this symbol looked like this".
   `matrix_shared/setup_memory.py` projects each prediction's feature snapshot

@@ -368,3 +368,18 @@
   yoksa `end`'den önceki en yeni 1 000 barı döndürür, `start`'tan eskiyse bile (pencereden önce delist olmuş çift).
   "Veri geldi" kapsam sayıldı ve Binance yedeği atlandı. Her indiricide dönen barları pencereye kırp ve kapsamı
   (ilk/son bar) istenen aralığa karşı kontrol et. Kaynak: `docs/wiki/signal-research-2026-10.md` "Round 3".
+
+- **2026-10-09 — Bir seçiciyi değiştirmeden önce sıfır-edge null'a karşı simüle et; ortak şoku modelle, yoksa simülasyon da yalan söyler.**
+  Labs 496 nesil boyunca n ≥ 5 bölümde ham fitness'la sıralayıp üretti; aynı saatte işlem yapan genomları birbirinden
+  ayırınca (excess over contemporaries) 1 001 genomda τ² = 0 çıktı: hiçbir genom diğerinden farklı değildi, seçim şanstı.
+  Asıl tuzak: genomların bölümleri ortak bir piyasa şoku taşıyor (popülasyon ortalaması saatler arası sd 0.38, günler arası
+  0.18; bölüm sd 0.66). Ham skorla yapılan empirical Bayes bu şoku "genomlar arası fark" sanıp güveniyordu: simülasyonda
+  EB + her taramada test hâlâ 8.9 yanlış terfi/30 gün, önceden kayıtlı bakışlarla 3.7; ancak saat-içi excess + gün-kümeli
+  sınır ile 0.04 (eski kural 18.3). τ² = 0'da eşitliği n·(ort − μ₀) ile kırmak yanlış terfiyi ikiye katladı — şansa göre
+  seçimin başka adı; eşitlik rastgele kırılır. Kurallar: (1) Ortak şok taşıyan örnekleri (aynı saat, aynı semboller) bağımsız sayma — kümele (gün) veya
+  çağdaşlara göre fark al. (2) Her taramada yeniden test etme; sabit önek üzerinde önceden kayıtlı bakış (30/60/120/240).
+  (3) Tekrarlı bakış z eşiğini şişirir: challenger cutover z ≥ 1 her tick'te bakılınca sıfır edge'de %34 cutover, 1.645'te %17.
+  (4) "Ortalama negatif" ≠ "anlamlı negatif": mutasyon tetiği toplam < 0 iken sıfır edge'de %50 ateşliyordu; tek yönlü %95
+  üst sınır < 0 ile %5. Gerçek 42 strateji-gününde 35 → 12 bayrak. (5) Bir tüketicinin örneği, ondan öğrenen politikanın
+  örneği olmalı: ε-probe'ları reflection'a girince bist'i 0 politika bölümüyle mutasyona soktu. Araçlar:
+  `matrix_shared/evidence.py`, `labs/selection.py`, `labs/zero_edge_sim.py`. Kaynak: `docs/wiki/learning-loop-statistics.md`.

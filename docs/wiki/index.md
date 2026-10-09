@@ -32,6 +32,7 @@ working".
 - [methods](methods.md) — quant methodology applied, with why
 - [research-backlog](research-backlog.md) — methods not yet applied, each with its decisive test
 - [learning-loop](learning-loop.md) — reflection, labs, lessons, memory, and their gates
+- [learning-loop-statistics](learning-loop-statistics.md) — every selector vs a zero-edge null: labs shrinkage + excess ranking, mutation CI gate, challenger z, what ε-probes buy (2026-10-09)
 - [risk-gates](risk-gates.md) — what stands between the code and real capital
 
 ## How it runs

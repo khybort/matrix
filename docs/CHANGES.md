@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-10-09 — Öğrenme döngüsü seçicileri sıfır-edge null'a karşı kalibre edildi (labs, mutasyon, challenger, ε)
+- `labs`: evrim artık ham fitness'a göre n ≥ 5'te sıralayıp üretmiyor. Sıralama = aynı UTC saatindeki diğer genomlara göre fazlanın (excess) empirical-Bayes posterior ortalaması (son 7 günün genomları, DerSimonian–Laird τ²); üreme ≥ `MATRIX_LAB_MIN_BREED_EPISODES` (20) bölüm, < 2 aday → rastgele göçmen; terfi önceden kayıtlı bakışlarda (ilk 30/60/120/240 bölüm), ≥ 3 gün, ham ortalama ≥ 0.05, gün-kümeli %95 alt sınır > 0 ve posterior excess alt sınır > 0. Yeni paylaşılan `matrix_shared/evidence.py` (t sınırları, EB). Sıfır-edge simülasyonu (`python -m labs.zero_edge_sim`): yanlış terfi 18.3/30 gün → 0.04. `lab_promotion.metrics_window.fitness_score` artık test edilen ortalama.
+- `reflection`: `_underperforming` = n ≥ 10 VE bölüm başına net USD'nin tek yönlü %95 t üst sınırı < 0 (eskiden toplam < 0 veya skor < tetik; sıfır edge'de ~%50 tetikleniyordu, şimdi ~%5). `--score-trigger` yok sayılır. Metrikler ve efficacy örneği ε-probe'ları (`context.is_exploration`) dışlar. Challenger cutover `MATRIX_EFFICACY_Z_POS` 1.0 → 1.645.
+- `agent`: ε bütçesi bilgi değerine göre: aktif, güvenli (≥ 0.4), operatör-olmayan `avoid` dersinin kapsadığı hücrede ε × `MATRIX_EXPLORE_CORRIDOR_MULT` (3), başka her yerde ε × `MATRIX_EXPLORE_MAINTENANCE_SHARE` (0.33) × sembol-edge ölçeği; probe'lar `explore_cell` taşır. Bugün aktif ders yok → probe hacmi ~⅓. Detay: `docs/wiki/learning-loop-statistics.md`.
+
 ## 2026-10-09 — Testler tek komutla koşar; DB testleri canlı tabloya commit edemez
 - `make test-all` (`scripts/test_all.sh`): 16 Python suite'i kendi imajında + web typecheck, özet tablo; backtest suite'i için canlı `backtest` konteyneri durdurulur, trap ile her durumda başlatılır. Yeni `matrix_shared.testing.db_writes_rolled_back()`: director/reflection/strategy/execution/labs conftest'lerinde her async test dış transaction içinde koşar ve rollback'lenir (global slot puanlama / sertifika iptali / dev_tasks yazımı canlıya değmez). `openrouter_llm`: compose'un boş geçirdiği `MATRIX_OPENROUTER_MODEL_*`/`_FALLBACKS` artık default'a düşer (önceden model `""`). `reflection.main.sweep_stale_proposals()` `_tick`'ten ayrıldı (davranış aynı). Detay: `docs/wiki/operations.md` "Tests".
 
