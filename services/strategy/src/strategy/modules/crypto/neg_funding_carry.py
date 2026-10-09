@@ -40,6 +40,17 @@ MATRIX_CARRY_UNCONFIRMED_MAX_LEG_USD ($500). A missing spot book is a skip: a
 carry without its hedge leg is a naked long perp. Every input rides in the
 context so the paper book (which re-measures at open and close) and later
 audits can see what the trade was priced at.
+
+Funding decay (2026-10-09): over the study year the funding realised in the 48 h
+after entry was a median 0.21 (train) / 0.30 (holdout) of the naive
+`expected` above, because squeezes unwind. DECAY_RATIO holds train-fitted median
+realised/naive ratios by (prior run of settlements <= -0.05 %, entry depth);
+`expected_decayed_bps` and the verdict against it are recorded on every
+signal. MATRIX_NFC_EXPECTED_MODEL=decay gates on it (cost <= decayed expected);
+the default stays `naive`: on the holdout the decay gate raised net per kept
+episode (+464 vs +293 bps) and survived 10x borrow, but kept 91 of 221 episodes
+on 38 of 89 coins, 39 % less money at 3x borrow and more coin concentration
+(docs/wiki/signal-research-2026-10.md, "Live path and funding decay").
 """
 
 from __future__ import annotations
@@ -85,6 +96,22 @@ PERP_TAKER_BPS = float(os.environ.get("MATRIX_CARRY_PERP_TAKER_BPS", "5.5"))
 SPOT_TAKER_BPS = float(os.environ.get("MATRIX_CARRY_SPOT_TAKER_BPS", "10"))
 BOOK_MAX_AGE_S = 30.0
 _INTERVALS_H = (1, 2, 4, 8)
+
+# Funding-decay model. Realised 48 h funding / naive expectation, median per
+# (run bucket, depth bucket) on the train split (2025-10..2026-05, 2 941
+# book-sized episodes; cells with n < 30 back off to the run bucket). Run =
+# consecutive settlements <= RUN_RATE right before the signal one: 0 / 1-2 / 3+.
+# Depth = |settled rate| per interval: < 15 / 15-30 / 30-60 / >= 60 bps.
+EXPECTED_MODEL = os.environ.get("MATRIX_NFC_EXPECTED_MODEL", "naive")
+DECAY_MAX_COST_SHARE = float(os.environ.get("MATRIX_NFC_DECAY_MAX_COST_SHARE", "1.0"))
+RUN_RATE = Decimal("-0.0005")
+_DEPTH_EDGES = (Decimal("0.0015"), Decimal("0.003"), Decimal("0.006"))
+DECAY_RATIO: dict[tuple[int, int], float] = {
+    (0, 0): 0.212, (0, 1): 0.133, (0, 2): 0.100, (0, 3): 0.106,
+    (1, 0): 0.300, (1, 1): 0.250, (1, 2): 0.129, (1, 3): 0.268,  # (1, 3): run back-off
+    (2, 0): 0.615, (2, 1): 0.499, (2, 2): 0.345, (2, 3): 0.520,  # (2, 3): run back-off
+}
+_FUNDING_HISTORY = "https://api.bybit.com/v5/market/funding/history?category=linear&symbol={s}&limit=20"
 
 Levels = list[tuple[float, float]]  # (price, qty), best first
 
@@ -216,17 +243,66 @@ def interval_hours(settled_at: datetime, next_ts: datetime | None) -> int:
     return min(_INTERVALS_H, key=lambda h: abs(h - gap))
 
 
+def run_length(prior: Sequence[Decimal]) -> int:
+    """Consecutive settlements <= RUN_RATE immediately before the signal one
+    (`prior` newest first)."""
+    n = 0
+    for r in prior:
+        if r > RUN_RATE:
+            break
+        n += 1
+    return n
+
+
+def decay_ratio(rate: Decimal, run: int | None) -> float:
+    """Train median of realised / naive 48 h funding for this entry. Unknown
+    history counts as a fresh spike (run 0), the fastest-decaying bucket."""
+    rb = 0 if not run else (1 if run <= 2 else 2)
+    db = sum(1 for e in _DEPTH_EDGES if -rate >= e)
+    return DECAY_RATIO[(rb, db)]
+
+
+async def prior_settlements(symbol: str, settled_at: datetime) -> list[Decimal] | None:
+    """Rates settled before `settled_at`, newest first (Bybit public history).
+    None when the venue does not answer."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(_FUNDING_HISTORY.format(s=symbol))
+            r.raise_for_status()
+            rows = (r.json().get("result") or {}).get("list") or []
+    except Exception as e:  # noqa: BLE001 — no history is "unknown run", not a crash
+        logger.debug(f"{STRATEGY_ID}: funding history {symbol} unavailable: {e}")
+        return None
+    cut = settled_at.timestamp() * 1000 - 1
+    pts = sorted(
+        ((int(x["fundingRateTimestamp"]), Decimal(x["fundingRate"])) for x in rows
+         if int(x["fundingRateTimestamp"]) < cut),
+        reverse=True,
+    )
+    return [r for _, r in pts]
+
+
 def entry_verdict(
     *, rate: Decimal, interval_h: int, hourly_borrow: Decimal, horizon_h: float,
     cost: dict[str, float] | None, leg_usd: float,
     stress: float = BORROW_STRESS, max_share: float = MAX_COST_SHARE,
+    run: int | None = None, model: str = EXPECTED_MODEL,
+    decay_max_share: float = DECAY_MAX_COST_SHARE,
 ) -> tuple[bool, dict]:
-    """(take?, the numbers it was decided on). All bps of per-leg notional."""
+    """(take?, the numbers it was decided on). All bps of per-leg notional.
+    Gates on the naive expectation (x max_share) unless model == "decay"
+    (decayed expectation x decay_max_share); both verdicts are recorded."""
     expected = float(-rate) * 1e4 * horizon_h / interval_h
+    ratio = decay_ratio(rate, run)
+    decayed = expected * ratio
     borrow = float(hourly_borrow) * 1e4 * horizon_h * stress
     inputs: dict = {
         "interval_h": interval_h,
         "expected_funding_bps": round(expected, 3),
+        "expected_model": model,
+        "prior_run": run,
+        "decay_ratio": ratio,
+        "expected_decayed_bps": round(decayed, 3),
         "borrow_quoted_bps": round(float(hourly_borrow) * 1e4 * horizon_h, 3),
         "borrow_stress": stress,
         "borrow_stressed_bps": round(borrow, 3),
@@ -239,7 +315,11 @@ def entry_verdict(
     inputs["book_cost"] = cost
     total = borrow + cost["total_bps"]
     inputs["cost_share"] = round(total / expected, 4) if expected > 0 else None
-    if expected <= 0 or total > expected * max_share:
+    inputs["decay_cost_share"] = round(total / decayed, 4) if decayed > 0 else None
+    naive_ok = expected > 0 and total <= expected * max_share
+    decay_ok = decayed > 0 and total <= decayed * decay_max_share
+    inputs["naive_keep"], inputs["decay_keep"] = naive_ok, decay_ok
+    if not (decay_ok if model == "decay" else naive_ok):
         inputs["skip"] = "cost_share"
         return False, inputs
     return True, inputs
@@ -391,10 +471,12 @@ class NegFundingCarry:
                 leg_cap = leg_cap_usd(perp_book, spot_book)
                 leg_usd = min(leg_cap, MAX_LEG_USD)
                 cost = round_trip_cost(perp_book, spot_book, leg_usd) if leg_usd > 0 else None
+                prior = await prior_settlements(symbol, settled_at)
                 ok, inputs = entry_verdict(
                     rate=rate, interval_h=interval_hours(settled_at, next_ts),
                     hourly_borrow=hourly, horizon_h=self.horizon_s / 3600,
                     cost=cost, leg_usd=leg_usd,
+                    run=run_length(prior) if prior is not None else None,
                 )
                 if not ok:
                     logger.info(

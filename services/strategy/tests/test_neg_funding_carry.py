@@ -18,6 +18,7 @@ from strategy.modules.crypto import neg_funding_carry as M
 pytestmark = pytest.mark.asyncio
 
 SYM = "NFCTESTUSDT"  # base coin NFCTEST
+_REAL_PRIOR = M.prior_settlements  # before the autouse stub replaces it
 
 
 async def _ticker(ts: datetime, rate: str, nxt: datetime) -> None:
@@ -34,6 +35,15 @@ async def clean():
     yield
     async with local_session_scope() as s:
         await s.execute(delete(TickerSnapshot).where(TickerSnapshot.symbol == SYM))
+
+
+@pytest.fixture(autouse=True)
+def _no_history(monkeypatch):
+    """No network in tests: the prior-settlement history is unknown unless a
+    test supplies it."""
+    async def none(symbol, settled_at):
+        return None
+    monkeypatch.setattr(M, "prior_settlements", none)
 
 
 def _borrow(monkeypatch, table):
@@ -195,3 +205,57 @@ async def test_old_settlement_is_not_a_fresh_signal(clean, monkeypatch):
     _borrow(monkeypatch, {"NFCTEST": (Decimal("0.00001"), "bybit")})
     await _settled("-0.0020", minutes_ago=120)
     assert await M.NegFundingCarry(symbols=[SYM]).generate() == []
+
+
+def test_run_length_counts_consecutive_deep_settlements():
+    d = Decimal
+    assert M.run_length([d("-0.005"), d("-0.0006"), d("0.0001"), d("-0.01")]) == 2
+    assert M.run_length([d("-0.0004")]) == 0
+    assert M.run_length([]) == 0
+
+
+def test_decay_ratio_buckets_and_unknown_history():
+    assert M.decay_ratio(Decimal("-0.0010"), 0) == M.DECAY_RATIO[(0, 0)]
+    assert M.decay_ratio(Decimal("-0.0050"), 2) == M.DECAY_RATIO[(1, 2)]
+    assert M.decay_ratio(Decimal("-0.0100"), 7) == M.DECAY_RATIO[(2, 3)]
+    assert M.decay_ratio(Decimal("-0.0010"), None) == M.DECAY_RATIO[(0, 0)]  # unknown = fresh spike
+
+
+def test_decay_verdict_recorded_and_gates_only_when_selected():
+    cost = {"total_bps": 40.0, "fees_bps": 31.0}
+    kw = dict(rate=Decimal("-0.0028"), interval_h=8, hourly_borrow=Decimal("0.00001"),
+              horizon_h=48, cost=cost, leg_usd=500, stress=3.0, max_share=1 / 3)
+    # naive 168 bps keeps (54.4 <= 56); decayed 168 x 0.133 = 22.3 < 54.4
+    ok, inp = M.entry_verdict(**kw, run=0, model="naive")
+    assert ok and inp["naive_keep"] and not inp["decay_keep"]
+    assert inp["expected_decayed_bps"] == pytest.approx(168 * M.DECAY_RATIO[(0, 1)], rel=1e-4)
+    ok, inp = M.entry_verdict(**kw, run=0, model="decay")
+    assert not ok and inp["skip"] == "cost_share"
+    # a persistent squeeze decays less: 168 x 0.499 = 83.8 >= 54.4
+    ok, inp = M.entry_verdict(**kw, run=5, model="decay", decay_max_share=1.0)
+    assert ok and inp["decay_keep"] and inp["prior_run"] == 5
+
+
+async def test_prior_settlements_excludes_the_signal_settlement(monkeypatch):
+    s = datetime(2026, 10, 9, 14, tzinfo=UTC)
+    ms = lambda h: str(int((s - timedelta(hours=h)).timestamp() * 1000))  # noqa: E731
+    payload = {"result": {"list": [
+        {"fundingRate": "-0.005", "fundingRateTimestamp": ms(0)},
+        {"fundingRate": "-0.004", "fundingRateTimestamp": ms(1)},
+        {"fundingRate": "0.0001", "fundingRateTimestamp": ms(2)},
+    ]}}
+
+    class R:
+        def raise_for_status(self): ...
+        def json(self): return payload
+
+    class C:
+        def __init__(self, *a, **k): ...
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): ...
+        async def get(self, url): return R()
+
+    monkeypatch.setattr(M.httpx, "AsyncClient", C)
+    out = await _REAL_PRIOR("KAIAUSDT", s)
+    assert out == [Decimal("-0.004"), Decimal("0.0001")]
+    assert M.run_length(out) == 1
