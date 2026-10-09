@@ -1,6 +1,6 @@
 ---
 title: Paper engine
-updated: 2026-09-20
+updated: 2026-10-09
 sources: [services/backtest/src/backtest/paper_trade.py, packages/python-shared/src/matrix_shared/allocation.py]
 status: current
 ---
@@ -40,6 +40,15 @@ bugs corrupt every downstream conclusion.
 - **Counterfactuals**: predictions that were never opened get a
   `context.virtual_outcome` so the ranker can be measured against what it
   skipped.
+- **Funding is booked per settlement, at the rate in force** (2026-10-09,
+  `backtest.carry_funding`). Before, a carry earned `hours/8 x rate_at_close`
+  and closed on the first adverse ticker reading. Bybit reports a
+  `+0.0000125` placeholder for about a minute after every settlement, so every
+  inverse and xexch carry "flipped" at its first settlement and booked a near
+  zero accrual: 51 of 51 closed `funding_flip`, mean −27 bps, 0 % wins — the
+  four-leg fee and nothing else. A flip now needs five minutes of adverse
+  readings, and directional crypto trades pay funding only for settlements
+  they actually cross. Carry outcomes before 2026-10-09 are not evidence.
 - **Known-corrupting bugs, now fixed** (treat pre-fix data as unusable):
   challenger positions in the champion wallet (2026-09-13), unordered candidate
   `LIMIT`, and `momentum_xs` stamping every version as v1.

@@ -26,10 +26,29 @@ how much the answer would change.
   adverse excursion within the horizon. If MFE frequently exceeds the TP
   distance, the problem is exit timing; if not, the entry has no predictive
   content.
-- **Can the EV ranker discriminate at all?** The counterfactual report says
-  traded and skipped candidates perform about the same (−15.0 vs −13.9 bps,
-  2026-09-13). *Test*: rank all candidates by EV, bucket into deciles, and plot
-  realised PnL per decile. A flat curve means the ranker is decoration.
+- ~~**Can the EV ranker discriminate at all?**~~ **Answered 2026-10-09: no.**
+  All 8 891 crypto signals of 30 days (one per episode, gap-guarded replay,
+  [[strategy-scoreboard]]) bucketed by the engine's `_ev`: every decile is
+  net negative, the top decile (−21.0 bps) is no better than the bottom
+  (−18.3), and Spearman(EV, net) is **−0.057 (t=−5.4)** — slightly inverted.
+  Same on the bare `confidence x tp − (1−confidence) x sl` (−0.052), on BIST
+  (−0.002, n=644) and US (+0.084, t=1.5, n=312). Across strategies the score
+  mostly sorts by *which module* emitted (grid fills D1 and D10 alike) and each
+  module's confidence is on its own scale (matrix_agent ~0.13, bist_* ~0.95).
+  Within strategy the best is momentum_xs (+0.118, t=2.2) — not enough to
+  build on. Consequence: the ranker cannot be what selects a paying trade, and
+  the floor it feeds is only correct because nothing in the book pays.
+  *Next*: rank on a measured, per-strategy calibrated forward return instead
+  of self-reported confidence, and test it the same way.
+- **Do the carry strategies have edge?** The books said 0 % wins
+  (inverse_carry −27 bps n=53, xexch −29 bps n=20). That was accounting:
+  every carry closed on Bybit's post-settlement `+0.0000125` placeholder and
+  accrued at it ([[paper-engine]]; fixed 2026-10-09). Replayed with
+  settlement accounting, one per episode: inverse_carry **+14.9 bps net,
+  t=0.95, n=25** (unproven; spot-borrow cost not modelled), xexch −25.6
+  (t=−3.56), cash_and_carry −31.1 (t=−6.26) — those two have no edge under
+  either model. *Test*: let the fixed accounting run; re-measure
+  inverse_carry at n≥60 episodes with a borrow-cost assumption.
 - **What is the true cost model?** Slippage is now measured per symbol from our
   own book snapshots ([[methods]]), but fees remain assumed and nothing is
   validated against real fills. Until live or exchange-simulated fills exist,

@@ -93,6 +93,20 @@
 
 - **2026-09-13 — Emisyon ≠ kapasite.** Slot sayısından bağımsız prediction üretimi: 1 slotlu strateji 9k/gün expired, agent
   1.4k boşa LLM çağrısı. Kural: üretim, tüketim kapasitesine (slot × k) bağlı olsun; `matrix_shared.backpressure.room()`.
+- **2026-10-09 — Giriş barının yaşını kontrol et.** Edge study "generated_at'ten önceki son bar"ı alıyordu; seride boşluk varsa
+  (kesinti, günlerce agrege edilmemiş sembol) giriş saatler/günler öncesi oluyor, ufuk boşluğun üstünden stratejinin zaten
+  gördüğü fiyatlara uzanıyordu: bist_volume_breakout'un 244 bayat sinyali +300 bps (hepsi TP), matrix_agent/crypto "confirmed"
+  +44.8 — taze girişlerde −14 ve +6.6. Kural: replay'de giriş barı ≤ birkaç dakika yaşlı olmalı ve ufuk penceresinin duvar
+  saati süresi ≈ ufuk olmalı; "çok iyi" bir sonuçta önce girişin bayatlık dağılımına bak.
+- **2026-10-09 — Funding settlement'ta ödenir, ticker oranıyla değil.** Carry PnL'i `saat/8 × kapanıştaki oran` idi ve flip tek
+  okumayla tetikleniyordu. Bybit her settlement'tan sonra ~1 dk `+0.0000125` yer tutucu yayınlar → 51/51 carry ilk
+  settlement'ta "flip" ile kapandı, ~0 tahakkuk, %0 kazanç. Doğrusu: kesişilen her settlement'ta, ondan hemen önce yayınlanan
+  oran (`backtest.carry_funding`); flip 5 dk süreklilik ister. Bir stratejide %0 kazanç = önce muhasebeyi şüphelen.
+- **2026-10-09 — Bahis başına bir prediction.** Modüller koşul sürdükçe her tick aynı (sembol, yön)'ü yeniden yayıyordu
+  (momentum_xs %83, oi_delta %75, funding_reversion %91). Satırlar kanıt değil: t-istatistiğini şişirir, aday havuzunu
+  kopyayla doldurur. `strategy.persist.drop_reemissions` önceki prediction'ın ufku içindeki tekrarı düşürür.
+- **2026-10-09 — Bir kesme kuralı slot vermez.** Ardışık-kayıp auto-cut `= 1` idi; başka kuralın 0'a çektiği stratejiyi her
+  geçişte 1'e geri açıyordu — kitapta kalan tek iki strateji 30 ve 23 ardışık kayıplı carry'lerdi. Kesme `min(eski, 1)`.
 
 ## LLM / kimlik
 - **2026-09-13 — launchd + ~/Documents = çalışmaz.** macOS TCC yüzünden launchd ajanı `~/Documents` altındaki script'i

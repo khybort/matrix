@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-10-09 — Strateji servisi bahis başına bir prediction yazar; funding settlement'ta işlenir
+- `strategy.persist`: aynı (strateji, market, sembol, yön, şampiyon|shadow) için önceki prediction'ın ufku dolmadan gelen draft yazılmaz (tüm modüller etkilenir; 30 günde oi_delta satırlarının %75'i, momentum_xs'in %83'ü tekrardı). Edge study'nin `one_per_episode`'u ile aynı birim.
+- Paper engine (çalışma ağacında, carry WIP'iyle birlikte): carry ve yönlü kripto funding'i kesişilen settlement'larda, o anki oranla (`backtest.carry_funding`); funding flip 5 dk süreklilik ister. Bu tarihten önceki carry outcome'ları kanıt değil.
+- `reflection.slot_scorer`: ardışık-kayıp kesmesi `min(eski, 1)` — 0 slotlu stratejiye slot açmaz.
+
 ## 2026-09-20 — Berabere biten challenger slotu bırakır; ufuk değişikliği devrede
 - Her stratejinin tek challenger slotu var ve sıra önceliği yoktu: kanıtsız bir vol_filter tweak'i (106 sonuç sonrası |z|=0.08, yani ölçülmüş FARK YOK) t=3.59'luk ufuk değişikliğini bir hafta daha bekletiyordu. `challenger_verdict`'e eşdeğerlik kuralı eklendi: her iki taraf da `INDIFFERENCE_MIN_N` (100) örneğe ulaşmış ve |z| < 0.5 ise challenger emekli edilir — beraberlik de bir cevaptır, slot sıradaki öneriye daha çok yarar.
 - Canlıda zincir tamamlandı: v3 emekli → labs bekleyen öneriyi uyguladı → **momentum_xs v4 (horizon_s 5400) shadow olarak koşuyor**, şampiyon v2'ye (3600) karşı. Efficacy gerçekleşmiş PnL ile karar verecek. Ölçüm → öneri → challenger → karar döngüsü ilk kez uçtan uca kanıtla işledi.
