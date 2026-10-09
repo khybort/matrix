@@ -12,9 +12,10 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from matrix_shared.edge_study import episode_groups
 from matrix_shared.models import PaperPosition, Prediction
 
 PAIR_LOOKBACK_DAYS = 14
@@ -162,7 +163,14 @@ async def load_pair_edges(
     symbols: set[str],
     lookback_days: int = PAIR_LOOKBACK_DAYS,
 ) -> dict[tuple[str, str], float]:
-    """Realized edge per (strategy_id, symbol) from closed paper positions."""
+    """Realized edge per (strategy_id, symbol) from closed paper positions,
+    one sample per episode.
+
+    A bet re-filled while its twin was still open is one call, not several
+    (`edge_study.episode_groups`): per row, one lucky re-filled call escaped
+    the shrinkage as if it were n agreeing trades. Each episode's return is
+    its dollars over its notional.
+    """
     if not strategy_ids or not symbols:
         return {}
 
@@ -171,11 +179,13 @@ async def load_pair_edges(
         await session.execute(
             select(
                 Prediction.strategy_id,
+                Prediction.asset_class,
+                Prediction.side,
+                Prediction.generated_at,
+                Prediction.horizon_seconds,
                 PaperPosition.symbol,
-                func.count(PaperPosition.id).label("n"),
-                func.avg(
-                    PaperPosition.pnl_usd / func.nullif(PaperPosition.notional_usd, 0)
-                ).label("avg_pnl_pct"),
+                PaperPosition.pnl_usd,
+                PaperPosition.notional_usd,
             )
             .join(Prediction, Prediction.id == PaperPosition.prediction_id)
             .where(PaperPosition.wallet_id == wallet_id)
@@ -183,16 +193,18 @@ async def load_pair_edges(
             .where(PaperPosition.closed_at >= since)
             .where(Prediction.strategy_id.in_(strategy_ids))
             .where(PaperPosition.symbol.in_(symbols))
-            .group_by(Prediction.strategy_id, PaperPosition.symbol)
         )
-    ).all()
+    ).mappings().all()
+    return pair_episode_edges([dict(r) for r in rows])
 
-    out: dict[tuple[str, str], float] = {}
-    for row in rows:
-        n = int(row.n or 0)
-        if n <= 0:
+
+def pair_episode_edges(rows: list[dict]) -> dict[tuple[str, str], float]:
+    """Shrunk edge per (strategy_id, symbol); n is the episode count."""
+    per_pair: dict[tuple[str, str], list[float]] = {}
+    for g in episode_groups(sorted(rows, key=lambda r: r["generated_at"])):
+        notional = sum(float(r["notional_usd"] or 0) for r in g)
+        if notional <= 0:
             continue
-        out[(row.strategy_id, row.symbol)] = shrink_pair_edge(
-            n, float(row.avg_pnl_pct or 0.0)
-        )
-    return out
+        pnl = sum(float(r["pnl_usd"] or 0) for r in g)
+        per_pair.setdefault((g[0]["strategy_id"], g[0]["symbol"]), []).append(pnl / notional)
+    return {k: shrink_pair_edge(len(xs), sum(xs) / len(xs)) for k, xs in per_pair.items()}

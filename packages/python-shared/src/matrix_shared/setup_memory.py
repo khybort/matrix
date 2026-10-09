@@ -28,6 +28,7 @@ from loguru import logger
 from sqlalchemy import text
 
 from matrix_shared.db import shared_session_scope
+from matrix_shared.edge_study import episode_groups
 from matrix_shared.stats import wilson_bounds
 
 ENABLED = os.environ.get("MATRIX_SETUP_MEMORY", "1") == "1"
@@ -157,6 +158,23 @@ def clear_cache() -> None:
     _row_cache.clear()
 
 
+def episode_rows(raw: list[dict]) -> list[tuple[list[float], float]]:
+    """One (setup vector, pnl_pct) per episode: the bet's features and the
+    mean return of its fills.
+
+    A strategy that re-emits the same bet every tick leaves a row per re-fill
+    with near-identical features, so before 2026-10-09 one call re-filled ten
+    times filled ten of the K neighbour slots and its single outcome read as a
+    Wilson-tight win rate (`edge_study.episode_groups`).
+    """
+    out: list[tuple[list[float], float]] = []
+    for g in episode_groups(sorted(raw, key=lambda r: r["generated_at"])):
+        feats = g[0]["features"]
+        if isinstance(feats, dict):
+            out.append((setup_vector(feats), sum(float(r["pnl_pct"] or 0) for r in g) / len(g)))
+    return out
+
+
 async def _history(symbol: str, asset_class: str, strategy_id: str, side: str) -> list[tuple[list[float], float]]:
     key = (symbol, asset_class, strategy_id, side)
     hit = _row_cache.get(key)
@@ -164,11 +182,11 @@ async def _history(symbol: str, asset_class: str, strategy_id: str, side: str) -
     if hit and now - hit[0] < ROW_CACHE_TTL_S:
         return hit[1]
     since = datetime.now(UTC) - timedelta(days=LOOKBACK_DAYS)
-    rows: list[tuple[list[float], float]] = []
     sym_clause = "" if symbol == "*" else "AND p.symbol = :sym "
     async with shared_session_scope() as session:
         res = await session.execute(text(
-            "SELECT p.context->'features' AS features, o.pnl_pct "
+            "SELECT p.context->'features' AS features, o.pnl_pct, p.strategy_id, p.asset_class, "
+            "       p.symbol, p.side, p.generated_at, p.horizon_seconds "
             "FROM predictions p JOIN outcomes o ON o.prediction_id = p.id "
             f"WHERE p.asset_class = :ac AND p.strategy_id = :sid {sym_clause}"
             "AND p.side = :side AND p.generated_at >= :since "
@@ -177,9 +195,7 @@ async def _history(symbol: str, asset_class: str, strategy_id: str, side: str) -
             "ORDER BY p.generated_at DESC LIMIT :lim"
         ), {"sym": symbol, "ac": asset_class, "sid": strategy_id, "side": side,
             "since": since, "lim": MAX_ROWS})
-        for feats, pnl in res.all():
-            if isinstance(feats, dict):
-                rows.append((setup_vector(feats), float(pnl)))
+        rows = episode_rows([dict(r) for r in res.mappings().all()])
     _row_cache[key] = (now, rows)
     return rows
 

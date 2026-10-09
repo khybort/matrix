@@ -35,10 +35,12 @@ import json
 import math
 import os
 import random
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -331,6 +333,28 @@ def episode_pnls(items: list[dict], *, value: str = "pnl_usd") -> list[float]:
     three independent losses and a lucky one as three wins.
     """
     return [sum(float(r[value] or 0) for r in g) for g in episode_groups(items)]
+
+
+def episode_summary(
+    rows: list[dict], key: str | Callable[[dict], Any], *, value: str = "pnl_usd"
+) -> dict[Any, dict[str, float]]:
+    """Per-key {n, n_raw, wins, sum} with one sample per episode.
+
+    `key` is a field name or a function of the episode's first row (the bet).
+    n counts episodes, n_raw rows; an episode wins when its summed `value` is
+    positive; `sum` keeps every row's dollars. Rows need the `episode_groups`
+    fields and are sorted here, so callers may pass them in any order.
+    """
+    get = key if callable(key) else (lambda r: r[key])
+    out: dict[Any, dict[str, float]] = {}
+    for g in episode_groups(sorted(rows, key=lambda r: r["generated_at"])):
+        total = sum(float(r[value] or 0) for r in g)
+        s = out.setdefault(get(g[0]), {"n": 0, "n_raw": 0, "wins": 0, "sum": 0.0})
+        s["n"] += 1
+        s["n_raw"] += len(g)
+        s["wins"] += 1 if total > 0 else 0
+        s["sum"] += total
+    return out
 
 
 def sample_episodes(rows: list[dict], cap: int) -> tuple[list[dict], dict[tuple[str, str], int]]:
