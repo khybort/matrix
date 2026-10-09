@@ -45,6 +45,20 @@ RULE_SIGNAL_THRESHOLD = FALLBACK.signal_threshold
 # so outcomes are identifiable. Paper-only — never relaxes the live gate.
 EXPLORE_EPSILON_DEFAULT = float(FALLBACK.explore_epsilon)
 EXPLORE_CONFIDENCE = Decimal("0.05")
+# Budget sized to what a probe buys (2026-10-09 trace, docs/wiki/learning-loop-statistics.md).
+# Of every consumer, only the lesson corridor is built to learn from probes, and
+# no probe ever moved a lesson (0 firing changes in 2 340 bucket-windows), a
+# setup-memory verdict (0 of 168) or an edge verdict; per (symbol, side) a
+# probe stream adds ≤3 episodes a week against a 20-episode lesson gate. What
+# probes did do was lose (−22 bps per filled episode, −11 per signal episode)
+# and fill 60 % of matrix_agent's position-hours in September. So:
+#   - a corridor cell (an active, confident, non-operator `avoid` lesson on the
+#     probe's side) is where a probe can change a decision — retire a lock —
+#     and gets EXPLORE_CORRIDOR_MULT × ε, ignoring the symbol-edge scale;
+#   - everywhere else a probe only keeps a same-hours control arm alive for the
+#     offline studies (llm-value-audit used it), at EXPLORE_MAINTENANCE_SHARE × ε.
+EXPLORE_MAINTENANCE_SHARE = float(__import__("os").environ.get("MATRIX_EXPLORE_MAINTENANCE_SHARE", "0.33"))
+EXPLORE_CORRIDOR_MULT = float(__import__("os").environ.get("MATRIX_EXPLORE_CORRIDOR_MULT", "3"))
 
 
 @dataclass(slots=True)
@@ -347,6 +361,26 @@ def _exploration_scale(edge: float | None) -> float:
     return 1.0
 
 
+def explore_epsilon_for(epsilon: float, symbol_edge: float | None, *, corridor: bool) -> float:
+    """Effective probe probability for one held (symbol, lean side) cell."""
+    if corridor:
+        return min(1.0, epsilon * EXPLORE_CORRIDOR_MULT)
+    return epsilon * EXPLORE_MAINTENANCE_SHARE * _exploration_scale(symbol_edge)
+
+
+def _probe_side(d: Decision, asset_class: str) -> str | None:
+    """Side a probe of this hold would take: the sub-threshold lean
+    (feature_dump['total']), long when flat; None for a BIST short."""
+    try:
+        total = Decimal(str(d.feature_dump.get("total", "0")))
+    except (ArithmeticError, ValueError):
+        total = Decimal("0")
+    side = "short" if total < 0 else "long"
+    if asset_class == "bist" and side == "short":
+        return None  # long-only market
+    return side
+
+
 def maybe_explore(
     d: Decision,
     *,
@@ -355,41 +389,78 @@ def maybe_explore(
     asset_class: str = "crypto",
     explore_conf: Decimal = EXPLORE_CONFIDENCE,
     symbol_edge: float | None = None,
+    corridor: bool = False,
 ) -> Decision:
-    """With probability epsilon, flip a `hold` into a low-confidence trade.
+    """With probability `explore_epsilon_for(...)`, flip a `hold` into a
+    low-confidence trade.
 
-    epsilon is scaled by symbol_edge (see _exploration_scale): symbols with
-    established negative edge are never explored; unknowns are always explored;
-    high-edge symbols are explored at reduced rate.
+    Outside a corridor cell the configured ε is cut to the maintenance share
+    and scaled by symbol_edge (see _exploration_scale): symbols with
+    established negative edge are never explored. A corridor cell (`corridor`,
+    see `_corridor_cell`) is explored at EXPLORE_CORRIDOR_MULT × ε.
 
     Direction follows the sub-threshold signal lean (feature_dump['total']).
     BIST is long-only, so a negative lean stays hold. Non-hold decisions are
-    returned untouched. The result is tagged is_exploration and still passes
-    through the lessons gate downstream (so `avoid` can veto it).
+    returned untouched. The result is tagged is_exploration (and explore_cell)
+    and still passes through the lessons gate downstream (so `avoid` can veto
+    it, except inside the bypass corridor).
     """
-    eff_epsilon = epsilon * _exploration_scale(symbol_edge)
-    if d.side != "hold" or roll >= eff_epsilon:
+    if d.side != "hold" or roll >= explore_epsilon_for(epsilon, symbol_edge, corridor=corridor):
         return d
-    try:
-        total = Decimal(str(d.feature_dump.get("total", "0")))
-    except (ArithmeticError, ValueError):
-        total = Decimal("0")
-    if total > 0:
-        side = "long"
-    elif total < 0:
-        side = "short"
-    else:
-        side = "long"  # no lean → pick a direction to gather a sample
-    if asset_class == "bist" and side == "short":
-        return d  # long-only market: don't explore shorts
+    side = _probe_side(d, asset_class)
+    if side is None:
+        return d
+    total = d.feature_dump.get("total", "0")
     return Decision(
         symbol=d.symbol,
         side=side,
         confidence=explore_conf,
-        thesis=f"EXPLORE (ε) lean={total:.3f} | {d.thesis}"[:1000],
+        thesis=f"EXPLORE (ε) lean={total} | {d.thesis}"[:1000],
         method=f"{d.method}+explore",
-        feature_dump={**d.feature_dump, "is_exploration": True},
+        feature_dump={
+            **d.feature_dump,
+            "is_exploration": True,
+            "explore_cell": "corridor" if corridor else "maintenance",
+        },
         last_price=d.last_price,
+    )
+
+
+async def _corridor_cell(f: SymbolFeatures, strategy_id: str, side: str, asset_class: str) -> bool:
+    """True when an active, confident, statistical `avoid` lesson covers this
+    (symbol, side): a probe here can feed the bypass corridor that retires it."""
+    try:
+        hits = await lessons_relevant_to(f, strategy_id, side=side, asset_class=asset_class)
+    except Exception:  # noqa: BLE001 — advisory; no lookup → maintenance rate
+        return False
+    return any(
+        h.verdict == "avoid"
+        and h.confidence >= LESSON_CONFIDENCE_GATE
+        and not h.pattern_description.startswith("OPERATOR:")
+        for h in hits
+    )
+
+
+async def explore(
+    d: Decision,
+    f: SymbolFeatures,
+    *,
+    epsilon: float,
+    roll: float,
+    strategy_id: str,
+    asset_class: str = "crypto",
+    symbol_edge: float | None = None,
+) -> Decision:
+    """`maybe_explore` with the corridor looked up. Lessons are read only when
+    the roll could fire at the corridor rate, so most holds cost no query."""
+    corridor = False
+    if d.side == "hold" and roll < explore_epsilon_for(epsilon, symbol_edge, corridor=True):
+        side = _probe_side(d, asset_class)
+        if side is not None:
+            corridor = await _corridor_cell(f, strategy_id, side, asset_class)
+    return maybe_explore(
+        d, epsilon=epsilon, roll=roll, asset_class=asset_class,
+        symbol_edge=symbol_edge, corridor=corridor,
     )
 
 
@@ -530,8 +601,8 @@ async def decide(
         base = rule
 
     epsilon = float(cfg.explore_epsilon) if cfg is not None else EXPLORE_EPSILON_DEFAULT
-    base = maybe_explore(
-        base, epsilon=epsilon, roll=explore_rand(),
+    base = await explore(
+        base, f, epsilon=epsilon, roll=explore_rand(), strategy_id=strategy_id,
         asset_class=asset_class, symbol_edge=symbol_edge,
     )
 
@@ -672,22 +743,25 @@ async def decide_batch(
         ]
         llm_map = await call_llm_decisions_batch(prompts)
 
-    bases: list[Decision] = []
+    probes = []
     for (f, cfg, asset_class, symbol_edge), rule in zip(items, rules):
         llm = llm_map.get(f.symbol)
         if llm is None and _ask_llm():
             logger.debug(f"llm batch missed {f.symbol}, falling back to rule")
         base = blend_decisions(rule, llm, f)
         epsilon = float(cfg.explore_epsilon) if cfg else EXPLORE_EPSILON_DEFAULT
-        bases.append(
-            maybe_explore(
+        probes.append(
+            explore(
                 base,
+                f,
                 epsilon=epsilon,
                 roll=explore_rand(),
+                strategy_id=strategy_id,
                 asset_class=asset_class,
                 symbol_edge=symbol_edge,
             )
         )
+    bases: list[Decision] = list(await asyncio.gather(*probes))
 
     after_lessons = await asyncio.gather(*[
         _apply_lessons(b, f, strategy_id, asset_class=asset_class, bypass_roll=explore_rand())
