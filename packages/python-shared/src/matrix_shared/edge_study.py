@@ -263,6 +263,9 @@ async def _load_candidates(days: float, strategy_id: str | None) -> list[dict]:
         "WHERE p.generated_at >= now() - make_interval(secs => :secs) "
         "  AND p.side IN ('long','short') "
         "  AND coalesce(p.context->>'is_shadow','false') = 'false' "
+        # Exploration probes are not the strategy's policy (74% of matrix_agent's
+        # rows over 40 days): counting them measures the probe budget, not the edge.
+        "  AND coalesce(p.context->>'is_exploration','false') = 'false' "
         + ("  AND p.strategy_id = :sid " if strategy_id else "")
         + "ORDER BY p.generated_at"
     )
