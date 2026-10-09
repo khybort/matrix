@@ -3,8 +3,8 @@
 Cost is the binding constraint on this book: no strategy has a verified edge
 (the ~+31 bps once quoted here was withdrawn 2026-10-09 as pseudo-replication,
 docs/wiki/edge-study.md) and the taker round trip is ~15 bps. Entering passively
-turns the entry leg from taker into maker — on Bybit linear perps 1 bp instead
-of 5.5 bps plus ~2 bps of slippage — which is ~6.5 bps of the edge recovered
+turns the entry leg from taker into maker — on Bybit linear perps 2 bps instead
+of 5.5 bps plus ~2 bps of slippage — which is ~5.5 bps of the edge recovered
 without finding any new signal.
 
 Nothing is free: a resting order only fills when the market comes to it, which
@@ -18,6 +18,13 @@ module measures both effects on the system's own signals:
 
 Everything is replayed on 1m bars with the existing bracket simulator, so the
 comparison against the current all-taker policy is like-for-like.
+
+Superseded for decisions by the tick-level replay in docs/wiki/maker-execution.md
+(2026-10-09). This bar version is optimistic: a buy "fills" when a bar's low
+merely touches the last trade price (no queue, and that price may be the ask),
+and the bracket then enters at the fill bar's close instead of the limit. On
+Bybit public ticks, resting at the bid and crossing after the wait gains
++4.7 bps/episode (t=10, day-clustered) and turns no strategy net positive.
 """
 
 from __future__ import annotations
@@ -39,7 +46,8 @@ from matrix_shared.edge_study import (
 )
 from matrix_shared.trading import execution_cost_bps
 
-MAKER_BPS = float(os.environ.get("MATRIX_MAKER_BPS", "1.0"))
+# Bybit VIP0 linear perps: maker 0.020 %, taker 0.055 %, no rebate (checked 2026-10-09).
+MAKER_BPS = float(os.environ.get("MATRIX_MAKER_BPS", "2.0"))
 WAIT_BARS = int(os.environ.get("MATRIX_POST_ONLY_WAIT_BARS", "1"))
 _BPS = 10_000.0
 
