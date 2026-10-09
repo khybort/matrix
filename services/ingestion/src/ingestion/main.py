@@ -74,6 +74,15 @@ async def run(market_names: list[str], cfg: _IngestCfg) -> None:
         from ingestion.screener import run as run_screener
         tasks.append(asyncio.create_task(run_screener(), name="screener"))
 
+    # Binance funding poller — second-venue feed for cross-exchange arb. Pure
+    # public REST (mainnet), crypto-only. Gated by BINANCE_FUNDING_ENABLED.
+    if (
+        "crypto" in market_names
+        and os.environ.get("BINANCE_FUNDING_ENABLED", "true").strip().lower() != "false"
+    ):
+        from ingestion.binance_funding import run as run_binance_funding
+        tasks.append(asyncio.create_task(run_binance_funding(), name="binance-funding"))
+
     if not tasks:
         logger.warning("no markets to ingest; exiting")
         return
