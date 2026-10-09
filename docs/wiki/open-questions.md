@@ -1,6 +1,6 @@
 ---
 title: Open questions
-updated: 2026-09-19
+updated: 2026-10-09
 status: current
 ---
 
@@ -8,13 +8,19 @@ What is genuinely unknown, phrased so a future session can close it. Ranked by
 how much the answer would change.
 
 ## Claims
-- ~~Does any signal in the book have edge before costs?~~ **Answered
-  2026-09-20** by [[edge-study]] on all signals rather than fills:
-  `momentum_xs` beats random entry by +36 bps (t=6.04, n=799); `grid`, `dca`
-  and `funding_reversion` have none. The live question is now: **does that edge
-  reach the wallet now that stale fills are blocked?** Same signal, same costs,
-  only the latency removed — the first falsifiable profit hypothesis.
-- **Is the horizon wrong, or the entry?** 57 % of exits are horizon exits at
+- ~~Does any signal in the book have edge before costs?~~ **Re-answered
+  2026-10-09: no measured one.** The 2026-09-20 answer (`momentum_xs` +36 bps,
+  t=6.04, n=799) was pseudo-replication: 87 % of those rows were one three-hour
+  v1 burst on 2026-09-13 re-emitting ten (symbol, side) bets every ~90 s.
+  Counted as episodes the strategy is −10.7 bps vs random entry (t=−0.98,
+  n=285); on 2026-09-21 −22 bps. The 155 fills of 2026-09-21 lost −30.7 bps,
+  and the same simulator on those signals says −26.2 gross, so the wallet
+  captured the signal within ~5 bps — there was no edge to lose
+  ([[edge-study]] Correction). The study now counts episodes, not rows. Live
+  question: **does any strategy beat random entry when each bet counts once?**
+- **Is the horizon wrong, or the entry?** *Answered for momentum_xs
+  2026-10-09 — the entry* (n=155: MAE median 149 vs MFE median 115 bps; MFE
+  reached TP in 28, MAE reached SL in 41; [[edge-study]]). 57 % of exits are horizon exits at
   roughly minus cost — though part of that was fills arriving with only half
   the horizon left, which is now fixed. *Test*: for closed trades, measure max favourable and
   adverse excursion within the horizon. If MFE frequently exceeds the TP

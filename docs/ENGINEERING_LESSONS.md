@@ -137,3 +137,13 @@
   hiç sinyal yok) ve test kırıldı. Yani sistem doğru çalıştığı için test kırmızıya döndü.
   Kural: fixture'lar sentetik strateji id'si üretsin (`chal_*` gibi), canlı bir strateji adına
   bağlanmasın. İlgili: backtest suite'inin canlı motorla aynı DB'yi paylaşması.
+
+- **2026-10-09 — Satır ≠ bağımsız örnek (sözde-tekrar).** Edge study `momentum_xs` için "+36 bps, t=6.04, n=799"
+  dedi; 3 hafta boyunca kitabın tek kanıtlı edge'i sayıldı, slot ve promosyon kararları ona dayandı. Satırların %87'si
+  2026-09-13'teki **tek bir 3 saatlik v1 patlamasıydı**: aynı 10 (symbol, side) her ~90 s yeniden üretilmiş (UAIUSDT short
+  294 kez). Her satır bağımsız işlem sayıldı; FDR/BHY bunu düzeltemez çünkü sorun p-değerinde değil n'de. Bölüm (episode)
+  bazında aynı strateji −10.7 bps (t=−0.98). Cüzdan da tam bunu ödedi: 2026-09-21'in 155 dolumu −30.7 bps, aynı sinyallerin
+  simülasyonu −26.2 brüt — yürütme sinyali ~5 bps içinde iletti, kaybedilecek edge yoktu. Kural: bir istatistikte **birim,
+  cüzdanın tutabildiği bahistir**; aynı (strateji, sembol, yön) ufku içinde tekrar ederse bir sayılır (`one_per_episode`).
+  Bir "edge" bulunduğunda önce gün/saat ve (sembol, saat) kümesine göre dağılımına bak — tek kümeden geliyorsa yoktur.
+  Ayrıca: bar `ts` başlangıçtır; sinyal anındaki barın kapanışı gelecektir (`entry_index`).

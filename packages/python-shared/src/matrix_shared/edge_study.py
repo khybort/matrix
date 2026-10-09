@@ -189,6 +189,7 @@ class StrategyEdge:
     strategy_id: str
     asset_class: str
     n: int = 0
+    n_raw: int = 0  # signal rows before collapsing re-emissions into episodes
     n_filled: int = 0
     treatment: list[float] = field(default_factory=list)
     control: list[float] = field(default_factory=list)
@@ -211,6 +212,7 @@ class StrategyEdge:
             "strategy": self.strategy_id,
             "market": self.asset_class,
             "n": self.n,
+            "n_raw": self.n_raw,
             "n_filled": self.n_filled,
             "gross_bps": round(t_mean, 2),
             "control_bps": round(c_mean, 2),
@@ -252,6 +254,43 @@ async def _load_candidates(days: float, strategy_id: str | None) -> list[dict]:
     async with shared_session_scope() as s:
         rows = (await s.execute(text(sql), params)).mappings().all()
     return [dict(r) for r in rows]
+
+
+def one_per_episode(items: list[dict]) -> list[dict]:
+    """Collapse re-emissions of one bet into the bet: keep a signal only when no
+    earlier kept signal of the same (strategy, market, symbol, side) is still
+    inside its horizon. `items` must be ordered by `generated_at`.
+
+    The unit of evidence is an independent bet, not a row. On 2026-09-13
+    momentum_xs v1 re-emitted the same ten (symbol, side) pairs every ~90 s for
+    three hours — 1 764 rows, UAIUSDT short alone 294 times. Those rows were
+    87 % of the 799 signals behind "+36 bps, t=6"; the wallet can hold each bet
+    once, and without them the strategy measured -18 bps against random entry
+    (docs/wiki/edge-study.md). Counting duplicates as samples multiplies one
+    afternoon's luck into a t-statistic.
+    """
+    last: dict[tuple, datetime] = {}
+    out = []
+    for r in items:
+        key = (r["strategy_id"], r["asset_class"], r["symbol"], r["side"])
+        at = r["generated_at"]
+        prev = last.get(key)
+        if prev is not None and at < prev:
+            continue
+        last[key] = at + timedelta(seconds=int(r["horizon_seconds"] or 600))
+        out.append(r)
+    return out
+
+
+def entry_index(bars: list[Bar], generated_at: datetime) -> int:
+    """The last bar whose close was known when the signal was generated.
+
+    Bar `ts` is the bar's START (ingestion buckets by date_trunc('minute')), so
+    the bar "in force" at `generated_at` closes up to a minute in the future.
+    Entering at its close let the treatment arm trade at a price the strategy
+    could not have seen; the control arm has no such advantage.
+    """
+    return _index_at(bars, generated_at - timedelta(minutes=1))
 
 
 def subsample(items: list[dict], cap: int) -> list[dict]:
@@ -304,7 +343,10 @@ async def run_edge_study(
         logger.warning("edge study: no predictions in window")
         return []
     grouped: dict[tuple[str, str], list[dict]] = {}
+    n_raw: dict[tuple[str, str], int] = {}
     for r in rows_in:
+        n_raw[(r["strategy_id"], r["asset_class"])] = n_raw.get((r["strategy_id"], r["asset_class"]), 0) + 1
+    for r in one_per_episode(rows_in):
         grouped.setdefault((r["strategy_id"], r["asset_class"]), []).append(r)
     trades = [r for g in grouped.values() for r in subsample(g, MAX_PER_STRATEGY)]
     since = datetime.now(UTC) - timedelta(days=days + 1)
@@ -326,7 +368,7 @@ async def run_edge_study(
         horizon_bars = max(1, int((t["horizon_seconds"] or 600) // 60))
         tp = float(t["tp_pct"]) if t["tp_pct"] is not None else DEFAULT_TP_PCT
         sl = float(t["sl_pct"]) if t["sl_pct"] is not None else DEFAULT_SL_PCT
-        idx = _index_at(series, t["generated_at"])
+        idx = entry_index(series, t["generated_at"])
         if idx < 0 or idx >= len(series) - 1:
             skipped += 1
             continue
@@ -335,7 +377,9 @@ async def run_edge_study(
             skipped += 1
             continue
         key = (t["strategy_id"], t["asset_class"])
-        e = acc.setdefault(key, StrategyEdge(t["strategy_id"], t["asset_class"]))
+        e = acc.setdefault(
+            key, StrategyEdge(t["strategy_id"], t["asset_class"], n_raw=n_raw.get(key, 0))
+        )
         e.n += 1
         e.treatment.append(treat.ret_bps)
         if t["filled"] and t["pnl_pct"] is not None:
@@ -571,6 +615,12 @@ def verdict(row: dict | None, *, cost_bps: float, min_t: float = 2.0) -> str:
     beats_a_null = (t_time >= min_t and e_time >= cost_bps) or (
         t_side >= min_t and e_side >= cost_bps
     )
+    # The wallet is paid the treatment arm's level, not its lead over a null.
+    # A strategy can beat a losing control by more than the round trip and
+    # still lose money on every trade, so `pays` also needs gross > cost.
+    gross = row.get("gross_bps")
+    if gross is not None and gross < cost_bps:
+        beats_a_null = False
     # The promotion bar (matrix_shared.promotion): beating a null is necessary,
     # not sufficient. `pays` — the verdict that moves capital — additionally
     # requires the strategy to have reached the sample size it registered in

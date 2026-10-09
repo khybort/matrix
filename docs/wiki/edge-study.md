@@ -1,7 +1,7 @@
 ---
 title: Edge study — do the entries carry signal?
-updated: 2026-09-20
-sources: [packages/python-shared/src/matrix_shared/edge_study.py, "make edge-report DAYS=14 DRAWS=30", "db: predictions ⋈ paper_positions delay analysis 2026-09-20"]
+updated: 2026-10-09
+sources: [packages/python-shared/src/matrix_shared/edge_study.py, "make edge-report DAYS=14 DRAWS=30", "db: predictions ⋈ paper_positions delay analysis 2026-09-20", "db: momentum_xs signal→wallet gap decomposition 2026-10-09 (155 closed positions of 2026-09-21 ⋈ predictions ⋈ 1m bars)"]
 status: current
 ---
 
@@ -26,7 +26,82 @@ strategy demoted to zero slots would never produce evidence again. Since
 answers (below), and it is what makes free evaluation of a demoted strategy
 possible.
 
+**One bet, one sample (since 2026-10-09).** Signals are collapsed into
+episodes before anything is simulated (`one_per_episode`): a signal is kept
+only when no earlier kept signal of the same strategy, market, symbol and side
+is still inside its horizon. A strategy that re-emits the same call every tick
+is one bet the wallet can hold once, not hundreds of samples. The report keeps
+the raw count as `n_raw` beside the episode count `n`.
+
+**No look-ahead in the entry (since 2026-10-09).** Bar `ts` is the bar's start,
+so the bar "in force" at `generated_at` closes up to a minute later. The
+treatment now enters at the close of the last bar that had closed when the
+signal was generated (`entry_index`). Measured effect on momentum_xs was small
+(≈2 bps), but it was a free advantage only the treatment arm had.
+
+## Correction — the momentum_xs edge was pseudo-replication (2026-10-09)
+
+The +31…+36 bps / t≈6 claims below are **withdrawn**. 1 764 of the 2 037
+non-shadow momentum_xs predictions in the 14-day window came from **one
+three-hour burst** on 2026-09-13 16:54–19:40 UTC, in which strategy v1
+re-emitted the same ten (symbol, side) pairs every ~90 s (UAIUSDT short 294×,
+LSKUSDT long 294×, CVCUSDT long 294×, …). The evenly spaced 800-row subsample
+was 87 % that burst. Those rows were scored as independent trades.
+
+| measure (momentum_xs, crypto, gross, vs random time) | n | treat | edge | t |
+|---|---|---|---|---|
+| old study, rows to 09-20 (rerun 2026-10-09) | 800 rows | +30.5 | +27.3 | +4.52 |
+| same rows, (symbol,hour)-cluster-robust | 132 clusters | | −28.7 | −1.97 |
+| v1 non-shadow, the 09-13 burst only | 1 764 rows | +39.6 | +37.2 | (≈10 bets) |
+| v2 non-shadow, all of 09-13…09-21 | 420 | −12.7 | −18.1 | −1.94 |
+| **fixed study, 14 d to 09-20** | **285 episodes** (2 037 rows) | −2.8 | **−10.7** | **−0.98** |
+| fixed study, 09-14…09-21 | 393 | −6.1 | −9.3 | −0.94 |
+| fixed study, 09-21 only | 151 | −21.6 | −22.4 | −1.35 |
+
+Every momentum_xs version after v1 measured negative against random entry.
+There was never an edge for the wallet to capture; the burst manufactured it.
+
+### Where the ~67 bps went — the 155 positions closed 2026-09-21
+
+All 155 closed momentum_xs positions "since 2026-09-21" were opened that one
+day (90 in `default` from v2, 65 in `shadow` from v4; nothing traded after).
+Wallet: −$91.85 on $29.9k = **−30.7 bps**, 40 % winners. Per-trade means,
+bps, chained from the claim to the wallet:
+
+| step | bps | cumulative |
+|---|---|---|
+| claimed signal edge (old study) | +36.0 | +36.0 |
+| (e)+(units) burst removed / regime: the same simulator on these 155 signals, gross level | −62.2 | **−26.2** |
+| ↳ of which edge vs random entry on these 155 | −31.9 (control +5.7) | |
+| ↳ (d) selection: filled vs unfilled signals that day (−26.2 vs −5.9 gross) | ≈ −8 (t≈−1, noise) | |
+| look-ahead in the old entry bar | +1.7 | −24.5 |
+| (a) latency 4.0 s, raw fill drift vs `entry_price_ref` −0.7; horizon anchored at `close_by` | −5.8 | −30.3 |
+| (b) exit path: tick-sampled TP/SL + fill at mark vs bar high/low bracket | +13.5 | −16.7 |
+| (c) costs, 2 × 6.95 bps (taker + measured slippage) | −13.9 | −30.6 |
+| funding | −0.04 | **−30.7** = wallet |
+
+So, on the same signals, simulator and wallet differ by **only 4.5 bps**
+(−26.2 gross sim vs −30.7 net wallet): execution passed the signal through
+almost exactly, costs included. The whole gap is (e): the claimed edge did not
+exist outside the burst.
+
+Exit detail (b): 106 horizon exits averaged −5.3 raw; 31 bar-agreed stop-outs
+−278 (bracket −267, ≈11 bps stop overshoot); 16 take-profits +326 (bracket
++300). Tick monitoring missed 11 bar-wick touches, which happened to net
+positive here; it is not a reliable source of edge.
+
+### MFE / MAE — is the horizon wrong, or the entry?
+Within the horizon from the raw fill: MFE mean 181 / median 115 bps, MAE mean
+245 / median 149 bps, against TP ≈ 299 and SL ≈ 263. MFE reached TP in 28/155,
+MAE reached SL in 41/155. The horizon exits had MFE median 111 and ended at
+−2.5 raw. Adverse excursion dominates favourable: **the entry, not the
+horizon**. A 300 bps TP is out of reach for a 60–90 min hold (median MFE
+115), but moving it in would only harvest noise from an entry with no edge.
+
 ## Findings — 14 days to 2026-09-20, 5 277 signals, both nulls
+
+*Rows-as-samples, before the episode fix; momentum_xs line withdrawn above.
+Other strategies' t-statistics are also inflated wherever they re-emit.*
 
 Each strategy is tested against two nulls: random entry time with the same
 side, and random side at the same moment. A strategy that beats neither has no
@@ -44,10 +119,10 @@ measured reason to hold capital.
 | matrix_agent / us | 48 | −10.9 | −1.43 | −13.6 | −1.78 |
 
 ## Claims
-- **`momentum_xs` has the strongest signal in the book** (+36.0 bps over random
-  — and its *fills* were the worst thing in the book
-  (−35.8 bps measured on 2026-09-19 against the same control). The signal was
-  real; what reached capital was not.
+- ~~**`momentum_xs` has the strongest signal in the book** (+36.0 bps over
+  random).~~ **Withdrawn 2026-10-09**: pseudo-replication of one three-hour v1
+  burst; as episodes it is −10.7 bps (t=−0.98). Its fills were bad because its
+  signal was bad, not because execution lost a real edge (see Correction).
 - **The destroyer is fill latency, and it is measured.** Average fill happened
   this far into the prediction's own horizon (14 d to 2026-09-20):
   momentum_xs 53 %, dca 41 %, bist_gap_fade 40 %, grid 40 %, oi_breakout 39 %,
@@ -65,7 +140,8 @@ measured reason to hold capital.
   the cost engine described in [[pnl-reality]].
 - **Multiple testing is corrected, not hand-waved.** Since 2026-09-20 the
   report applies Benjamini-Hochberg at FDR 5 % across all 13 simultaneous
-  comparisons: **2 of 13 survive** — `momentum_xs` (p<0.0001) and
+  comparisons: **2 of 13 survive** — `momentum_xs` (p<0.0001; withdrawn
+  2026-10-09, FDR cannot correct a sample that counts one bet 294 times) and
   `bist_news_event`, the latter on n=33, which is too thin to allocate against.
   See [[methods]].
 - **Remaining caveats.** Controls are drawn from the same period, so market
@@ -79,10 +155,20 @@ pass consults the same study through `_entry_edge_verdict` (cached 6 h):
 from the book even when its realised PnL looks survivable. See
 [[learning-loop]].
 
+`verdict` = `pays` additionally needs the treatment's **gross level** above
+the round trip (since 2026-10-09): the wallet is paid the level, not the lead
+over a null, and a strategy can beat a losing control by more than the cost
+while still losing on every trade.
+
 ## Open questions
-- Does `momentum_xs`'s +36 bps survive now that fills are fresh? This is the
-  first falsifiable profit hypothesis the system has had: same signal, same
-  costs, only the latency removed.
-- How much of the remaining gap is slippage the simulator does not model?
+- ~~Does `momentum_xs`'s +36 bps survive now that fills are fresh?~~ Answered
+  2026-10-09: there was no +36 bps; see Correction.
+- ~~How much of the remaining gap is slippage the simulator does not model?~~
+  On momentum_xs 2026-09-21: sim gross −26.2 vs wallet net −30.7; costs
+  −13.9, tick-vs-bar exits +13.5, entry/horizon anchoring −4.1. The simulator
+  minus the modelled round trip predicts the wallet within ~5 bps.
+- `barrier_study`, `execution_study` and `meta_label` load the same candidate
+  rows and do not yet collapse re-emissions; their sample sizes are inflated
+  the same way.
 - Would the cost-engine strategies become positive at a much higher signal
   threshold (fewer, better trades), or is their signal empty at every threshold?

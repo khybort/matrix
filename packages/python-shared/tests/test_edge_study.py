@@ -163,3 +163,45 @@ def test_both_nulls_are_reported_and_either_can_establish_edge():
     row = d.as_row()
     assert abs(row["t"]) < 2
     assert row["side_edge_bps"] > 15 and row["t_side"] > 3
+
+
+def _sig(minute: int, *, symbol="UAIUSDT", side="short", horizon=3600, sid="momentum_xs"):
+    return {
+        "strategy_id": sid, "asset_class": "crypto", "symbol": symbol, "side": side,
+        "horizon_seconds": horizon, "generated_at": T0 + timedelta(minutes=minute),
+    }
+
+
+def test_re_emissions_of_one_bet_collapse_into_one_episode():
+    """momentum_xs v1 re-emitted the same (symbol, side) every ~90 s for three
+    hours on 2026-09-13; counted as 1 764 independent samples they produced
+    't=6'. The wallet can hold that bet once, so the study must count it once."""
+    from matrix_shared.edge_study import one_per_episode
+
+    burst = [_sig(m) for m in range(0, 180, 2)]            # 90 rows, 3 h, 1 h horizon
+    kept = one_per_episode(burst)
+    assert [k["generated_at"] for k in kept] == [T0, T0 + timedelta(minutes=60), T0 + timedelta(minutes=120)]
+
+    # a different symbol, side or strategy is a different bet
+    mixed = [_sig(0), _sig(1, symbol="LSKUSDT"), _sig(2, side="long"), _sig(3, sid="oi_delta"), _sig(4)]
+    assert len(one_per_episode(mixed)) == 4
+
+
+def test_entry_bar_is_the_last_one_closed_before_the_signal():
+    """Bar ts is the bar's start; the bar in force at signal time closes in the
+    future, so its close is a price the strategy could not have traded at."""
+    from matrix_shared.edge_study import entry_index
+
+    bars = _bars([1, 2, 3, 4])
+    assert entry_index(bars, T0 + timedelta(minutes=2, seconds=30)) == 1   # bar 1 closed at 2:00
+    assert entry_index(bars, T0 + timedelta(minutes=2)) == 1
+    assert entry_index(bars, T0 + timedelta(seconds=30)) == -1             # nothing closed yet
+
+
+def test_beating_a_losing_null_is_not_paying():
+    """The wallet earns the treatment's level, not its lead over the control."""
+    from matrix_shared.edge_study import verdict
+
+    row = {"n": 200, "edge_bps": 30.0, "t": 5.0, "side_edge_bps": 0.0, "t_side": 0.0}
+    assert verdict({**row, "gross_bps": 40.0}, cost_bps=15) == "pays"
+    assert verdict({**row, "gross_bps": 5.0}, cost_bps=15) == "unproven"   # control was -25
