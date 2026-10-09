@@ -1,7 +1,7 @@
 ---
 title: Edge study — do the entries carry signal?
 updated: 2026-10-09
-sources: [packages/python-shared/src/matrix_shared/edge_study.py, "make edge-report DAYS=14 DRAWS=30", "db: predictions ⋈ paper_positions delay analysis 2026-09-20", "db: momentum_xs signal→wallet gap decomposition 2026-10-09 (155 closed positions of 2026-09-21 ⋈ predictions ⋈ 1m bars)"]
+sources: [packages/python-shared/src/matrix_shared/edge_study.py, "make edge-report DAYS=14 DRAWS=30", "edge study read-only rerun 2026-10-09 12:32 UTC, 30 d, per strategy, registry writes disabled (before = rows + no gap guard, after = episodes + gap guard)", "db: predictions ⋈ paper_positions delay analysis 2026-09-20", "db: momentum_xs signal→wallet gap decomposition 2026-10-09 (155 closed positions of 2026-09-21 ⋈ predictions ⋈ 1m bars)"]
 status: current
 ---
 
@@ -98,10 +98,54 @@ MAE reached SL in 41/155. The horizon exits had MFE median 111 and ended at
 horizon**. A 300 bps TP is out of reach for a 60–90 min hold (median MFE
 115), but moving it in would only harvest noise from an entry with no edge.
 
+## Findings — 30 days to 2026-10-09, episodes, gap guard on
+
+Read-only rerun 2026-10-09 12:32 UTC (each strategy alone, registry writes
+disabled). `n` = independent episodes simulated, `n_raw` = signal rows,
+`unsc` = signals with no clean bars (stale entry or a hole inside the window;
+never scored). Edges are gross bps vs the null, t in brackets; `real.` is the
+realised net bps per fill from the wallet over the same window. The last column
+is the same study before the fix (rows as samples, no gap guard).
+
+| strategy / market | n | n_raw | unsc | gross | vs random time (t) | vs random side (t) | real. | DSR | before: vs time (t), n |
+|---|---|---|---|---|---|---|---|---|---|
+| funding_reversion / crypto | 1217 | 13804 | 48 | +4.5 | +3.5 (+1.34) | −0.2 (−0.06) | −31.8 | 0.50 | +6.8 (+3.47), 1499 |
+| grid / crypto | 1461 | 3538 | 39 | −8.7 | **−8.7 (−5.83)** | **−8.8 (−5.89)** | −17.3 | 0.00 | −0.0 (−0.01), 1499 |
+| matrix_agent / crypto | 1054 | 2726 | 217 | +2.7 | +2.2 (+0.82) | +1.9 (+0.70) | −25.6 | 0.23 | +8.3 (+2.71), 1240 |
+| matrix_agent / bist | 168 | 393 | 225 | −7.3 | −0.6 (−0.06) | −9.0 (−0.91) | −31.4 | 0.01 | −12.0 (−1.64), 388 |
+| matrix_agent / us | 309 | 349 | 40 | −3.0 | −2.9 (−1.38) | −2.6 (−1.25) | −20.2 | 0.00 | −2.7 (−1.14), 349 |
+| momentum_xs / crypto | 277 | 2188 | 163 | −18.4 | −23.2 (−2.05) | −18.6 (−1.64) | −34.0 | 0.00 | +24.9 (+5.47), 1496 |
+| dca / crypto | 1050 | 1975 | 420 | −0.3 | −0.2 (−0.12) | −1.6 (−0.80) | −32.5 | 0.03 | −5.0 (−2.88), 1470 |
+| oi_delta / crypto | 382 | 1395 | 40 | +5.8 | +4.1 (+0.53) | +2.8 (+0.35) | −4.8 | 0.16 | −6.5 (−1.78), 1366 |
+| oi_breakout / crypto | 188 | 730 | 25 | −7.3 | −6.7 (−0.49) | −9.8 (−0.71) | −28.1 | 0.01 | −6.6 (−1.04), 698 |
+| bist_volume_breakout / bist | 202 | 716 | 132 | −13.2 | −10.7 (−1.79) | −13.5 (−2.25) | −110.7 | 0.00 | +104.0 (+16.71), 716 |
+| bist_gap_fade / bist | 109 | 502 | 393 | +15.2 | +22.1 (+2.36) | +15.6 (+1.67) | −41.2 | 0.47 | −53.3 (−8.54), 501 |
+| bist_intraday_reversion / bist | 56 | 243 | 45 | +25.0 | +30.2 (+1.58) | +26.4 (+1.40) | −85.2 | 0.35 | +12.9 (+1.52), 243 |
+| bist_news_event / bist | 11 | 138 | 35 | +2.9 | +12.0 (+1.21) | +8.2 (+2.29) | — | — | −4.8 (−0.93), 138 |
+
+**Gap guard, bist_volume_breakout.** Rows, no guard: +104.0 bps, t=16.7 on
+716 rows. Episodes, no guard: +116 bps, t≈10 — 244 of its entries sat on a
+stale bar across a data hole and were all take-profits at +300, while the 281
+fresh ones were −14. Episodes with the guard: **−10.7 bps, t=−1.79** on 202
+episodes (132 unscorable). The whole "edge" was the jump across the hole.
+
+Reading:
+- **Nothing beats a null after correction** (none BHY-significant positive,
+  every DSR ≤ 0.50); every `status` is `unproven`.
+- **grid is reliably worse than chance**: −8.7 bps against both nulls with
+  t≈−5.9 on 1 461 episodes, gross level below zero before any cost. Rows hid
+  it (−0.0); the dense re-emission diluted the bad episodes with near-copies.
+- funding_reversion's 13 804 rows were 1 217 bets (11×); its t fell 3.47 →
+  1.34 and its realised net is −31.8 bps a fill.
+- The BIST positives (gap_fade +22, intraday_reversion +30) sit on 56–109
+  episodes with 40–80 % of signals unscorable and realised net −41/−85 bps;
+  BIST is paused (see [[market-cadence-study]]).
+
 ## Findings — 14 days to 2026-09-20, 5 277 signals, both nulls
 
-*Rows-as-samples, before the episode fix; momentum_xs line withdrawn above.
-Other strategies' t-statistics are also inflated wherever they re-emit.*
+*Superseded by the 30-day table above. Rows-as-samples, before the episode
+fix; momentum_xs line withdrawn above. Other strategies' t-statistics are also
+inflated wherever they re-emit.*
 
 Each strategy is tested against two nulls: random entry time with the same
 side, and random side at the same moment. A strategy that beats neither has no
@@ -167,8 +211,11 @@ while still losing on every trade.
   On momentum_xs 2026-09-21: sim gross −26.2 vs wallet net −30.7; costs
   −13.9, tick-vs-bar exits +13.5, entry/horizon anchoring −4.1. The simulator
   minus the modelled round trip predicts the wallet within ~5 bps.
-- `barrier_study`, `execution_study` and `meta_label` load the same candidate
-  rows and do not yet collapse re-emissions; their sample sizes are inflated
-  the same way.
+- ~~`barrier_study`, `execution_study` and `meta_label` do not yet collapse
+  re-emissions.~~ Done 2026-10-09 (6dcc8f1), as are the certificate,
+  efficacy, slot scorer, lab fitness, universe symbol edge, the Director
+  digest and the dashboard. Still on rows: the lesson synthesizer, reflection
+  `metrics_window`, setup memory, `allocation.load_pair_edges`, notify and
+  bulletin (see [[learning-loop]]).
 - Would the cost-engine strategies become positive at a much higher signal
   threshold (fewer, better trades), or is their signal empty at every threshold?
