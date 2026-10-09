@@ -1,0 +1,75 @@
+Pre-registration — signal research 2026-10, round 3: positive-funding mirror of H1
+Written 2026-10-09 15:25 UTC (date -u), before any return was computed and before any spot kline or
+order book for this round was fetched. Round 1: ../signal_2026_10/PREREG.txt. Round 2: ../signal_2026_10_r2/PREREG.txt.
+
+QUESTION. H1 (long perp + short spot after a settlement <= -0.08 %) lost most of its edge to borrow
+realism. The mirror needs no loan: after an extreme POSITIVE settlement, short the perp and buy spot,
+collect funding. Does it pay after realistic costs, out of sample?
+
+------------------------------------------------------------------------------------------------
+DATA
+ Round 1's year of Bybit public history (791 USDT linear perps trading on 2026-10-09): funding
+ settlements with actual intervals, 1h klines (OHLC, turnover), 1h premium index.
+ Spot hedge: 1h spot klines per coin, Bybit spot <COIN>USDT, else Binance spot <COIN>USDT (public
+ endpoints), whole year, fetched after this file is committed. Coin = perp base with any
+ 1000/10000/100000/1000000 prefix removed (price ratios make the multiplier irrelevant).
+ Order books: full public depth today (Bybit linear perp; spot book on the hedge venue), one fetch per
+ coin, applied to every past episode of that coin (same method as the adversarial check / shb).
+ Survivorship: delisted perps absent (as rounds 1-2).
+
+SPLIT BY TIME: TRAIN 2025-10-01 .. 2026-05-31, HOLDOUT 2026-06-01 .. 2026-10-09 (by settlement time).
+ Holdout evaluated once, only for cells that pass train, rule frozen. Holdouts of train failures may be
+ computed afterwards for the record only.
+
+EPISODE RULE (per cell, per symbol, no new entry before the previous exit)
+ Signal: a settlement S with settled rate >= X (raw rate per settlement, as settled, as H1 used it and
+ as cash_and_carry reads it). X in {0.05 %, 0.08 %, 0.15 %}.
+ Entry E = S + 1h: short perp at the close of the 1h perp bar ending at E, long spot at the close of the
+ 1h spot bar ending at E, equal USD notional. Needs both prices; no spot price at E or at exit = no
+ episode (point-in-time spot listing; the hedge venue is Bybit if it has a price at E, else Binance).
+ Exit:
+  - fixed hold h in {24, 48, 96} h: exit at E + h;
+  - flip variant of each hold: exit at the first settlement t in (E, E+h] with rate <= 0, at the close
+    of the bar ending at ceil_hour(t) + 1h (one-hour lag as at entry), else at E + h.
+ => 3 thresholds x 3 holds x {fixed, flip} = 18 cells.
+
+P&L per episode (bps of one leg's notional)
+ funding  = + sum of settled rates over settlements in (E, exit], each times perp price at that
+            settlement / perp entry price (mark-to-market notional); actual interval, every raw
+            settlement counted once.
+ hedge    = (spot exit/spot entry - 1) - (perp exit/perp entry - 1)   [long spot, short perp]
+ cost     = 4 taker fees: perp 5.5 bps x2 + spot 10 bps x2 (Bybit spot VIP0 0.1 %, Binance spot VIP0
+            0.1 %) = 31 bps, plus the four walked fills against mid on today's books at $500 per leg
+            (perp sell + buy, spot buy + sell). No book today for either leg = episode excluded and
+            counted.
+ borrow   = none (spot is bought, not borrowed). No financing charge on the perp margin or spot cash.
+ net      = funding + hedge - cost.
+
+STATISTICS
+ Per cell: n, mean net, median, 5 %-trimmed mean, t clustered by ISO week (primary) and by day.
+ Train pass: mean net > 0 and week-clustered t >= 2.
+ Holdout success: mean net > 0, week-clustered t >= 2, AND Benjamini-Yekutieli q <= 0.05 over the whole
+ programme: m = 38 (round 1) + 29 (round 2) + 18 (this round) = 85. One-sided holdout p from the
+ week-clustered t (Student t, G-1 df). Prior rounds' p-values: H1 holdout p as reported, every other
+ prior hypothesis p = 1 (conservative: they cannot raise the step-up rank).
+ Reported for every cell (not decision rules): excluding the top 5 % of episodes, the $5k-per-leg cost,
+ fees x2, top-5-coin / top-10-day share of PnL, holdout by month.
+
+BASIS / SQUEEZE RISK (descriptive, every train/holdout episode of each cell)
+ - entry basis = perp/spot - 1 at E; premium index at S;
+ - within the hold, hourly: worst hedge mark (min over hours of hedge P&L), worst position mark
+   (hedge + funding accrued to that hour), max perp run-up (max 1h high / entry - 1) as a liquidation
+   proxy for the short perp leg when the spot leg sits on another venue or another margin account;
+ - share of episodes whose perp run-up exceeds 20 % / 50 % (liquidation at 5x / 2x perp leverage
+   without top-up).
+
+IMPLEMENTATION RULE. If a cell survives, no new module: the result is mapped onto parameter changes of
+the existing cash_and_carry (threshold, universe via the carry watchlist, hold, flip exit). If nothing
+survives, the negatives are written up so the question stays closed.
+
+Reference rows (not counted in m, no decision): cash_and_carry as it actually runs (strategy_configs
+row v1: min_funding 0.0001, horizon 8h, 25-coin active universe proxy = round 1 active_universe.txt),
+and the 18 cells restricted to that universe.
+
+------------------------------------------------------------------------------------------------
+LOG
