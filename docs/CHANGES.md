@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-10-09 — Borç faizi kaydediliyor; carry kapanışı borcu kayıtlı seriden öder
+- Göç **0041** `margin_borrow_rates` (lokal DB): `venue, coin, ts, hourly_rate, max_borrow, borrowable`. `ingestion.borrow_recorder` (`ingestion-market` içinde) Bybit spot-margin VIP0 + Binance cross-margin VIP0 public tablolarını 10 dk'da bir okur, TÜM coin'leri yazar (değişince veya saatte bir nabız); 180 gün tutar, saatlik silme `ts` indeksiyle. `BORROW_RECORDER_ENABLED=false` kapatır.
+- `paper_trade` carry kapanışı ve açık carry equity işareti (ortak `backtest.carry_books.carry_borrow`): borç her başlamış saat için o saatin kayıtlı oranıyla ×1; serinin kaçırdığı saatler giriş kotası × `MATRIX_CARRY_BORROW_STRESS` (3). `context.borrow_source` = `series|stressed_entry|mixed`.
+- `neg_funding_carry` giriş filtresi: borç = max(kota, fonlama derinliğinin kesitsel medyanı) × `MATRIX_NFC_BORROW_HOLD_STRESS` (1.0); eski kota × 3 `MATRIX_NFC_BORROW_MODEL=flat` ile, eski karar her sinyalde `flat_keep`. 1/3 kuralı aynı. Detay: `docs/wiki/signal-research-2026-10.md` "Borrow measurement".
+
 ## 2026-10-09 — Açık carry'nin equity markı kapanışın realize edeceğinden yüksek olamaz; kapanış döngüsü REST beklemez (risk kapısı davranışı)
 - `backtest.paper_trade._current_equity`: açık carry artık `hours/8 × canlı oran` (maliyetsiz) değil, şimdi kapansa realize edeceği değerle işaretlenir: o ana kadar ödenen settlement fonlaması (`carry_funding`, pozisyon başına artımlı önbellek) − tam gidiş-dönüş maliyeti (book-priced: 4 taker ücreti + açılışta ödenen 2 yürüyüş + kapanış yürüyüşleri, her biri DB kitabı ile açılış tahmininin KÖTÜSÜ; diğerleri: 2 bacak round-trip) − tahakkuk eden borç (kapanışla aynı seri/stres girdileri, saatte bir yeniden hesap). Günlük zarar devre kesicisi ve trailing stop bu equity'yi okur → $500'lük açık carry başına ~$3–5 daha erken tetiklenir; 1/2/4 saatlik fonlama aralıklı coin'ler de doğru işaretlenir. Tick'te REST yok, 48 saatlik tarama yok.
 - `close_due_positions`: book-priced carry'ler en sona kalır; bacak kitapları önce DB'den, eksikler REST'ten eşzamanlı ve toplam `MATRIX_CARRY_CLOSE_BOOK_TIMEOUT_S` (3 s) içinde; cevap gelmeyen bacak açılış tahminiyle kapanır (`book_close.close_source=entry_estimate`). `_close_position` kendisi hiç REST çağırmaz (flatten dahil). Yön TP/SL kapanışları carry kitabını beklemez.

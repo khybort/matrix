@@ -416,3 +416,14 @@
   (2) Same ticker ≠ same token (ON on Binance, H on Gate): check the price ratio across venues at entry before trusting
   a basis series. (3) Binance `fapi/v1/depth?limit=1000` weighs 20; ~400 books in parallel earned an HTTP 418 IP ban —
   use limit=500 and ≥ 1 s spacing. Scripts: `services/backtest/research/signal_2026_10_r3b/`.
+
+- **2026-10-09 — Bir stres çarpanını hangi soruya cevap olarak koyduğunu yaz; replay'deki düzeltme canlıda çifte sayım olabilir.**
+  `neg_funding_carry` borcu giriş kotası × 3 ile fiyatlıyordu. ×3 replay'de doğruydu: geçmiş squeeze'ler bugünün sakin
+  kotasıyla fiyatlanıyordu. Canlıda kota sinyal anında, zaten squeeze'deki coin'den okunuyor ve kesitte kota derinlikle
+  ölçekleniyor (ln b8 = 0,082 + 0,341 ln|f8|; ≤ −8 bps/8h'de medyan ~6 bps/8h, nüfus medyanı 2,5). Aynı ilişkiyle son 30
+  günün 289 epizodunda tutuş-ortalaması borç / giriş borcu p90 0,96 — fonlama sönümlenince borç da düşer; ×3 çifte sayımdı.
+  Kurallar: (1) Bir çarpanın neyi telafi ettiğini (bayat girdi mi, tutuş içi kayma mı, erişilemezlik mi) yorumda yaz;
+  girdi değişince çarpanı yeniden türet. (2) Varsayımla ücretlendirilen bir maliyeti kâğıt defter yanlışlayamaz — geçmişi
+  yayımlanmayan bir seriyi ihtiyaç doğmadan kaydetmeye başla (`margin_borrow_rates`), muhasebe kaynağı kaydetsin
+  (`borrow_source`). (3) Gevşetilen bir filtrenin eski kararını her sinyalde kaydet (`flat_keep`) ki yalnız yeni kuralın
+  aldığı epizodlar ayrı yargılanabilsin. Kaynak: `docs/wiki/signal-research-2026-10.md` "Borrow measurement".

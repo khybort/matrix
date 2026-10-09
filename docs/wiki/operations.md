@@ -164,6 +164,28 @@ still hands `neg_funding_carry` only the traded set, so the module never looks
 at a watchlist coin. Until `strategy.main` gives it `crypto_symbols +
 carry_watchlist_async()`, the yield above is potential, not booked.
 
+### Borrow-rate recorder
+`services/ingestion/src/ingestion/borrow_recorder.py`, a task in `ingestion-market` (crypto only):
+every 10 min (`BORROW_RECORDER_INTERVAL_S`) it reads Bybit spot-margin VIP0 and Binance
+cross-margin VIP0 (public, the tables `neg_funding_carry` uses) and writes every coin to
+`margin_borrow_rates` (local DB, migration 0041): `venue, coin, ts, hourly_rate, max_borrow`
+(per-account limit, coin units, not pool size), `borrowable`. A row only when a coin's quote
+changed or its last row is an hour old (`_HEARTBEAT_S`), so a gap > 70 min means the recorder was
+down. Prunes rows older than 180 days hourly (`_RETENTION_DAYS`), index scan on `ix_..._ts`
+(EXPLAIN checked 2026-10-09). `BORROW_RECORDER_ENABLED=false` turns it off. Read by
+`backtest.carry_books.carry_borrow` at every carry close and for the open-carry equity mark. 741
+quotes a poll (481 Binance, 260 Bybit); no quote changed between 16:16 and 16:47 UTC, so steady
+state ≈ the hourly heartbeat, ~18 k rows/day, ~3 M at 180 days. Bybit answers HTTP 200 with
+retCode 10006 when the shared IP is rate-limited (the strategy and the watchlist read the same
+table); the recorder retries 3× and logs `unavailable` if it still fails.
+
+```sql
+-- local: latest quote per coin on the watchlist's borrow venues
+SELECT DISTINCT ON (venue, coin) venue, coin, ts, hourly_rate * 1e4 AS bps_h, max_borrow
+FROM margin_borrow_rates WHERE coin IN ('KAIA', 'RLC') ORDER BY venue, coin, ts DESC;
+```
+Log: `borrow recorder: wrote N of M coin quotes` every poll.
+
 ## Shadow tracker — is the only bet working?
 
 `matrix_shared/shadow_tracker.py` compares every shadow strategy that carries a

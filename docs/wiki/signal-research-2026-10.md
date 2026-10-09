@@ -618,3 +618,84 @@ because watchlist coins stream only since 13:14 today. Replaying the current wat
 over 30 days: with the predicted rate proxied by the next settled one, the watchlist would have held
 211 of 218 episodes (24 of 26 in 72 h); on settled rates alone 74 of 218. The predicted-rate trigger
 does the work and the selection rules need no change. 5 of the 218 were in the traded universe.
+
+## Borrow measurement (2026-10-09)
+The shadow book measured funding and book costs for real but borrow only by assumption (entry
+quote × 3). Three changes make borrow measured, at least as quoted:
+
+**Recorder.** `ingestion.borrow_recorder` (in `ingestion-market`) polls the two public tables the
+strategy reads, Bybit spot-margin VIP0 (260 coins with a rate) and Binance cross-margin VIP0 (481),
+every 10 min into `margin_borrow_rates` (local DB, migration 0041; ops: `docs/wiki/operations.md`).
+Neither venue publishes pool size or utilisation; the only extra field is the per-account limit
+(`max_borrow`, coin units). Quoted ≠ lendable still holds: a dry pool is invisible without a signed
+query.
+
+**Paper accounting.** A carry's close now charges each started hour at the rate recorded for that
+hour on its borrow venue (in force at the hour start if ≤ 75 min old, else the first quote inside
+the hour), ×1; the kill switch's open-carry mark uses the same helper (`carry_books.carry_borrow`).
+Hours the series misses fall back to entry quote × `MATRIX_CARRY_BORROW_STRESS` (3).
+`context.borrow_source` = `series` | `stressed_entry` | `mixed`, plus `borrow_hours_series`,
+`borrow_hours_fallback`, `borrow_series_mean_hourly`. KAIA (opened 14:04, recorder from 16:16) will
+close `mixed`; carries opened from now on close `series` unless the recorder stops.
+
+**Quoted borrow vs funding depth**, snapshot 2026-10-09 16:12 UTC, 363 Bybit USDT perps whose coin
+has a rate on either venue; borrow = cheapest venue (as the strategy picks), funding = Bybit
+predicted rate normalised to 8 h:
+
+| funding bps/8h | n | borrow bps/8h p25 / median / p75 / p90 | Bybit median | Binance median |
+|---|---|---|---|---|
+| ≤ −20 | 6 | 5.3 / 5.8 / 6.6 / 7.0 | 11.2 | 5.8 |
+| −20 … −8 | 5 | 6.5 / 6.5 / 6.6 / 18.3 | 6.6 | 6.5 |
+| −8 … −5 | 7 | 0.8 / 1.8 / 3.3 / 7.3 | 1.4 | 3.0 |
+| −5 … −2 | 20 | 0.9 / 2.1 / 5.5 / 18.3 | 1.0 | 3.5 |
+| −2 … 0 | 32 | 0.3 / 0.6 / 2.5 / 4.7 | 0.6 | 2.2 |
+| 0 … +0.5 | 15 | 0.2 / 0.4 / 0.7 / 1.1 | 0.5 | 0.5 |
+| +0.5 … +1 (default rate) | 271 | 0.7 / 2.5 / 4.8 / 6.6 | 0.9 | 4.2 |
+
+The adversarial check's "6.2 at ≤ −8 vs 0.4–1.0 elsewhere" reproduces near zero funding, but the
+bulk of coins at the default +1 bps/8h (mostly Binance-only alts) borrow at a median 2.5: the
+squeeze premium is ~2.5× over the population and ~10× over the cheap near-zero group. Over the 70
+negative-funding coins, **ln b8 = 0.082 + 0.341 ln|f8|** (bps/8h; r 0.41; slope 95 % bootstrap CI
+0.14–0.52): borrow rises with the cube root of depth. Outliers matter: LUNC at −21 bps/8h borrows at
+0.08, KAIA costs 12.0 on Bybit vs 6.0 on Binance.
+
+**What the stress should be.** The entry filter reads the quote at signal time, on a coin that is
+already in a squeeze, so that quote already carries the depth premium. The ×3 was a replay device
+(historic squeezes priced at today's calm quote); live it double-counts. What remains is how borrow
+moves during the 48 h hold. Mapping Bybit funding of the last 30 days (363 coins, 289 episodes
+settled ≤ −0.08 %, one per coin per 48 h) through the fit, hold-mean borrow / entry-level borrow:
+
+| entry depth bps/interval | n | mean | median | p75 | p90 | share > 1 |
+|---|---|---|---|---|---|---|
+| 8–15 | 131 | 0.68 | 0.63 | 0.81 | 0.97 | 9 % |
+| 15–30 | 76 | 0.67 | 0.62 | 0.84 | 0.97 | 8 % |
+| 30–60 | 55 | 0.61 | 0.58 | 0.83 | 0.94 | 5 % |
+| ≥ 60 | 27 | 0.54 | 0.51 | 0.70 | 0.79 | 0 % |
+| all | 289 | 0.65 | 0.61 | 0.81 | 0.96 | 7 % |
+
+At the upper slope (0.52) p90 is 0.96 too (max 2.0). Funding decays, so depth-tracking borrow falls.
+
+**New default** (`neg_funding_carry`, `MATRIX_NFC_BORROW_MODEL=depth`): borrow = max(quote, depth
+floor) × 48 h × `MATRIX_NFC_BORROW_HOLD_STRESS` (1.0, the p90 above rounded up), floor = the fit's
+median quote at the signal's depth. The floor binds when a quote lags or is unusually cheap (LUNC,
+SAND; KAIA's 1 h interval makes its 8 h depth 400 bps, floor 1.05 bps/h vs quote 0.75). The 1/3
+rule is unchanged. `flat` restores quote × 3; every signal also records `borrow_flat_bps`,
+`borrow_depth_bps`, `borrow_depth_floor_bps` and `flat_keep` (the old verdict). On today's deep
+coins the borrow share of naive expected funding falls from 0.22–1.14 (flat) to 0.07–0.38: RLC
+0.22 → 0.07, SKL 0.62 → 0.21, MINA 0.78 → 0.26, F 1.14 → 0.38. The filter now keeps more episodes,
+so the book cost and the 1/3 rule do most of the gating.
+
+Why this is not loosening blind: the shadow book now charges what was quoted hour by hour, so
+episodes kept only by the depth model (`flat_keep = false`) are judged on measured quoted borrow.
+The evidence is weak (one snapshot, r 0.41, cross-section standing in for within-coin dynamics).
+**Revisit** when ≥ 30 shadow episodes close with `borrow_source = series`: (1) hold-mean series /
+entry quote, p90 > 1.0 → set `HOLD_STRESS` to it; (2) the `flat_keep = false` episodes net of series
+borrow: mean ≤ 0 → back to `flat`; (3) with ≥ 2 weeks of recorder data, refit borrow on depth
+within coin. Scripts: session scratchpad `borrow/` (`snap.py`, `fetch_fh.py`, `hold.py`), not
+committed.
+
+**Shadow tracker:** the decomposition reads `borrow_charged_usd` and does not know its source. Not a
+one-line change (the episode query, `Episode` and the report line would each change); until then
+`SELECT context->>'borrow_source', count(*) FROM predictions WHERE strategy_id =
+'neg_funding_carry' AND status <> 'open' GROUP BY 1` (shared) tells series from fallback; an episode
+charged at `stressed_entry` or `mixed` tells nothing (or only part) about real borrow.
