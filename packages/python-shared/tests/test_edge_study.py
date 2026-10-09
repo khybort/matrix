@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from matrix_shared.edge_study import Bar, _index_at, simulate_bracket, welch
 
 T0 = datetime(2026, 9, 19, tzinfo=UTC)
@@ -205,3 +207,83 @@ def test_beating_a_losing_null_is_not_paying():
     row = {"n": 200, "edge_bps": 30.0, "t": 5.0, "side_edge_bps": 0.0, "t_side": 0.0}
     assert verdict({**row, "gross_bps": 40.0}, cost_bps=15) == "pays"
     assert verdict({**row, "gross_bps": 5.0}, cost_bps=15) == "unproven"   # control was -25
+
+
+def test_episode_groups_keep_every_fill_and_sum_its_dollars():
+    """Fills of one re-emitted bet are one sample whose PnL is their sum: the
+    wallet really held them, so dropping them would misstate the dollars."""
+    from matrix_shared.edge_study import episode_groups, episode_pnls, one_per_episode
+
+    fills = [{**_sig(m), "pnl_usd": p} for m, p in [(0, -1.0), (10, -1.0), (20, -1.0), (70, 2.0)]]
+    groups = episode_groups(fills)
+    assert [len(g) for g in groups] == [3, 1]
+    assert episode_pnls(fills) == [-3.0, 2.0]
+    assert one_per_episode(fills) == [g[0] for g in groups]
+
+
+def test_sample_episodes_reports_raw_count_beside_the_episodes():
+    from matrix_shared.edge_study import sample_episodes
+
+    rows = [_sig(m) for m in range(0, 180, 2)] + [_sig(0, sid="oi_delta")]
+    rows.sort(key=lambda r: r["generated_at"])
+    sampled, n_raw = sample_episodes(rows, cap=2)
+    assert n_raw == {("momentum_xs", "crypto"): 90, ("oi_delta", "crypto"): 1}
+    assert sum(1 for r in sampled if r["strategy_id"] == "momentum_xs") == 2   # 3 episodes, capped
+
+
+@pytest.mark.asyncio
+async def test_a_single_strategy_run_is_corrected_for_the_whole_family(monkeypatch):
+    """The cached gate studies one strategy at a time. Corrected for m=1, BHY
+    was a bare p<0.05 and the deflated Sharpe was not deflated; it must be
+    corrected for every strategy the book is testing."""
+    from matrix_shared import edge_study as E
+
+    bars = _bars([100 + (i % 7) * 0.3 for i in range(400)])
+    sigs = [
+        {**_sig(30 + 3 * k, symbol="X", side="long", horizon=60), "tp_pct": 0.002, "sl_pct": 0.002,
+         "filled": False, "pnl_pct": None}
+        for k in range(100)
+    ]
+
+    async def cands(days, sid):
+        return sigs
+
+    async def load_bars(syms, ac, since):
+        return {"X": bars}
+
+    monkeypatch.setattr(E, "_load_candidates", cands)
+    monkeypatch.setattr(E, "_load_bars", load_bars)
+    monkeypatch.setattr(E.Registry, "save", lambda self, path=None: None)
+    alone = (await E.run_edge_study(days=1, strategy_id="momentum_xs", family=1))[0]
+    book = (await E.run_edge_study(days=1, strategy_id="momentum_xs", family=13))[0]
+    assert alone["family"] == 1 and book["family"] == 13
+    if alone["dsr"] is not None and book["dsr"] is not None:
+        assert book["dsr"] <= alone["dsr"]
+    assert book["significant"] <= alone["significant"]
+
+
+def test_a_stale_entry_bar_is_unscorable_not_entered_hours_early():
+    """A hole in the series must not let the entry land before it: bars stop at
+    minute 3 and resume at minute 300, a signal at 300:30 has no fresh close."""
+    from matrix_shared.edge_study import entry_index
+
+    bars = [Bar(T0 + timedelta(minutes=m), 100, 100, 100) for m in (0, 1, 2, 300, 301, 302)]
+    assert entry_index(bars, T0 + timedelta(minutes=300, seconds=30)) == -1   # last close 4h old
+    assert entry_index(bars, T0 + timedelta(minutes=302, seconds=30)) == 4    # 301 closed at 302:00
+    assert entry_index(bars, T0 + timedelta(minutes=2, seconds=30)) == 1
+
+
+def test_a_window_with_a_hole_is_not_simulated_across_it():
+    """bist_volume_breakout's 244 stale entries were all +300 bps take-profits:
+    the bracket ran across a gap into prices the strategy had already seen."""
+    from matrix_shared.edge_study import contiguous
+
+    bars = [Bar(T0 + timedelta(minutes=m), h, 100, 100)
+            for m, h in [(0, 100), (1, 100), (2, 100), (240, 110), (241, 110)]]
+    r = simulate_bracket(bars, 0, side="long", tp_pct=0.03, sl_pct=0.03, horizon_bars=4)
+    assert r.reason == "no_data"
+    assert contiguous(bars, 0, 2) and not contiguous(bars, 0, 3)
+    # an exit before the hole is still scored
+    early = [Bar(T0 + timedelta(minutes=m), h, 100, 100)
+             for m, h in [(0, 100), (1, 104), (2, 100), (240, 110)]]
+    assert simulate_bracket(early, 0, side="long", tp_pct=0.03, sl_pct=0.03, horizon_bars=3).reason == "hit_tp"

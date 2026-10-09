@@ -22,6 +22,15 @@ because we went looking for it.
 The registry is a JSON file on the shared model volume, one entry per
 (strategy, market), written once and never silently rewritten: the whole point
 is that the target was fixed in advance.
+
+One exception, and it is not a rewrite: a registration made in the wrong
+*unit* is void. Until 2026-10-09 the study counted every re-emitted signal row
+as an independent trade, so effect sizes, standard deviations and the targets
+derived from them were measured on pseudo-replicated samples (momentum_xs:
+936, from a three-hour burst of the same ten bets). Such entries are marked
+`superseded` in place — kept for audit, never read as a target — and a
+strategy that still looks good when counted in episodes registers afresh by
+the same rule. The rule did not move; the ruler was fixed.
 """
 
 from __future__ import annotations
@@ -55,6 +64,9 @@ MIN_REQUIRED_N = int(os.environ.get("MATRIX_PROMOTION_MIN_N", "200"))
 # registered count and still not convince: bist_news_event hit n=33 against a
 # 30-trade target on 2026-09-20 with a DSR of 0.53, i.e. a coin flip.
 MIN_DSR = float(os.environ.get("MATRIX_PROMOTION_MIN_DSR", "0.95"))
+# The sample unit a registration was measured in. Must match
+# `edge_study.SAMPLE_UNIT`; kept here because edge_study imports this module.
+UNIT = "episode"
 
 
 def measurable_n() -> int:
@@ -204,6 +216,7 @@ class Registration:
     sd_bps: float
     required_n: int
     note: str = ""
+    unit: str = UNIT
 
     def as_dict(self) -> dict:
         return {
@@ -214,7 +227,13 @@ class Registration:
             "sd_bps": self.sd_bps,
             "required_n": self.required_n,
             "note": self.note,
+            "unit": self.unit,
         }
+
+
+def _live(entry: dict | None) -> bool:
+    """A registration that binds: measured in the current unit, not superseded."""
+    return bool(entry) and entry.get("unit") == UNIT and not entry.get("superseded_at")
 
 
 @dataclass
@@ -242,16 +261,37 @@ class Registry:
         tmp.replace(path)
 
     def get(self, strategy_id: str, asset_class: str) -> dict | None:
-        return self.entries.get(self.key(strategy_id, asset_class))
+        e = self.entries.get(self.key(strategy_id, asset_class))
+        return e if _live(e) else None
+
+    def retire_stale(self) -> int:
+        """Mark every registration measured in another unit as superseded.
+        Returns how many were marked; idempotent."""
+        n = 0
+        now = datetime.now(UTC).isoformat()
+        for k, e in self.entries.items():
+            if e.get("unit") != UNIT and not e.get("superseded_at"):
+                e["superseded_at"] = now
+                e["superseded_reason"] = (
+                    f"measured in unit {e.get('unit') or 'row'!r}, not {UNIT!r}: "
+                    "re-emitted signals were counted as independent trades"
+                )
+                logger.warning(f"pre-registration {k} superseded (required_n {e.get('required_n')} "
+                               f"was measured on rows, not {UNIT}s)")
+                n += 1
+        return n
 
     def register(
         self, strategy_id: str, asset_class: str, *, edge_bps: float, sd_bps: float
     ) -> dict | None:
         """Record the target the first time a strategy looks good. Never
-        overwrites: a pre-registration that moves is not a pre-registration."""
+        overwrites a live registration: a pre-registration that moves is not a
+        pre-registration. A superseded one (wrong unit) is replaced and kept
+        inside the new entry as `supersedes`."""
         k = self.key(strategy_id, asset_class)
-        if k in self.entries:
-            return self.entries[k]
+        prior = self.entries.get(k)
+        if _live(prior):
+            return prior
         need = required_trades(edge_bps, sd_bps)
         if need is None:
             return None
@@ -264,6 +304,8 @@ class Registry:
             required_n=need,
         )
         self.entries[k] = reg.as_dict()
+        if prior:
+            self.entries[k]["supersedes"] = prior
         logger.info(
             f"pre-registered {k}: needs n>={need} for half of {edge_bps:.1f} bps "
             f"(sd {sd_bps:.1f}) to stay significant"
@@ -322,6 +364,7 @@ def status(
 
 __all__ = [
     "MIN_DSR",
+    "UNIT",
     "measurable_n",
     "MIN_REQUIRED_N",
     "REGISTRY_PATH",

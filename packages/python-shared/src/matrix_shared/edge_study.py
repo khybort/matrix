@@ -63,6 +63,16 @@ CONTROL_DRAWS = int(os.environ.get("MATRIX_EDGE_CONTROL_DRAWS", "20"))
 # comfortably above the largest registered `required_n`.
 MAX_PER_STRATEGY = int(os.environ.get("MATRIX_EDGE_MAX_PER_STRATEGY", "1500"))
 MIN_TRADES = int(os.environ.get("MATRIX_EDGE_MIN_TRADES", "30"))
+# Bar-freshness guards (2026-10-09). The entry bar's close may be at most
+# MAX_ENTRY_AGE old at signal time, and no two consecutive bars inside a
+# simulated window may be further apart than MAX_BAR_GAP; otherwise the
+# signal (or control draw) is unscorable, never scored across the hole.
+_BAR = timedelta(minutes=1)
+MAX_ENTRY_AGE = timedelta(minutes=float(os.environ.get("MATRIX_EDGE_MAX_ENTRY_AGE_MIN", "3")))
+MAX_BAR_GAP = timedelta(minutes=float(os.environ.get("MATRIX_EDGE_MAX_BAR_GAP_MIN", "3")))
+# What one sample is. Rows cached or registered under any other unit were
+# measured on re-emitted signals counted as independent trades and are void.
+SAMPLE_UNIT = "episode"
 DEFAULT_TP_PCT = 0.01
 DEFAULT_SL_PCT = 0.005
 _BPS = 10_000.0
@@ -104,6 +114,9 @@ def simulate_bracket(
         return SimResult("no_data", 0.0, 0)
     for i in range(entry_idx + 1, last + 1):
         b = bars[i]
+        if b.ts - bars[i - 1].ts > MAX_BAR_GAP:
+            # A hole in the series: what follows is not reachable by holding.
+            return SimResult("no_data", 0.0, 0)
         hit_tp = b.high >= tp_px if long else b.low <= tp_px
         hit_sl = b.low <= sl_px if long else b.high >= sl_px
         if hit_tp:
@@ -190,6 +203,7 @@ class StrategyEdge:
     asset_class: str
     n: int = 0
     n_raw: int = 0  # signal rows before collapsing re-emissions into episodes
+    n_unscorable: int = 0  # episodes dropped: stale entry bar or a hole in the window
     n_filled: int = 0
     treatment: list[float] = field(default_factory=list)
     control: list[float] = field(default_factory=list)
@@ -213,6 +227,8 @@ class StrategyEdge:
             "market": self.asset_class,
             "n": self.n,
             "n_raw": self.n_raw,
+            "n_unscorable": self.n_unscorable,
+            "unit": SAMPLE_UNIT,
             "n_filled": self.n_filled,
             "gross_bps": round(t_mean, 2),
             "control_bps": round(c_mean, 2),
@@ -256,6 +272,38 @@ async def _load_candidates(days: float, strategy_id: str | None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def episode_groups(items: list[dict]) -> list[list[dict]]:
+    """Group signals into episodes: one bet and its re-emissions.
+
+    A signal opens a new episode only when no earlier episode of the same
+    (strategy, market, symbol, side) is still inside the horizon of the signal
+    that opened it; otherwise it joins that episode. `items` must be ordered
+    by `generated_at` and carry strategy_id, asset_class, symbol, side,
+    generated_at and horizon_seconds. The first member of each group is the
+    bet; the rest are the same call made again.
+
+    Every consumer that treats signals or fills as samples goes through here
+    (edge, barrier, horizon, execution and meta-label studies; the paper
+    certificate, efficacy and the slot scorer), so "one bet, one sample" has
+    exactly one definition.
+    """
+    open_until: dict[tuple, datetime] = {}
+    current: dict[tuple, list[dict]] = {}
+    out: list[list[dict]] = []
+    for r in items:
+        key = (r["strategy_id"], r["asset_class"], r["symbol"], r["side"])
+        at = r["generated_at"]
+        until = open_until.get(key)
+        if until is not None and at < until:
+            current[key].append(r)
+            continue
+        open_until[key] = at + timedelta(seconds=int(r["horizon_seconds"] or 600))
+        group = [r]
+        current[key] = group
+        out.append(group)
+    return out
+
+
 def one_per_episode(items: list[dict]) -> list[dict]:
     """Collapse re-emissions of one bet into the bet: keep a signal only when no
     earlier kept signal of the same (strategy, market, symbol, side) is still
@@ -269,17 +317,34 @@ def one_per_episode(items: list[dict]) -> list[dict]:
     (docs/wiki/edge-study.md). Counting duplicates as samples multiplies one
     afternoon's luck into a t-statistic.
     """
-    last: dict[tuple, datetime] = {}
-    out = []
-    for r in items:
-        key = (r["strategy_id"], r["asset_class"], r["symbol"], r["side"])
-        at = r["generated_at"]
-        prev = last.get(key)
-        if prev is not None and at < prev:
-            continue
-        last[key] = at + timedelta(seconds=int(r["horizon_seconds"] or 600))
-        out.append(r)
-    return out
+    return [g[0] for g in episode_groups(items)]
+
+
+def episode_pnls(items: list[dict], *, value: str = "pnl_usd") -> list[float]:
+    """Realised results summed per episode, in episode order.
+
+    For fills the duplicates were real positions — the wallet did hold the same
+    bet two or three times — so their dollars are not dropped, they are added
+    into the one draw they jointly were. funding_reversion held 2 016 of its
+    3 101 closed positions (2026-09) while an identical (symbol, side) position
+    of its own was already open; scored per row, one wrong call counted as
+    three independent losses and a lucky one as three wins.
+    """
+    return [sum(float(r[value] or 0) for r in g) for g in episode_groups(items)]
+
+
+def sample_episodes(rows: list[dict], cap: int) -> tuple[list[dict], dict[tuple[str, str], int]]:
+    """Collapse to episodes, then subsample each (strategy, market) to `cap`.
+    Returns the sampled episodes and the raw row count per (strategy, market),
+    so reports can print n beside n_raw."""
+    n_raw: dict[tuple[str, str], int] = {}
+    for r in rows:
+        k = (r["strategy_id"], r["asset_class"])
+        n_raw[k] = n_raw.get(k, 0) + 1
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for r in one_per_episode(rows):
+        grouped.setdefault((r["strategy_id"], r["asset_class"]), []).append(r)
+    return [r for g in grouped.values() for r in subsample(g, cap)], n_raw
 
 
 def entry_index(bars: list[Bar], generated_at: datetime) -> int:
@@ -290,7 +355,26 @@ def entry_index(bars: list[Bar], generated_at: datetime) -> int:
     Entering at its close let the treatment arm trade at a price the strategy
     could not have seen; the control arm has no such advantage.
     """
-    return _index_at(bars, generated_at - timedelta(minutes=1))
+    i = _index_at(bars, generated_at - timedelta(minutes=1))
+    # ...and only if that close is recent. When a symbol's series has a hole
+    # (the September outage, a symbol not aggregated for days) the "last
+    # closed bar" can be hours old, and the bracket then runs across the hole
+    # into prices the strategy had already seen. On 2026-10-09 that made
+    # bist_volume_breakout +116 bps (t=10): its 244 stale entries were all
+    # take-profits at +300 while the 281 fresh ones were -14 bps.
+    if i >= 0 and generated_at - (bars[i].ts + _BAR) > MAX_ENTRY_AGE:
+        return -1
+    return i
+
+
+def contiguous(bars: list[Bar], start: int, end: int) -> bool:
+    """No hole wider than MAX_BAR_GAP between consecutive bars in [start, end].
+    A window with a hole is not `end - start` minutes of market; it is a jump
+    the simulator would score as if it had been tradeable."""
+    for i in range(max(start, 0) + 1, min(end, len(bars) - 1) + 1):
+        if bars[i].ts - bars[i - 1].ts > MAX_BAR_GAP:
+            return False
+    return True
 
 
 def subsample(items: list[dict], cap: int) -> list[dict]:
@@ -332,23 +416,40 @@ def _index_at(bars: list[Bar], when: datetime) -> int:
     return lo
 
 
+async def _family_size(days: float) -> int:
+    """How many (strategy, market) hypotheses the book tests in this window."""
+    async with shared_session_scope() as s:
+        n = (await s.execute(text(
+            "SELECT count(DISTINCT (strategy_id, asset_class)) FROM predictions "
+            "WHERE generated_at >= now() - make_interval(secs => :secs) "
+            "AND side IN ('long','short') "
+            "AND coalesce(context->>'is_shadow','false') = 'false'"
+        ), {"secs": days * 86400})).scalar()
+    return int(n or 1)
+
+
 async def run_edge_study(
-    *, days: float = 14.0, strategy_id: str | None = None, draws: int = CONTROL_DRAWS, seed: int = 7
+    *, days: float = 14.0, strategy_id: str | None = None, draws: int = CONTROL_DRAWS, seed: int = 7,
+    family: int | None = None,
 ) -> list[dict]:
     """Compare every strategy's real entries against random entries. One row per
-    (strategy, market); rows are sorted by measured edge, best first."""
+    (strategy, market); rows are sorted by measured edge, best first.
+
+    `family` is the number of hypotheses the multiple-testing corrections
+    account for. A single-strategy run (the cached gate refreshes one strategy
+    at a time) still belongs to the whole book's family: until 2026-10-09 it was
+    corrected for m=1, so BHY was a bare p<0.05 and the deflated Sharpe was not
+    deflated at all (dca reported DSR 0.99 on a +9 bps gross level). Default:
+    every (strategy, market) that emitted a directional signal in the window.
+    """
     rng = random.Random(seed)
     rows_in = await _load_candidates(days, strategy_id)
     if not rows_in:
         logger.warning("edge study: no predictions in window")
         return []
-    grouped: dict[tuple[str, str], list[dict]] = {}
-    n_raw: dict[tuple[str, str], int] = {}
-    for r in rows_in:
-        n_raw[(r["strategy_id"], r["asset_class"])] = n_raw.get((r["strategy_id"], r["asset_class"]), 0) + 1
-    for r in one_per_episode(rows_in):
-        grouped.setdefault((r["strategy_id"], r["asset_class"]), []).append(r)
-    trades = [r for g in grouped.values() for r in subsample(g, MAX_PER_STRATEGY)]
+    if family is None:
+        family = await _family_size(days) if strategy_id else 0
+    trades, n_raw = sample_episodes(rows_in, MAX_PER_STRATEGY)
     since = datetime.now(UTC) - timedelta(days=days + 1)
     by_class: dict[str, set[str]] = {}
     for t in trades:
@@ -360,6 +461,7 @@ async def run_edge_study(
 
     acc: dict[tuple[str, str], StrategyEdge] = {}
     skipped = 0
+    unscorable: dict[tuple[str, str], int] = {}
     for t in trades:
         series = bars.get((t["asset_class"], t["symbol"]))
         if not series or len(series) < 30:
@@ -368,15 +470,17 @@ async def run_edge_study(
         horizon_bars = max(1, int((t["horizon_seconds"] or 600) // 60))
         tp = float(t["tp_pct"]) if t["tp_pct"] is not None else DEFAULT_TP_PCT
         sl = float(t["sl_pct"]) if t["sl_pct"] is not None else DEFAULT_SL_PCT
+        key = (t["strategy_id"], t["asset_class"])
         idx = entry_index(series, t["generated_at"])
         if idx < 0 or idx >= len(series) - 1:
             skipped += 1
+            unscorable[key] = unscorable.get(key, 0) + 1
             continue
         treat = simulate_bracket(series, idx, side=t["side"], tp_pct=tp, sl_pct=sl, horizon_bars=horizon_bars)
         if treat.reason == "no_data":
             skipped += 1
+            unscorable[key] = unscorable.get(key, 0) + 1
             continue
-        key = (t["strategy_id"], t["asset_class"])
         e = acc.setdefault(
             key, StrategyEdge(t["strategy_id"], t["asset_class"], n_raw=n_raw.get(key, 0))
         )
@@ -410,6 +514,7 @@ async def run_edge_study(
     }
     rows = []
     for e in acc.values():
+        e.n_unscorable = unscorable.get((e.strategy_id, e.asset_class), 0)
         if e.n_filled:
             e.realised_net_bps /= e.n_filled
         if e.n:
@@ -417,14 +522,18 @@ async def run_edge_study(
         rows.append(e.as_row())
     # Multiple-testing correction across every strategy tested in this run.
     testable = [r for r in rows if r["n"] >= MIN_TRADES]
+    m = max(len(rows), family or 0, 1)
+    # Hypotheses outside this run enter as p=1: the conservative stand-in for
+    # tests we did not see, which puts every row we did see at the top ranks.
+    pad = [1.0] * max(0, (family or 0) - len(testable))
     # Benjamini-Yekutieli, not Benjamini-Hochberg: every strategy here is scored
     # on the same bars, symbols and overlapping windows, so BH's independence
     # assumption is violated and its FDR guarantee does not hold. BHY is valid
     # under arbitrary dependence at a cost of H(m) ~ 3.2x at m=13. BH is kept
     # alongside so the two can be compared rather than argued about.
-    keep_bh = benjamini_hochberg([r["p"] for r in testable])
-    keep = benjamini_yekutieli([r["p"] for r in testable])
-    keep_side = benjamini_yekutieli([two_sided_p(r["t_side"]) for r in testable])
+    keep_bh = benjamini_hochberg([r["p"] for r in testable] + pad)
+    keep = benjamini_yekutieli([r["p"] for r in testable] + pad)
+    keep_side = benjamini_yekutieli([two_sided_p(r["t_side"]) for r in testable] + pad)
     for r, k, ks, kbh in zip(testable, keep, keep_side, keep_bh):
         r["significant"] = bool(k)
         r["significant_bh"] = bool(kbh)
@@ -432,6 +541,7 @@ async def run_edge_study(
         # The bar for keeping a strategy: beat at least one null convincingly.
         r["has_edge"] = bool((k and r["edge_bps"] > 0) or (ks and r["side_edge_bps"] > 0))
     for r in rows:
+        r["family"] = m
         if r["n"] < MIN_TRADES:
             r["significant"] = r["significant_side"] = r["has_edge"] = False
             r["significant_bh"] = False
@@ -441,10 +551,14 @@ async def run_edge_study(
     # here must never stop the study from returning its rows.
     try:
         registry = Registry.load()
-        changed = False
+        # Targets registered on rows-as-samples are void, not binding: the
+        # rule was fine, the unit it was fed was wrong (momentum_xs's 936 came
+        # from a burst of re-emissions). Mark them so `get` ignores them and a
+        # strategy that still looks good on episodes registers afresh below.
+        changed = registry.retire_stale() > 0
         for r in rows:
             arm = _treatment_returns.get((r["strategy"], r["market"]), [])
-            d = deflated_sharpe(arm, n_trials=max(1, len(rows)))
+            d = deflated_sharpe(arm, n_trials=m)
             r["dsr"] = round(d["dsr"], 4) if d else None
             r["sharpe"] = round(d["sharpe"], 4) if d else None
             if r.get("has_edge") and r.get("sd_bps"):
@@ -456,7 +570,7 @@ async def run_edge_study(
             reg = registry.get(r["strategy"], r["market"])
             r["required_n"] = int(reg["required_n"]) if reg else None
             r["status"] = promotion_status(
-                r, registry=registry, n_trials=max(1, len(rows)),
+                r, registry=registry, n_trials=m,
                 significant=bool(r.get("has_edge")),
             )
         if changed:
@@ -572,6 +686,12 @@ def _load_disk_cache() -> None:
         sid, _, market = key.partition("|")
         at = float(entry.get("at") or 0.0)
         if not sid or not market or now - at >= _EDGE_TTL_S:
+            continue
+        row = entry.get("row")
+        # A row from before the episode fix is not stale, it is wrong: it
+        # carries rows-as-samples t-stats into sizing and slot decisions for
+        # up to six hours after the fix ships. Measure again instead.
+        if row is not None and row.get("unit") != SAMPLE_UNIT:
             continue
         _edge_cache[(sid, market)] = (at, entry.get("row"))
     if _edge_cache:

@@ -345,7 +345,8 @@ async def test_the_edge_cache_survives_a_restart(monkeypatch, tmp_path):
     E._loaded_from_disk = False
 
     async def study(*, days, strategy_id=None):
-        return [{"market": "crypto", "strategy": strategy_id, "n": 1989, "edge_bps": 29.7}]
+        return [{"market": "crypto", "strategy": strategy_id, "n": 1989, "edge_bps": 29.7,
+                 "unit": E.SAMPLE_UNIT}]
 
     monkeypatch.setattr(E, "run_edge_study", study)
     await E.strategy_edge("momentum_xs", "crypto")
@@ -382,3 +383,51 @@ async def test_a_stale_disk_cache_is_ignored(monkeypatch, tmp_path):
     E._load_disk_cache()
     assert ("momentum_xs", "crypto") not in E._edge_cache
     E.clear_cache()
+
+
+@pytest.mark.asyncio
+async def test_a_cached_row_counted_in_rows_is_not_restored(monkeypatch, tmp_path):
+    """Rows cached before the episode fix carry pseudo-replicated t-stats into
+    Kelly sizing and slot decisions for up to six hours; measure again instead."""
+    import json
+    import time
+
+    from matrix_shared import edge_study as E
+
+    path = tmp_path / "edge_cache.json"
+    path.write_text(json.dumps({
+        "momentum_xs|crypto": {"at": time.time(), "row": {"n": 799, "edge_bps": 36.0}},
+        "dca|crypto": {"at": time.time(), "row": {"n": 300, "unit": E.SAMPLE_UNIT}},
+    }))
+    monkeypatch.setattr(E, "_CACHE_PATH", path)
+    E.clear_cache()
+    E._loaded_from_disk = False
+    E._load_disk_cache()
+    assert ("momentum_xs", "crypto") not in E._edge_cache
+    assert ("dca", "crypto") in E._edge_cache
+    E.clear_cache()
+
+
+def test_a_registration_measured_on_rows_is_superseded_not_obeyed(tmp_path):
+    """momentum_xs registered 936 from rows-as-samples. That target is void:
+    it must stop binding, stay on file for audit, and a strategy that still
+    looks good in episodes registers afresh by the same rule."""
+    path = tmp_path / "edge_registry.json"
+    path.write_text(json.dumps({"momentum_xs/crypto": {
+        "strategy_id": "momentum_xs", "asset_class": "crypto", "registered_at": "2026-09-20",
+        "edge_bps": 31.07, "sd_bps": 165.5, "required_n": 936, "note": "",
+    }}))
+    reg = P.Registry.load(path)
+    assert reg.get("momentum_xs", "crypto") is None
+    assert reg.retire_stale() == 1
+    assert reg.retire_stale() == 0                       # idempotent
+    old = reg.entries["momentum_xs/crypto"]
+    assert old["superseded_at"] and old["required_n"] == 936
+    # unregistered again → never confirmed on the old target
+    assert P.status(_row(5000), registry=reg, n_trials=13, significant=True) == "provisional"
+
+    fresh = reg.register("momentum_xs", "crypto", edge_bps=20.0, sd_bps=100.0)
+    assert fresh["unit"] == P.UNIT and fresh["supersedes"]["required_n"] == 936
+    assert reg.get("momentum_xs", "crypto") == fresh
+    # and the fresh one is as immovable as any other
+    assert reg.register("momentum_xs", "crypto", edge_bps=900.0, sd_bps=1.0) == fresh
