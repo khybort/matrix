@@ -462,6 +462,90 @@ unified-margin venue where both legs share collateral, plus a maker-only cost mo
 already exceed the median gross). Re-cutting this year would only be more searching. Data stays in
 the session scratchpad `r3/`: spot klines 2.08 M rows, books, per-episode tables.
 
+## Round 3b: perp-perp hedge — 2026-10-09: 6 cells, nothing survives
+Question: can H1 drop the spot borrow? Instead of shorting spot, short the **same coin's perp on
+another venue**, where funding is usually less negative. P&L = Bybit funding received − hedge-venue
+funding paid + cross-venue basis change − cost. Scripts, pre-registration and timestamped log:
+`services/backtest/research/signal_2026_10_r3b/` (`PREREG.txt` committed alone in e192f10 before
+any hedge price, funding or book was fetched).
+
+**Design.**
+- Signal: Bybit settlement with raw rate ≤ X, X ∈ {−0.08, −0.15} %, any Bybit USDT perp (as H1).
+  Enter 1 h later: long the Bybit perp, short the hedge perp, equal notional.
+- Hedge venue at entry: among Binance / OKX / Bitget / Gate, take the one listing the coin with
+  the **least negative last settled rate per 8 h** (point in time). Each venue's own settlement
+  timestamps and interval; every raw settlement counted once, on mark-to-market notional.
+- Exit: fixed 24 h, fixed 48 h, or CONV (first Bybit settlement whose per-8h rate is above the
+  hedge venue's, cap 96 h). That gives **6 cells**.
+- Cost: 4 perp taker fees at VIP0 (Bybit 5.5; Binance / OKX 5.0; Bitget 6.0; Gate
+  max(5.0, contract field), which is 7.5 on some contracts), plus the four fills walked on today's
+  books (16:32 UTC) at $500 per leg. Median round-trip walk: Bybit 16.5 bps, Binance 8.7, OKX 11.5,
+  Bitget 14.7, Gate 25.6.
+- Pass: train net > 0 with week-clustered t ≥ 2. Then holdout net > 0, t ≥ 2, BY q ≤ 0.05 over
+  **m = 38 + 29 + 18 + 6 = 91**, and the 3× liquidation-adjusted net > 0.
+- **Data limit**: public funding history reaches back to 2025-10 on Binance only. Gate starts
+  2026-04-13, OKX 2026-06-29, Bitget 2026-07-11. So train is Binance (91 %) plus some Gate, and the
+  holdout is mostly Gate / Bitget. A venue is eligible only where its history exists at entry.
+  Coins delisted from Binance during the year are absent (exchangeInfo lists only live symbols).
+
+**Result: no cell passes train**, so nothing went to holdout (k = 0). Holdout figures were
+computed afterwards, for the record only. All figures: net bps per episode, as % of one leg's notional.
+"Per capital" is return on both margins: net / 2 unlevered, and the liquidation-adjusted net × 1.5
+at 3× per leg. t is clustered by ISO week (35 / 19 weeks).
+
+| cell | train net (t_wk) | n | per capital unlev / 3× | holdout net (t_wk) | n | per capital unlev / 3× |
+|---|---|---|---|---|---|---|
+| X08.F24 | −41.2 (−16.6) | 5 607 | −20.6 / −69.3 | −68.7 (−7.0) | 2 389 | −34.4 / −115.4 |
+| X08.F48 | −34.9 (−9.6) | 4 216 | −17.4 / −70.1 | −69.6 (−5.5) | 1 819 | −34.8 / −127.0 |
+| X08.CONV | −45.7 (−29.1) | 9 373 | −22.9 / −69.6 | −58.4 (−13.8) | 3 217 | −29.2 / −101.0 |
+| X15.F24 | −40.7 (−10.6) | 3 359 | −20.4 / −67.1 | −76.8 (−5.0) | 1 453 | −38.4 / −128.9 |
+| X15.F48 | −38.7 (−8.7) | 2 641 | −19.4 / −73.3 | −77.5 (−4.0) | 1 114 | −38.7 / −145.5 |
+| X15.CONV | −48.1 (−19.1) | 5 318 | −24.1 / −72.9 | −62.6 (−8.7) | 2 033 | −31.3 / −115.5 |
+
+BY: no train passer, so no new p-values enter the programme. Every cell's holdout p is > 0.999,
+and q = 1 for all six at m = 91. Medians are −50 … −66. 13 % of episodes are positive.
+Sensitivities, all negative: $5k per leg −103 … −185; fees ×2 −56 … −102; Binance-only reference
+−33 … −156; dropping ticker collisions (ON on Binance and H on Gate are different tokens; 18–142
+episodes per cell) −34 … −57.
+
+Decomposition, X08.F48 train / holdout (bps per episode): Bybit funding **+179 / +138**, hedge
+funding **−155 / −116**, basis −9 / −20, cost 50 / 72. **Gross before cost +15 / +2.**
+
+### Claims
+- **The squeeze is cross-venue.** At entry the least-negative venue was at a median −19 bps/8h,
+  against Bybit's −37 (train). Over the hold, though, it paid 86 % of what Bybit paid: shorts
+  crowd every venue, and the "calm" venue catches up within hours. Only 10 % of train entries
+  (37 % of holdout) had a hedge venue at ≥ 0. The entry-time differential does not rank outcomes:
+  gross by entry-differential quintile is +1 … +27 train and −82 … +55 holdout, with no monotone
+  pattern.
+- **What is left is smaller than four taker legs.** The realised differential plus basis comes to
+  +3 … +23 bps gross per episode. Four perp legs plus two walks cost 49–51 bps on Binance-heavy
+  train and 65–72 on Gate-heavy holdout. Fees alone (~21 bps) take nearly all of it: at zero
+  spread the best train cell would be −5 and the best holdout cell +2.
+- **Basis risk is real, and it hits the hedge leg.** The cross-venue basis closes against us on
+  average (−9 to −37 bps). On closes, the worst basis mark within the hold has a median of −14 to
+  −40 and a 1 % tail of −280 to −1 190 bps. The intrabar bound (Bybit low vs hedge high) has a
+  median of −400 to −760. Liquidation without top-up: **3×: 3–12 % of episodes; 5×: 7–30 %**. About ¾ of these are
+  the **short hedge leg**: the squeeze lifts the price on every venue, and the leg short on the
+  other venue is the one that blows up. Per unit of capital deployed, the result is −17 … −39 bps
+  unlevered, −67 … −146 at 3× and −127 … −256 at 5×.
+- **Consistent with the book.** `xexch_funding_arb` measured −25.6 bps (t = −3.56, n = 40) on 25
+  coins at a 0.05 %/8h threshold. Moving it to H1's design (extreme negative funding, wide
+  universe, best venue chosen point in time) makes it worse, not better: deeper squeezes bring a
+  larger hedge-leg funding bill and more basis and liquidation risk.
+
+### Consequences
+- No `xexch_funding_arb` parameter change can turn it into a surviving design; there is nothing to
+  route. On its own measured −25.6 (t = −3.56) plus this test, it is a retirement candidate (the
+  main session decides).
+- H1's edge stays tied to **spot** borrow. A perp short does not replace the borrowed spot leg,
+  because the perp short pays the same squeeze funding that the long collects. The binding unknown
+  is still borrow availability at signal time.
+- Round 3 and round 3b close both borrow-free variants of the negative-funding carry: the
+  positive-funding mirror (spot long) and the perp-perp hedge.
+- Data stayed in the session scratchpad (`r3b/`): venue funding and klines, `books.pkl`, and the
+  episode tables (`episodes_record.pkl`).
+
 ## Live path and funding decay (2026-10-09)
 **Live path, traced end to end** on the first settlements after the watchlist reached the module
 (c49f08b, 14:04 UTC):

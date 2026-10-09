@@ -406,3 +406,13 @@
   (`test_open_carry_equity_mark_not_above_realised_close`). (2) Risk yolu (kapanış, flatten, mark) asla sınırsız ağ
   çağrısı yapmaz: DB'den oku, yoksa açılışta kaydedilen tahmin; ağ gerekiyorsa döngüden önce eşzamanlı ve toplam
   zaman aşımıyla. Kaynak: `fix(paper): open carries marked at their realisable close; carry closes never wait on REST`.
+
+- **2026-10-09 — Perp hedge does not replace spot borrow; cross-venue funding backtests have hidden data limits.**
+  Round 3b (H1 with a short perp on another venue instead of a spot borrow): the "calmest" venue at entry still paid 86 %
+  of the squeeze funding over the hold — shorts crowd every venue — so the leg meant to be the hedge eats the carry
+  (train X08.F48: Bybit +179, hedge −155, basis −9, cost 50 bps). Three practical traps: (1) public funding history depth
+  differs by venue — Binance full, Gate 180 days, OKX ~3 months, Bitget ~270 settlements — so any cross-venue funding
+  backtest before mid-2026 is Binance-only; make the venue set point-in-time and say so in the pre-registration.
+  (2) Same ticker ≠ same token (ON on Binance, H on Gate): check the price ratio across venues at entry before trusting
+  a basis series. (3) Binance `fapi/v1/depth?limit=1000` weighs 20; ~400 books in parallel earned an HTTP 418 IP ban —
+  use limit=500 and ≥ 1 s spacing. Scripts: `services/backtest/research/signal_2026_10_r3b/`.

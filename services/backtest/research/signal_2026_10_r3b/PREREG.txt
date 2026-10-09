@@ -96,3 +96,22 @@ main session. If nothing survives, the negatives are written up.
 
 ------------------------------------------------------------------------------------------------
 LOG
+ 2026-10-09 15:38 UTC  fetching hedge-venue history (no return computed). Venue coverage of the 655 Bybit signal perps
+   (by base coin): Binance 443, OKX 367, Bitget 543, Gate 592; any venue 619. Gate's contract list reports
+   taker_fee_rate 7.5 bps on some contracts: charged max(5.0, contract field) for Gate (conservative,
+   decided before any return). Binance exchangeInfo lists only current symbols, so coins delisted from
+   Binance during the year are not Binance-eligible (counted as no-venue if no other venue).
+ 2026-10-09 16:44 UTC  data and books in, no return computed yet. Point-in-time funding history actually served: Binance
+   2025-10-01+, Gate 2026-04-13+, OKX 2026-06-29+, Bitget 2026-07-11+. Episodes (X08.F48): train 4 283 (Binance
+   3 900, Gate 383), holdout 1 829 (Gate 1 054, Bitget 377, Binance 262, OKX 136); no eligible venue 2 036 / 1 162
+   signal settlements. Books fetched 16:32 UTC for 606 Bybit + 1 107 hedge symbols (Binance depth refetched at
+   limit=500 after a 418 rate-limit; 6 SETTLING symbols have no book -> excluded). Median round-trip walk at
+   $500: Bybit 16.5 bps, Binance 8.7, OKX 11.5, Bitget 14.7, Gate 25.6. Running train next.
+ 2026-10-09 16:44 UTC  TRAIN verdict: no cell passes. All 6 cells negative, net -34.9 .. -48.1 bps/episode, week-clustered
+   t -8.7 .. -29.1 (n 2 641 .. 9 373). The hedge venue's funding is nearly as negative as Bybit's (X08.F48: Bybit leg
+   +179, hedge leg -155, basis -9, cost 50). Holdout k = 0: nothing is sent to holdout. Holdouts computed next
+   for the record only; decisions above are frozen.
+ 2026-10-09 16:47 UTC  RECORD (holdouts of train failures, not decisions): all 6 negative, -58.4 .. -77.5 bps/episode,
+   t_wk -4.0 .. -13.8; q = 1 at m = 91. Liquidation without top-up 3x 3-12 %, 5x 7-30 % of episodes, ~3/4 on the
+   short hedge leg. Ticker collisions found afterwards (ON on Binance, H on Gate are other tokens); excluding
+   them changes no sign. Write-up: docs/wiki/signal-research-2026-10.md, Round 3b.
