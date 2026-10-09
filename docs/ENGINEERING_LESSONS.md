@@ -308,3 +308,10 @@
   satırında (`strategy_configs.params.shadow_band`), alarm servisinde değil; satır kaybolursa modüldeki ön-kayıt devreye
   girer. Ayrıştırma (fonlama = net + defter + borç) kapalı carry'de sıfır fonlama ya da hiç borç kesilmemesi gibi muhasebe
   hatalarını ilk epizodda yakalar. Kaynak: `docs/wiki/operations.md` "Shadow tracker".
+
+- **2026-10-09 — Paylaşılan çalışma ağacında index de paylaşılır: `git add <benim yollarım>` + `git commit` başkasının stage'ini de götürür.**
+  Eşzamanlı ajanlar aynı repo'da çalışırken biri `shadow_tracker.py`, notify ve director dosyalarını stage etmişti; benim
+  `git add <iki dosya> && git commit` komutum o altı dosyayı da commit'e kattı (`git diff --cached --stat` aynı komut zincirindeydi,
+  çıktıyı commit'ten önce görmedim). `git reset --soft HEAD~1` ile geri alındı (index'leri stage'li kaldı), commit
+  `git commit -m … -- <yollar>` ile yeniden yapıldı: `--only` semantiği yalnız verilen yolları commit'ler, başkasının
+  stage'ine dokunmaz. Kural: çok ajanlı ağaçta commit her zaman `git commit -- <yollar>`; `git show --stat HEAD` ile hemen doğrula.
