@@ -51,8 +51,9 @@ def test_instantiate_stamps_version_and_applies_params():
     assert strat.symbols == ["BTCUSDT"]
     assert strat.high_funding == Decimal("0.0005")
     assert strat.horizon_seconds == 900
-    # class-level default untouched
-    assert FundingReversion.version == 1
+    # class-level default untouched (module default is v6, the 2026-09-15
+    # geometry rework; the DB config above overrides it per instance)
+    assert FundingReversion.version == 6
 
 
 def test_instantiate_without_config_keeps_defaults():

@@ -1,16 +1,25 @@
-"""Funding-rate mean-reversion v1.
+"""Funding-rate mean-reversion.
 
 Hypothesis: when funding rate is extreme (longs paying shorts heavily, or
 vice versa), the crowded side often unwinds. Trade the fade.
 
 Implementation:
     Read latest TickerSnapshot for each symbol.
-    If funding_rate > +HIGH_FUNDING (e.g. > +0.02%/8h): bias SHORT (fade longs)
-    If funding_rate < -HIGH_FUNDING:                    bias LONG (fade shorts)
+    If funding_rate > +HIGH_FUNDING: bias SHORT (fade longs)
+    If funding_rate < -HIGH_FUNDING: bias LONG (fade shorts)
     Confidence scales linearly with |funding| up to FUNDING_CAP.
 
-Horizon is several hours by default since funding is a slow-moving signal.
-For smoketest we keep it short.
+Geometry (2026-09-15 rework — the 10min/0.015% version had negative
+expectancy net of costs: win-rate ~34%, hit_sl:hit_tp ~2:1, ~-24 bps/trade):
+    * Entry threshold raised to ±0.05%/8h — only genuinely crowded funding,
+      not the near-neutral noise the loosened 0.015% gate was fading.
+    * Horizon extended to 4h so the thesis (crowded-side unwind, a slow,
+      funding-cycle phenomenon) has time to play out instead of being
+      dominated by 10min price noise. Fading the paying side also *earns*
+      funding carry over the hold, so a longer horizon aligns cost with edge.
+    * TP/SL widened (1.5% / 1.0%) to clear the fee band and pull the stop out
+      of the short-term noise range that was tripping it 2x more than TP.
+Live params come from `strategy_configs` (DB overrides these defaults).
 """
 
 from __future__ import annotations
@@ -30,13 +39,13 @@ from matrix_shared.markets.crypto import crypto_universe
 from strategy.base import PredictionDraft
 
 STRATEGY_ID = "funding_reversion"
-STRATEGY_VERSION = 1
-HIGH_FUNDING = Decimal("0.00015")  # ±0.015% (per 8h) — was 0.0002; loosened so more symbols clear the gate
-FUNDING_CAP = Decimal("0.0005")  # ±0.05% maps to confidence 1.0
-HORIZON_S = 600  # 10min outcome window — funding effects slower than trade flow
+STRATEGY_VERSION = 6
+HIGH_FUNDING = Decimal("0.0005")  # ±0.05% (per 8h) — only genuinely crowded funding; the 0.015% gate faded noise
+FUNDING_CAP = Decimal("0.0015")  # ±0.15% maps to confidence 1.0 (scales from ~0.33 at the entry threshold)
+HORIZON_S = 14400  # 4h — funding-cycle reversion is slow; also earns carry on the faded side
 DEFAULT_SYMBOLS = tuple(crypto_universe())
-DEFAULT_TP_PCT = Decimal("0.010")  # 1% take-profit
-DEFAULT_SL_PCT = Decimal("0.005")  # 0.5% stop-loss
+DEFAULT_TP_PCT = Decimal("0.015")  # 1.5% take-profit — clear of the fee band
+DEFAULT_SL_PCT = Decimal("0.010")  # 1.0% stop-loss — out of the short-term noise range
 
 
 class FundingReversion:
@@ -71,6 +80,7 @@ class FundingReversion:
                 tk_stmt = (
                     select(TickerSnapshot.funding_rate, TickerSnapshot.exchange)
                     .where(TickerSnapshot.symbol == symbol)
+                    .where(TickerSnapshot.exchange == "bybit")
                     .where(TickerSnapshot.funding_rate.isnot(None))
                     .order_by(desc(TickerSnapshot.snapshot_ts))
                     .limit(1)
