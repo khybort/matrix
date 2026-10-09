@@ -395,3 +395,14 @@
   okuyanları aynı commit'te `exchange`'e sabitle. (2) Yeni bir `side` ailesi eklerken `grep -rn "'long','short'\|(\"long\", \"short\")"`
   ile her filtreyi gözden geçir; "yön" mü soruyor (doğru), "işlem yapıyor mu" mu (carry'yi de saymalı). Kaynak: düzeltmeler
   `fix(agent): read ticker and book features from the traded perp venue only`, `fix(slots): a carry strategy's signals count as running`.
+
+- **2026-10-09 — Bir risk kapısını besleyen mark, kapanışın realize edeceğinden iyimser olamaz; kapanış döngüsü ağ beklemez.**
+  Kapanış muhasebesi düzeltildikçe (settlement fonlaması, 4 ücret + kitap yürüyüşü, borç serisi) equity markı eski
+  `hours/8 × canlı oran` formülünde kaldı: açık bir $500 book-priced carry ~$3–5 fazla değerlenip günlük zarar devre
+  kesicisi geç tetikleniyordu; 1/2/4 saatlik fonlama aralıkları da yanlış işaretleniyordu. Aynı denetimde kapanış kitabı
+  `_close_position` içinde bacak başına 10 s REST zaman aşımıyla çekiliyordu → yavaş bir REST bir carry kapanışını ~20 s
+  tutup aynı tick'teki TP/SL kapanışlarını geciktiriyordu. Kural: (1) Kapanış PnL'ini değiştiren her commit equity markını
+  (`_current_equity`) da aynı commit'te değiştirir; test "mark ≤ aynı fiyatlarla kapanış" eşitsizliğini korur
+  (`test_open_carry_equity_mark_not_above_realised_close`). (2) Risk yolu (kapanış, flatten, mark) asla sınırsız ağ
+  çağrısı yapmaz: DB'den oku, yoksa açılışta kaydedilen tahmin; ağ gerekiyorsa döngüden önce eşzamanlı ve toplam
+  zaman aşımıyla. Kaynak: `fix(paper): open carries marked at their realisable close; carry closes never wait on REST`.

@@ -13,6 +13,7 @@ See docs/TRADING.md for the risk rules this engine enforces.
 
 from __future__ import annotations
 
+import math
 import os
 
 import uuid
@@ -257,19 +258,6 @@ async def _latest_funding_rate_on(symbol: str, exchange: str) -> Decimal | None:
         return Decimal(row.funding_rate) if row else None
 
 
-async def _xexch_short_venue(session, prediction_id: uuid.UUID) -> str | None:
-    """Read the venue that the xexch carry SHORTS (high-funding leg) from the
-    prediction context, fixed at open. `session` must be a SHARED-tier session
-    (predictions live there)."""
-    row = (await session.execute(
-        select(Prediction.context).where(Prediction.id == prediction_id)
-    )).first()
-    if row is None or not row.context:
-        return None
-    venue = row.context.get("xexch_short_venue")
-    return venue if venue in ("bybit", "binance") else None
-
-
 async def _carry_accrual_rate(pos: PaperPosition, short_venue: str | None = None) -> Decimal | None:
     """Signed 8h rate the carry is CAPTURING (positive = earning).
 
@@ -484,6 +472,81 @@ def _trailing_stop_should_trip(
     return drop >= pct
 
 
+# Per open carry, funding settled so far: (counted through, signed capture as a
+# fraction of notional). Advanced incrementally each tick so the 5 s equity mark
+# never rescans a 48 h hold; rebuilt from opened_at after a restart.
+_CARRY_SETTLED: dict[uuid.UUID, tuple[datetime, Decimal]] = {}
+# Per open carry, borrow accrued: (started hours, USD). Changes once an hour.
+_CARRY_BORROW: dict[uuid.UUID, tuple[int, Decimal]] = {}
+# A settlement is counted once this long has passed, so the snapshot naming it
+# has been ingested (it is taken before the settlement, written within seconds).
+_SETTLE_LAG = timedelta(seconds=60)
+
+
+async def _carry_settled_so_far(pos: PaperPosition, short_venue: str | None, now: datetime) -> Decimal:
+    """`_carry_settled_capture(pos, short_venue, now)`, accumulated: settlements
+    up to `now - lag` are cached; a settlement inside the lag counts only if it
+    cost the carry (a payment the close may already book is never left out)."""
+    opened = pos.opened_at if pos.opened_at.tzinfo else pos.opened_at.replace(tzinfo=UTC)
+    upto = max(opened, now - _SETTLE_LAG)
+    through, total = _CARRY_SETTLED.get(pos.id, (opened, Decimal("0")))
+    legs = _carry_legs(pos, short_venue)
+    if upto > through:
+        for venue, sign in legs:
+            total += sign * await settled_funding(pos.symbol, venue, through, upto)
+        _CARRY_SETTLED[pos.id] = (upto, total)
+    recent = Decimal("0")
+    for venue, sign in legs:
+        recent += sign * await settled_funding(pos.symbol, venue, upto, now)
+    return total + min(recent, Decimal("0"))
+
+
+async def _carry_borrow_accrued(pos: PaperPosition, ctx: dict, now: datetime) -> Decimal:
+    """Borrow the close would charge now (same inputs as `_close_position`),
+    recomputed only when another hour has started."""
+    borrow_h = ctx.get("borrow_rate_hourly")
+    if not borrow_h:
+        return Decimal("0")
+    opened = pos.opened_at if pos.opened_at.tzinfo else pos.opened_at.replace(tzinfo=UTC)
+    hours = math.ceil(max(0.0, (now - opened).total_seconds()) / 3600.0 - 1e-9)
+    cached = _CARRY_BORROW.get(pos.id)
+    if cached is not None and cached[0] == hours:
+        return cached[1]
+    stress = float((ctx.get("book_open") or {}).get("borrow_stress", carry_books.BORROW_STRESS))
+    venue = ctx.get("borrow_venue") or ctx.get("spot_venue")
+    coin = str(ctx.get("spot_symbol") or pos.symbol).removesuffix("USDT")
+    if venue:
+        charge, _ = await carry_books.borrow_series_charge(
+            pos.notional_usd, str(venue), coin, opened, now, Decimal(str(borrow_h)), stress
+        )
+    else:
+        charge = carry_books.borrow_charge(
+            pos.notional_usd, Decimal(str(borrow_h)), stress, (now - opened).total_seconds()
+        )
+    _CARRY_BORROW[pos.id] = (hours, charge)
+    return charge
+
+
+async def _carry_mark_usd(pos: PaperPosition, ctx: dict, now: datetime) -> Decimal:
+    """An open carry at what closing it now would realise, never more: funding
+    settled so far, minus the full round trip (book-priced: four fees, the two
+    walks paid at open, the two closing walks at the worse of the book now and
+    the open-time estimate; otherwise two legs' round-trip cost), minus borrow
+    accrued. Equity used to credit `hours/8 x live rate` with no costs, which
+    overstated a $500 book-priced carry by ~$3-5 and let the daily-loss circuit
+    trip late; it also mis-marked coins settling every 1/2/4 h."""
+    short_venue = ctx.get("xexch_short_venue") if pos.side == "xexch_carry" else None
+    pnl = pos.notional_usd * await _carry_settled_so_far(pos, short_venue, now)
+    book_open = ctx.get("book_open")
+    if book_open:
+        perp_b, spot_b = await carry_books.legs(pos.symbol, ctx, allow_rest=False)
+        cost_bps = carry_books.mark_cost_bps(book_open, perp_b, spot_b, float(pos.notional_usd))
+        pnl -= pos.notional_usd * Decimal(str(cost_bps)) / Decimal("10000")
+    else:
+        pnl -= pos.notional_usd * round_trip_cost_pct(pos.asset_class, pos.symbol) * 2
+    return pnl - await _carry_borrow_accrued(pos, ctx, now)
+
+
 async def _current_equity(session, wallet: Wallet) -> tuple[Decimal, Decimal, int]:
     """Reads paper_positions from the SHARED session passed in, but pulls
     mark prices from the LOCAL tier (one query per open position).
@@ -495,16 +558,20 @@ async def _current_equity(session, wallet: Wallet) -> tuple[Decimal, Decimal, in
     )
     open_positions = list((await session.execute(open_stmt)).scalars())
 
+    carry_ctx: dict[uuid.UUID, dict] = {}
+    carry_ids = [p.prediction_id for p in open_positions if _is_carry(p.side)]
+    if carry_ids:
+        carry_ctx = {
+            pid: ctx or {}
+            for pid, ctx in (await session.execute(
+                select(Prediction.id, Prediction.context).where(Prediction.id.in_(carry_ids))
+            )).all()
+        }
+    now = datetime.now(UTC)
     unrealized = Decimal("0")
     for pos in open_positions:
         if _is_carry(pos.side):
-            short_venue = None
-            if pos.side == "xexch_carry":
-                short_venue = await _xexch_short_venue(session, pos.prediction_id)
-            fr = await _carry_accrual_rate(pos, short_venue=short_venue)
-            # mark is irrelevant for a carry; pass opened_price as a placeholder
-            # so the function signature is satisfied.
-            unrealized += _unrealized_pnl(pos, pos.opened_price, funding_rate_8h=fr)
+            unrealized += await _carry_mark_usd(pos, carry_ctx.get(pos.prediction_id, {}), now)
         else:
             mark = await _latest_price(pos.symbol, pos.asset_class)
             if mark is None:
@@ -1329,7 +1396,10 @@ def _tp_sl_reason(pos: PaperPosition, pred: Prediction, mark: Decimal) -> str | 
     return None
 
 
-async def _close_position(pos: PaperPosition, pred: Prediction, reason: str, now: datetime, *, force: bool = False) -> bool:
+async def _close_position(
+    pos: PaperPosition, pred: Prediction, reason: str, now: datetime, *, force: bool = False,
+    books: tuple | None = None,
+) -> bool:
     """Close one open paper position at the current mark (with market costs),
     write its Outcome and release wallet capital atomically. Returns False when
     no fresh price exists and `force` is off (the caller retries next tick);
@@ -1354,7 +1424,12 @@ async def _close_position(pos: PaperPosition, pred: Prediction, reason: str, now
             # Book-priced carry (backtest.carry_books): four taker fees, the
             # two opening fills walked at open, the two closing fills walked
             # now. A flat cost made an illiquid coin's spread free.
-            perp_b, spot_b = await carry_books.legs(pos.symbol, ctx)
+            # `books` come from close_due_positions' bounded concurrent fetch;
+            # without them (flatten) only ingested books are read: a close never
+            # waits on REST, a missing leg is priced at the open-time estimate.
+            perp_b, spot_b = books if books is not None else await carry_books.legs(
+                pos.symbol, ctx, allow_rest=False
+            )
             cost = carry_books.close_cost_bps(book_open, perp_b, spot_b, float(pos.notional_usd))
             pnl_usd -= pos.notional_usd * Decimal(str(cost["total_bps"])) / Decimal("10000")
             context_patch["book_close"] = cost
@@ -1473,6 +1548,8 @@ async def _close_position(pos: PaperPosition, pred: Prediction, reason: str, now
                 reason=reason,
             )
         )
+    _CARRY_SETTLED.pop(pos.id, None)
+    _CARRY_BORROW.pop(pos.id, None)
     logger.info(
         f"closed[{reason}] {pos.side} {pos.symbol} entry={pos.opened_price:.4f} "
         f"exit={exit_px:.4f} pnl={pnl_usd:.4f}USD ({pnl_pct*100:.3f}%) "
@@ -1564,10 +1641,22 @@ async def close_due_positions() -> int:
             work.append((pos, pred, "funding_flip"))
             handled_ids.add(pos.id)
 
+    # Book-priced carries close last, on books fetched for all of them at once
+    # within CLOSE_BOOK_TIMEOUT_S: a slow REST depth used to hold the loop ~10 s
+    # per leg, delaying every TP/SL close queued behind the carry.
+    def _needs_books(pos: PaperPosition, pred: Prediction) -> bool:
+        return _is_carry(pos.side) and bool((pred.context or {}).get("book_open"))
+
     closed = 0
     for pos, pred, reason in work:
-        if await _close_position(pos, pred, reason, now):
+        if not _needs_books(pos, pred) and await _close_position(pos, pred, reason, now):
             closed += 1
+    carries = [(pos, pred, reason) for pos, pred, reason in work if _needs_books(pos, pred)]
+    if carries:
+        books = await carry_books.legs_for_close({pos.id: (pos.symbol, pred.context) for pos, pred, _ in carries})
+        for pos, pred, reason in carries:
+            if await _close_position(pos, pred, reason, now, books=books[pos.id]):
+                closed += 1
     return closed
 
 

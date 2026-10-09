@@ -177,7 +177,7 @@ async def _pred(sid: str, *, ctx: dict = CTX, hours_ago: float = 0.0) -> uuid.UU
 
 
 def _legs(monkeypatch, perp, spot):
-    async def fake(symbol, context):
+    async def fake(symbol, context, **_kw):
         return perp, spot
     monkeypatch.setattr(CB, "legs", fake)
 
@@ -294,3 +294,161 @@ async def test_close_charges_recorded_borrow_series(book_wallet, monkeypatch):
         async with local_session_scope() as session:
             await session.execute(text("DELETE FROM margin_borrow_rates WHERE venue = 'binance' AND coin = :c"),
                                   {"c": coin})
+
+
+# ── equity mark of an open carry (daily-loss circuit input) ─────────────────
+
+def test_mark_cost_never_below_close_cost():
+    """The mark takes each closing walk at the worse of the book now and the
+    open-time estimate; a close charges one of the two."""
+    _, book_open = CB.size_and_price_open(DEEP, ladder(100.0, 5.0, 10_000), 500, confirmed=False)
+    for perp, spot in [(DEEP, DEEP), (DEEP, ladder(100.0, 20.0, 10_000)), (None, None), (DEEP, None)]:
+        close = CB.close_cost_bps(book_open, perp, spot, 500)["total_bps"]
+        assert CB.mark_cost_bps(book_open, perp, spot, 500) >= close - 1e-9
+    # a book better than the estimate: the close pays 1 bps on the spot leg, the mark keeps 5
+    assert CB.mark_cost_bps(book_open, DEEP, DEEP, 500) == pytest.approx(
+        CB.close_cost_bps(book_open, DEEP, DEEP, 500)["total_bps"] + 4.0, rel=1e-6)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_spot_half_spread", [1.0, 5.0, 20.0])
+async def test_open_carry_equity_mark_not_above_realised_close(book_wallet, monkeypatch, close_spot_half_spread):
+    """Funding settled so far (a 1 h-interval coin: three settlements in a
+    2.5 h hold), minus four fees and four walks, minus borrow accrued: the
+    wallet's unrealised for the carry is <= the PnL closing it books on the
+    same books and the same instant. The old `hours/8 x live rate` mark had
+    no costs at all."""
+    from matrix_shared.models import TickerSnapshot
+    from backtest import paper_trade as PT
+
+    wallet_id, sid = book_wallet
+    spot_now = ladder(100.0, close_spot_half_spread, 10_000)
+    _legs(monkeypatch, DEEP, spot_now)
+    book_open = {"perp_buy_bps": 1.0, "spot_sell_bps": 5.0, "perp_sell_est_bps": 1.0,
+                 "spot_buy_est_bps": 5.0, "borrow_stress": 3.0, "notional_usd": 500.0}
+    now = datetime.now(timezone.utc)
+    opened = now - timedelta(hours=2.5)
+    base = now.replace(minute=0, second=0, microsecond=0)
+    settlements = [s for s in (base - timedelta(hours=k) for k in range(4)) if opened < s <= now - timedelta(minutes=2)]
+    async with local_session_scope() as session:
+        await session.execute(delete(TickerSnapshot).where(TickerSnapshot.symbol == SYM))
+        for s in settlements:  # inverse_carry earns negative funding: 3 x 0.001
+            session.add(TickerSnapshot(
+                id=uuid.uuid4(), exchange="bybit", symbol=SYM, snapshot_ts=s - timedelta(minutes=1),
+                last_price=Decimal("100"), mark_price=Decimal("100"), funding_rate=Decimal("-0.001"),
+                next_funding_ts=s))
+    try:
+        pid = await _pred(sid, ctx={**CTX, "book_open": book_open}, hours_ago=2.5)
+        notional = Decimal("500")
+        async with shared_session_scope() as session:
+            session.add(PaperPosition(
+                id=uuid.uuid4(), prediction_id=pid, symbol=SYM, exchange="bybit", asset_class=ASSET,
+                side="inverse_carry", notional_usd=notional, opened_at=opened,
+                opened_price=Decimal("100"), status="open", wallet_id=wallet_id,
+            ))
+        async with shared_session_scope() as session:
+            pos = (await session.execute(
+                select(PaperPosition).where(PaperPosition.prediction_id == pid))).scalar_one()
+            pred = await session.get(Prediction, pid)
+            from matrix_shared.models import Wallet
+            wallet = await session.get(Wallet, wallet_id)
+            equity, unrealized, n_open = await PT._current_equity(session, wallet)
+        mark = await PT._carry_mark_usd(pos, pred.context, now)
+        assert n_open == 1 and unrealized == pytest.approx(mark, abs=Decimal("0.000001"))
+        funding = notional * Decimal("0.001") * len(settlements)
+        borrow = notional * Decimal("0.00002") * 3 * 3  # three started hours, entry x stress
+        cost_bps = Decimal("31") + 1 + 5 + 1 + Decimal(str(max(5.0, close_spot_half_spread)))
+        assert mark == pytest.approx(funding - notional * cost_bps / 10000 - borrow, abs=Decimal("0.0001"))
+
+        assert await PT._close_position(pos, pred, "hit_horizon", now)
+        async with shared_session_scope() as session:
+            out = (await session.execute(select(Outcome).where(Outcome.prediction_id == pid))).scalar_one()
+        assert mark <= out.pnl_usd + Decimal("0.000001")
+        if close_spot_half_spread >= 5.0:  # book now at or worse than the estimate: the two agree
+            assert mark == pytest.approx(out.pnl_usd, abs=Decimal("0.0001"))
+        assert pos.id not in PT._CARRY_SETTLED and pos.id not in PT._CARRY_BORROW
+    finally:
+        async with local_session_scope() as session:
+            await session.execute(delete(TickerSnapshot).where(TickerSnapshot.symbol == SYM))
+
+
+# ── close loop never waits on REST ──────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_legs_for_close_bounded_when_rest_hangs(monkeypatch):
+    import asyncio
+    import time
+
+    async def no_db(*a, **k):
+        return None
+
+    async def hang(*a, **k):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(CB, "db_book", no_db)
+    monkeypatch.setattr(CB, "rest_book", hang)
+    t0 = time.monotonic()
+    got = await CB.legs_for_close({"a": ("XUSDT", CTX), "b": ("YUSDT", CTX)}, timeout_s=0.3)
+    assert time.monotonic() - t0 < 1.5
+    assert got == {"a": (None, None), "b": (None, None)}
+
+    async def db_perp_only(venue, category, symbol):
+        return DEEP if category == "linear" else None
+
+    monkeypatch.setattr(CB, "db_book", db_perp_only)
+    got = await CB.legs_for_close({"a": ("XUSDT", CTX)}, timeout_s=0.3)
+    assert got["a"] == (DEEP, None)  # the close prices the spot leg at the open estimate
+
+
+@pytest.mark.asyncio
+async def test_close_loop_closes_tpsl_before_and_without_waiting_on_carry_books(book_wallet, monkeypatch):
+    """A due book-priced carry whose REST books hang: the directional TP close
+    runs first, and the carry closes on whatever the bounded fetch returned."""
+    import asyncio
+    import time
+    from backtest import paper_trade as PT
+
+    wallet_id, sid = book_wallet
+
+    async def no_db(*a, **k):
+        return None
+
+    async def hang(*a, **k):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(CB, "db_book", no_db)
+    monkeypatch.setattr(CB, "rest_book", hang)
+    monkeypatch.setattr(CB, "CLOSE_BOOK_TIMEOUT_S", 0.3)
+
+    book_open = {"perp_buy_bps": 1.0, "spot_sell_bps": 5.0, "perp_sell_est_bps": 1.0,
+                 "spot_buy_est_bps": 5.0, "borrow_stress": 3.0, "notional_usd": 200.0}
+    carry_pid = await _pred(sid, ctx={**CTX, "book_open": book_open}, hours_ago=49)  # past close_by
+    dir_pid = uuid.uuid4()
+    gen = datetime.now(timezone.utc)
+    async with shared_session_scope() as session:
+        session.add(Prediction(
+            id=dir_pid, strategy_id=sid, strategy_version=1, asset_class=ASSET, symbol=SYM,
+            exchange="bybit", side="long", confidence=Decimal("0.9"), horizon_seconds=3600,
+            generated_at=gen, entry_price_ref=Decimal("90"), close_by=gen + timedelta(hours=1),
+            status="open", tp_pct=Decimal("0.05"), context={}))
+        await session.flush()
+        for pid, side, px in ((carry_pid, "inverse_carry", "100"), (dir_pid, "long", "90")):
+            session.add(PaperPosition(
+                id=uuid.uuid4(), prediction_id=pid, symbol=SYM, exchange="bybit", asset_class=ASSET,
+                side=side, notional_usd=Decimal("200"), opened_at=gen - timedelta(hours=1),
+                opened_price=Decimal(px), status="open", wallet_id=wallet_id))
+
+    calls: list[tuple] = []
+
+    async def record(pos, pred, reason, now, *, force=False, books=None):
+        calls.append((pred.id, reason, books, time.monotonic()))
+        return False  # record only: never close (other open positions in the shared DB included)
+
+    monkeypatch.setattr(PT, "_close_position", record)
+    t0 = time.monotonic()
+    await PT.close_due_positions()
+    assert time.monotonic() - t0 < 10
+    ours = {c[0]: c for c in calls if c[0] in (carry_pid, dir_pid)}
+    assert ours[dir_pid][1] == "hit_tp" and ours[dir_pid][2] is None
+    assert ours[carry_pid][1] == "hit_horizon" and ours[carry_pid][2] == (None, None)
+    assert ours[dir_pid][3] < ours[carry_pid][3]  # the TP close did not queue behind the carry's books

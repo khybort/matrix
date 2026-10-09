@@ -26,6 +26,7 @@ matrix_shared.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 from dataclasses import dataclass
@@ -121,9 +122,9 @@ _BOOK_URLS = {
 _DB_EXCHANGE = {("bybit", "linear"): "bybit", ("bybit", "spot"): "bybit-spot", ("binance", "spot"): "binance-spot"}
 
 
-async def fetch_book(venue: str, category: str, symbol: str) -> Book | None:
-    """Ingested snapshot <= 30 s old, else the venue's public REST depth."""
-    if (venue, category) not in _BOOK_URLS:
+async def db_book(venue: str, category: str, symbol: str) -> Book | None:
+    """Ingested snapshot <= BOOK_MAX_AGE_S old; one indexed read, no network."""
+    if (venue, category) not in _DB_EXCHANGE:
         return None
     async with local_session_scope() as session:
         row = (
@@ -140,8 +141,15 @@ async def fetch_book(venue: str, category: str, symbol: str) -> Book | None:
         b, a = parse_levels(row[0]), parse_levels(row[1])
         if b and a:
             return Book(b, a, "db")
+    return None
+
+
+async def rest_book(venue: str, category: str, symbol: str, timeout_s: float = 10.0) -> Book | None:
+    """The venue's public REST depth; None on any failure."""
+    if (venue, category) not in _BOOK_URLS:
+        return None
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
             r = await client.get(_BOOK_URLS[(venue, category)].format(s=symbol))
             r.raise_for_status()
             j = r.json()
@@ -156,10 +164,56 @@ async def fetch_book(venue: str, category: str, symbol: str) -> Book | None:
     return Book(b, a, "rest") if b and a else None
 
 
-async def legs(symbol: str, context: dict) -> tuple[Book | None, Book | None]:
-    perp = await fetch_book("bybit", "linear", symbol)
-    spot = await fetch_book(str(context["spot_venue"]), "spot", str(context["spot_symbol"]))
+async def fetch_book(venue: str, category: str, symbol: str, *, allow_rest: bool = True) -> Book | None:
+    """Ingested snapshot <= 30 s old, else (when allowed) the venue's REST depth."""
+    book = await db_book(venue, category, symbol)
+    if book is None and allow_rest:
+        book = await rest_book(venue, category, symbol)
+    return book
+
+
+def _leg_keys(symbol: str, context: dict) -> tuple[tuple[str, str, str], tuple[str, str, str]]:
+    return ("bybit", "linear", symbol), (str(context["spot_venue"]), "spot", str(context["spot_symbol"]))
+
+
+async def legs(symbol: str, context: dict, *, allow_rest: bool = True) -> tuple[Book | None, Book | None]:
+    perp_k, spot_k = _leg_keys(symbol, context)
+    perp = await fetch_book(*perp_k, allow_rest=allow_rest)
+    spot = await fetch_book(*spot_k, allow_rest=allow_rest)
     return perp, spot
+
+
+# Overall budget for the REST books of every carry closing in one tick. A close
+# never waits longer: a leg without a book by then is priced at the estimate
+# recorded at open (`close_source = entry_estimate`).
+CLOSE_BOOK_TIMEOUT_S = float(os.environ.get("MATRIX_CARRY_CLOSE_BOOK_TIMEOUT_S", "3"))
+
+
+async def legs_for_close(carries: dict, timeout_s: float | None = None) -> dict:
+    """{key: (symbol, context)} -> {key: (perp, spot)}. DB books first; legs
+    without one are fetched over REST concurrently, all within `timeout_s`
+    (default CLOSE_BOOK_TIMEOUT_S) together; whatever has not answered is None."""
+    timeout_s = CLOSE_BOOK_TIMEOUT_S if timeout_s is None else timeout_s
+    want: dict[tuple[str, str, str], Book | None] = {}
+    for symbol, ctx in carries.values():
+        for k in _leg_keys(symbol, ctx):
+            if k not in want:
+                want[k] = await db_book(*k)
+    tasks = {asyncio.create_task(rest_book(*k, timeout_s=timeout_s)): k for k, b in want.items() if b is None}
+    if tasks:
+        done, pending = await asyncio.wait(tasks, timeout=timeout_s)
+        for t in pending:
+            t.cancel()
+        for t in done:
+            want[tasks[t]] = t.result()  # rest_book never raises
+        if pending:
+            logger.warning(f"carry_books: {len(pending)} REST book(s) not back in {timeout_s:.0f}s; "
+                           "closing on the open-time estimate")
+    out = {}
+    for key, (symbol, ctx) in carries.items():
+        perp_k, spot_k = _leg_keys(symbol, ctx)
+        out[key] = (want[perp_k], want[spot_k])
+    return out
 
 
 def size_and_price_open(
@@ -208,6 +262,17 @@ def close_cost_bps(book_open: dict, perp: Book | None, spot: Book | None, usd: f
     }
     out["total_bps"] = round(sum(v for k, v in out.items() if k.endswith("_bps")), 3)
     return out
+
+
+def mark_cost_bps(book_open: dict, perp: Book | None, spot: Book | None, usd: float) -> float:
+    """Cost (bps) an open carry is marked at for the equity curve: the
+    close_cost_bps total, but each closing walk at the WORSE of the book now
+    and the estimate recorded at open. A close charges one of the two, so the
+    mark is never cheaper than closing on the same books would be."""
+    c = close_cost_bps(book_open, perp, spot, usd)
+    return c["total_bps"] + max(0.0, float(book_open["perp_sell_est_bps"]) - c["perp_sell_bps"]) + max(
+        0.0, float(book_open["spot_buy_est_bps"]) - c["spot_buy_bps"]
+    )
 
 
 def borrow_charge(notional: Decimal, hourly: Decimal, stress: float, held_s: float) -> Decimal:
