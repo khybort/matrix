@@ -30,6 +30,7 @@ from matrix_shared.models import StrategyConfig
 from sqlalchemy import select
 
 from strategy.base import PredictionDraft
+from strategy.freshness import apply_freshness_guard
 from strategy.lessons import filter_drafts
 from strategy.modules import STRATEGIES_BY_MARKET
 from strategy.params import instantiate
@@ -198,6 +199,9 @@ async def _tick() -> int:
                 drafts.extend(ds)
             except Exception as e:
                 logger.exception(f"strategy {strat.id} ({market.name}) failed: {e}")
+
+    # Frozen feed (outage) → frozen prices: stand down rather than signal on them.
+    drafts = await apply_freshness_guard(drafts)
 
     # Data-driven filter: drop candidates that match an active 'avoid' lesson.
     # Keeps strategy modules symbol-agnostic; lessons are produced by the
