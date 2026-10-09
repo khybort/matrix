@@ -83,3 +83,9 @@ for why the books showed 0 % wins.
   (+65, t=4.9 at 3x borrow). inverse_carry itself mostly fired on coins with
   no Bybit spot margin. New shadow strategy `neg_funding_carry` carries the
   surviving rule; it has no paper evidence yet and nothing is promoted.
+
+**2026-10-09 — `cash_and_carry` retired** (v4 config `8ba022eb…` → `retired`, no open positions). Round 3
+(`signal-research-2026-10.md`, "Round 3: positive-funding mirror") found no threshold/universe/hold that
+pays: on the 25-coin universe it nets −39 bps per episode (t_wk −114 train, −137 holdout), and widening it
+to the carry watchlist trades only rejected cells. At v4's 0.08 % floor it was silent on the traded set.
+To revive: set the row back to `active` — but only with new evidence.
