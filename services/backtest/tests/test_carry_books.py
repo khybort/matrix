@@ -92,6 +92,14 @@ def test_borrow_per_started_hour_at_stress():
     assert CB.borrow_charge(n, h, 3.0, 48 * 3600 + 1) == n * h * 3 * 49
 
 
+def test_book_priced_carry_holds_to_horizon():
+    """No funding-flip exit for a carry that names its spot leg; flat carries keep it."""
+    from backtest.paper_trade import _flip_exit_applies
+    assert not _flip_exit_applies(Prediction(context=dict(CTX)))
+    assert _flip_exit_applies(Prediction(context={"funding_rate_8h": "-0.001"}))
+    assert _flip_exit_applies(Prediction(context=None))
+
+
 # ── engine ───────────────────────────────────────────────────────────────────
 
 _trade_ids: list[str] = []

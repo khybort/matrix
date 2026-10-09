@@ -314,6 +314,15 @@ async def _carry_settled_capture(pos: PaperPosition, short_venue: str | None, no
     return total
 
 
+def _flip_exit_applies(pred: Prediction) -> bool:
+    """A book-priced carry (context names its spot leg: neg_funding_carry)
+    holds to its horizon, as the study it comes from did. Exiting at the first
+    adverse reading made the 48 h episode worse there (+82 vs +104 bps train,
+    +112 vs +135 holdout), and here every early exit also pays the four walked
+    legs (~50 bps) on a fraction of the funding it was opened for."""
+    return not carry_books.is_book_priced(pred.context)
+
+
 async def _carry_flip_confirmed(pos: PaperPosition, short_venue: str | None, now: datetime) -> bool:
     """The captured rate has been adverse for the whole confirmation window.
     A single reading flipped on Bybit's post-settlement placeholder and closed
@@ -1538,7 +1547,7 @@ async def close_due_positions() -> int:
     # funding>0, for xexch the venue differential collapsing/inverting. The
     # direction-signed rate makes all three a single `< 0` test.
     for pos, pred in funding_flip_rows:
-        if pos.id in handled_ids:
+        if pos.id in handled_ids or not _flip_exit_applies(pred):
             continue
         short_venue = pred.context.get("xexch_short_venue") if pred.context else None
         if await _carry_flip_confirmed(pos, short_venue, now):
