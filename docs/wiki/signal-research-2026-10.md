@@ -353,3 +353,111 @@ reopened with a **new pre-registered test on new data**: for H8b, the live
 OI. Re-cutting these periods would just be more searching. The ≥ 45 bps-gross
 search came up empty on tick data. The only surviving edge is still round 1's
 hedged negative-funding carry.
+
+## Round 3: positive-funding mirror — 2026-10-09: 18 cells, nothing survives
+Question: H1 lost most of its edge to borrow realism. Its mirror needs no loan: after an extreme
+**positive** settlement, short the perp, buy spot, collect funding. `cash_and_carry` already trades
+this, with a low threshold on the 25-coin universe. Scripts, pre-registration and its timestamped log:
+`services/backtest/research/signal_2026_10_r3/` (`PREREG.txt` committed alone in 8346dbd before any
+return was computed).
+
+**Design.**
+- Data: round 1's year of Bybit funding, 1h klines and premium. For the hedge, 1h spot klines
+  (Bybit `<COIN>USDT`, else Binance, taking whichever venue has a price at entry) for the whole year.
+  Today's full books for every perp/spot pair.
+- Signal: a settlement with raw rate ≥ X, X ∈ {0.05, 0.08, 0.15} %. Enter 1 h later, short perp and
+  long spot at equal notional.
+- Exit: hold 24 / 48 / 96 h, fixed or with a flip exit (leave one hour after the first settlement
+  ≤ 0). That gives **18 cells**. One episode per (cell, symbol) at a time. Round 1's split.
+- Net = funding at every settlement, on mark-to-market notional + real spot hedge
+  (spot return − perp return) − cost. Cost = 4 taker fees (31 bps) + the four fills walked on
+  today's books at $500 per leg. No borrow. A pair without a book today is excluded (counted:
+  3–112 per cell).
+- Pass: train net > 0 with week-clustered t ≥ 2. Then holdout net > 0, t ≥ 2 and BY q ≤ 0.05
+  over the whole programme, **m = 38 + 29 + 18 = 85**.
+
+**Result: no cell passes train**, so nothing went to holdout (k = 0). Holdout figures below were
+computed afterwards, for the record only. Net is bps per episode; t is clustered by ISO week.
+Gross = funding + hedge. Fees-only = gross − 31, a zero-spread bound.
+
+| cell | train net (t_wk) | n | holdout net (t_wk) | n | holdout gross | fees-only holdout | BY q |
+|---|---|---|---|---|---|---|---|
+| X 0.05 %, 24 h / flip | −75.6 (−15.5) / −62.3 (−19.0) | 595 / 641 | −87.2 (−7.1) / −68.9 (−9.6) | 559 / 585 | −6.4 / +11.8 | −37.4 / −19.2 | 1.0 |
+| X 0.05 %, 48 h / flip | −85.4 (−11.3) / −58.3 (−16.2) | 486 / 564 | −134.0 (−3.9) / −60.8 (−7.1) | 469 / 507 | −53.6 / +19.5 | −84.6 / −11.5 | 1.0 |
+| X 0.05 %, 96 h / flip | −93.6 (−6.8) / −49.2 (−10.5) | 378 / 501 | −202.3 (−2.6) / −52.4 (−5.5) | 379 / 439 | −122.8 / +27.2 | −153.8 / −3.8 | 1.0 |
+| X 0.08 %, 24 h / flip | −84.6 (−8.7) / −66.1 (−9.7) | 280 / 301 | −103.9 (−4.4) / −69.6 (−8.6) | 240 / 258 | −19.0 / +14.6 | −50.0 / −16.4 | 1.0 |
+| X 0.08 %, 48 h / flip | −103.8 (−6.8) / −58.0 (−8.0) | 238 / 281 | −190.9 (−2.8) / −60.2 (−6.7) | 207 / 236 | −107.0 / +23.0 | −138.0 / −8.0 | 1.0 |
+| X 0.08 %, 96 h / flip | −133.6 (−5.3) / −51.0 (−6.3) | 188 / 258 | −334.8 (−2.0) / −55.0 (−5.6) | 172 / 215 | −251.4 / +27.9 | −282.4 / −3.1 | 1.0 |
+| X 0.15 %, 24 h / flip | −115.6 (−3.9) / −70.0 (−4.5) | 82 / 96 | −132.0 (−4.0) / −61.8 (−4.2) | 73 / 79 | −47.0 / +22.2 | −78.0 / −8.8 | 1.0 |
+| X 0.15 %, 48 h / flip | −136.3 (−3.3) / −68.3 (−4.1) | 72 / 92 | −179.9 (−3.1) / −51.2 (−3.0) | 63 / 76 | −94.8 / +32.4 | −125.8 / +1.4 | 1.0 |
+| X 0.15 %, 96 h / flip | −208.5 (−4.1) / −67.0 (−4.0) | 59 / 90 | −877.7 (−1.7) / −49.0 (−3.0) | 54 / 75 | −794.9 / +34.1 | −825.9 / +3.1 | 1.0 |
+
+The other robustness views all point the same way:
+- Excluding the top 5 % of episodes makes every cell 6–60 bps worse.
+- Day-clustered t has the same sign everywhere.
+- At $5k per leg, cells lose 275–1 145 bps. With fees ×2, every cell is 31 bps worse.
+- Holdout months: 0 of 5 are positive in every cell. Train: 0 of 8, except the X 0.15 % cells at
+  1 of 8.
+- Walked cost at $500 per leg is 77–85 bps per episode (book median 66 bps, p90 95). The hedged
+  universe is illiquid spot.
+
+**Reference rows** (not counted in m): `cash_and_carry` **as it actually runs**. Its
+`strategy_configs` row v1 has `min_funding 0.0001` and `horizon_s 28800`, and that row overrides the
+module's v4 defaults (0.08 %, 48 h) through `strategy.params`. On the 25-coin universe it gives
+**−39.4 bps (t_wk −114, n 2 362) in train and −38.9 (t_wk −137, n 1 359) in holdout**. Funding brings
++0.2…+0.6 bps per episode and cost takes 40. That matches the in-DB −31 bps (t −6.3, n 95) in
+[[strategy-scoreboard]]. On that universe the v4 defaults, and every round-3 cell, have **zero**
+hedgeable episodes in the year. Of the five coins there that reach ≥ 0.05 %, AKE, BTW, SOXL and
+USELESS have no USDT spot pair. ZEC reached it once, on 2025-10-02.
+
+### Claims
+- **Positive extremes are one-settlement spikes, not a regime.**
+  - The median entry rate is only 10.5 bps.
+  - Realised funding over the hold has a median of 3–22 bps. A naive "entry rate × settlements"
+    forecast says 36–440, so realised is 1–26 % of that forecast. H1 realised a median of
+    +47 / +58 bps in 48 h.
+  - Even with zero spread, the best cell grosses +34 bps against 31 bps of fees alone.
+    Fees-only net is −19…+3.
+- **The tail is a flip into a short squeeze, and it is lethal for a fixed hold.**
+  - Coins that print a positive spike often squeeze the other way a few hours later. Their funding
+    then goes deeply negative while we are short the perp. Examples: B3 −2 461 bps in 48 h (perp
+    +122 %), H −7 920 bps, LSK −5 327 bps with the perp up 2 172 % intra-hold.
+  - 11–48 % of episodes realise negative funding, against 10–11 % for H1.
+  - This is why fixed-hold means fall with hold length (X 0.15 %, 96 h holdout −878, median −84),
+    and why the flip exit is the least-bad variant in every row.
+- **Premium blowout was not the failure mode; perp run-up is.**
+  - The entry basis is small: median 0…+13 bps, and at X 0.15 % the perp actually sits below spot
+    (−6…−20 bps).
+  - Hedge P&L has a median of 0…+13 bps (corr 0.6 with the entry basis), so the premium converges,
+    as in H1.
+  - The risk sits in the short perp leg as a separate position. Its p90 run-up within the hold is
+    +12…+49 %. 6–28 % of episodes see the perp +20 % and 1–10 % see +50 %. That means liquidation
+    at 5× or 2× when the spot hedge sits on another venue or another margin account.
+  - The worst mark-to-market within the hold reaches p10 −67…−1 330 bps and p1 −240…−19 000 bps.
+    An honest live version needs a cross-margined unified account or very low perp leverage, and
+    both add cost the test does not charge.
+- **The hedgeable universe is small.** Of 497 perps with a settlement ≥ 0.05 % in the year, only
+  180 coins have a USDT spot pair on Bybit or Binance. They cover 17 % of those settlements. Positive
+  extremes live mostly in perp-only coins, where "carry" would be a naked short.
+- **Why the mirror is not symmetric.** In H1 the payers are crowded shorts in a coin that keeps
+  drifting down, and that persistence funds the trade (only the borrow was doubtful). On the positive
+  side, Bybit's funding hits mostly the long-squeeze peak. It mean-reverts within one or two
+  settlements and often overshoots into a short squeeze.
+
+**Verdict: rejected; the question is closed.** No cell survives, so nothing maps onto
+`cash_and_carry`'s parameters. What does follow for the main session, routed to the owner of the
+carry code: `cash_and_carry` as configured (0.01 %, 8 h) loses about 39 bps per episode
+structurally. Its funding (< 1 bp) can never pay a two-leg cost of about 40 bps. No threshold,
+universe or hold on the long-spot side turns it positive on this year of data. Raising it to the v4
+defaults on the 25 coins makes it silent, and widening it to the carry watchlist would trade the
+negative cells above. Retiring it, or leaving it shadow-only, costs nothing in edge.
+
+A fetch bug was caught before the write-up. Bybit's spot kline endpoint returns its newest 1 000
+bars at or before `end` even when they predate `start`, so a pair delisted before the window looked
+"present". That suppressed the Binance fallback for those coins. After the fix, every number moved
+by ≤ 35 bps (most by < 5) and no verdict changed. See the `PREREG.txt` log and `docs/ENGINEERING_LESSONS.md`.
+
+What would reopen it: only a new pre-registered test on forward data. Candidates are a
+unified-margin venue where both legs share collateral, plus a maker-only cost model (fees alone
+already exceed the median gross). Re-cutting this year would only be more searching. Data stays in
+the session scratchpad `r3/`: spot klines 2.08 M rows, books, per-episode tables.

@@ -73,3 +73,23 @@ and the 18 cells restricted to that universe.
 
 ------------------------------------------------------------------------------------------------
 LOG
+ 2026-10-09 15:28 UTC  data fetched, no return computed yet. 497 coins have a settlement >= 0.05 %; only 180 of them
+   have a USDT spot pair on Bybit (100) or Binance (90) today, covering 17 % of those settlements -> the
+   mirror's hedgeable universe is small. Books fetched (180 walkable perp/spot pairs): cost at $500/leg
+   median 68 bps (p10 50, p90 95), at $5k median 153. Running train next.
+ 2026-10-09 15:29 UTC  TRAIN verdict: no cell passes. All 18 cells negative, net -49 .. -204 bps/episode, week-clustered
+   t -3.3 .. -19.9 (n 61 .. 672). Holdout k = 0: nothing is sent to holdout. Holdouts computed next for
+   the record only; decisions above are frozen.
+ 2026-10-09 15:34 UTC  Holdouts (record only): all 18 cells negative, -46 .. -860 bps, t_wk -1.7 .. -10.7. BY q = 1.0
+   for every cell (m = 85). Books were re-fetched once (~15 min later, to add the reference coins) and
+   train/holdout re-run on that fetch; numbers moved by <= 1.5 bps, no verdict changed.
+   Reference (not counted): cash_and_carry as configured (strategy_configs v1: >= 0.01 %, 8 h, 25-coin
+   universe) -38.6 bps (t_wk -122, n 2362) train / -38.1 (t_wk -156, n 1359) holdout; the 25-coin universe
+   has zero hedgeable settlements >= 0.05 % in the year. VERDICT: H1-mirror rejected; question closed.
+ 2026-10-09 15:42 UTC  CORRECTION (found while checking the reference rows, after the verdict above): Bybit's spot kline
+   endpoint returns its newest 1000 bars at or before 'end' even when they all predate 'start' (pair
+   delisted before the window, e.g. ZEC). fetch_spot.py took that as Bybit coverage and skipped Binance.
+   Fixed (bars < T0 dropped, Binance always fetched), books re-fetched for the enlarged pair set, train /
+   holdout / ref re-run. Every cell still negative in train (-49 .. -209, t_wk -3.3 .. -19.0), holdout
+   (-49 .. -878, t_wk -1.7 .. -9.6); cash_and_carry as configured -39.4 (t_wk -114) / -38.9 (t_wk -137).
+   Numbers moved by <= 35 bps, verdict unchanged: rejected. The wiki reports the corrected run.

@@ -354,3 +354,17 @@
   macOS bash 3.2'de `set -u` boş diziyi "unbound" sayar — script `-u` kullanmaz. Web typecheck'inde önce `next typegen`:
   Next 15 route-handler imza hatası (`params` artık Promise) yalnız `.next/types`'ta görünür, temiz konteynerde `tsc` yeşil
   der. BIST discover regex'i 3 karakterli kodu kabul ediyordu; gerçek BIST kodları 4–5 karakter (bist_symbols: 51×4, 607×5).
+
+- **2026-10-09 — Ayna hipotezi simetrik değildir; bir stratejiyi modül sabitlerinden değil config satırından değerlendir; indirilen aralığı istenen pencereye karşı doğrula.**
+  Sinyal araştırması tur 3: H1'in aynası (fonlama ≥ +X sonrası short perp + long spot, borçsuz) 18 hücrenin hiçbirinde
+  train'i geçmedi (−49…−209 bps, t_wk ≤ −3,3). Pozitif uçlar tek-settlement sivrilmeleridir. Gerçekleşen fonlama
+  "giriş oranı × settlement" tahmininin %1–26'sı, medyanı 3–22 bps; brüt en iyi ihtimalle +34 bps, yalnız 4 taker ücreti
+  31 bps. Kuyrukta coin ters yöne, short squeeze'e döner (H −7 920 bps, LSK perp tutuş içinde +2 172 %). Üç kural:
+  (1) Bir edge'in aynasını varsaymadan önce, aynı yöntemle kalıcılığı (gerçekleşen/beklenen fonlama, ters dönen epizod
+  payı) ölç. H1'i fonlayan şey kalıcılıktı, ve o kalıcılık pozitif tarafta yok. (2) `cash_and_carry` modülü v4
+  varsayılanlarını (0,08 %, 48 saat) taşıyor ama canlıda `strategy_configs` v1 satırı (`min_funding 0.0001`,
+  `horizon_s 28800`) `strategy.params` üzerinden onları eziyor; ölçülen −31…−39 bps bu yüzden. Bir stratejiyi
+  değerlendirirken ya da parametre önerirken önce config satırını oku. (3) Bybit spot kline endpoint'i, pencerede veri
+  yoksa `end`'den önceki en yeni 1 000 barı döndürür, `start`'tan eskiyse bile (pencereden önce delist olmuş çift).
+  "Veri geldi" kapsam sayıldı ve Binance yedeği atlandı. Her indiricide dönen barları pencereye kırp ve kapsamı
+  (ilk/son bar) istenen aralığa karşı kontrol et. Kaynak: `docs/wiki/signal-research-2026-10.md` "Round 3".
