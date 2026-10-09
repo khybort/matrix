@@ -154,6 +154,11 @@ predicted ≈ next settled) covers 1 103 of them — ~59/week, ~50/week over the
 last 30 days — against ~1/week inside the traded set. Cap 10 covers 73 %,
 cap 5 37 % (the cap keeps the liquid ones, which earn more).
 
+Live check 2026-10-09 14:02: KAIAUSDT (1 h interval) settled at −0.50 %;
+`NegFundingCarry(symbols=carry_watchlist_async()).generate()` run in the
+strategy container drafted it, and the freshness guard kept all 19 watchlist
+symbols (newest datum 0.3–5.5 s old).
+
 **Open wiring (2026-10-09)**: the data streams, but the strategy dispatcher
 still hands `neg_funding_carry` only the traded set, so the module never looks
 at a watchlist coin. Until `strategy.main` gives it `crypto_symbols +

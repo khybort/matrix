@@ -282,4 +282,6 @@
   `BTTUSDT` hiçbir anahtar kümesinde yoktu, sessizce sonsuza kadar büyürdü → anahtarlara `crypto_spot` bar sembolleri
   eklendi. Kural: yeni bir sembol/exchange ad alanı yazınca o tabloyu `symbol` ile okuyan her sorguyu ve retention'ın anahtar
   kaynağını tara. Ölçüm tuzağı: `WITH w AS (SELECT string_to_array(...) s) ... WHERE symbol = ANY(w.s)` indeksi kullanmadı
-  (2+ dk, iptal); dizi literal'i (`ANY(array[...])`) ms. Kaynak: `docs/wiki/operations.md` "Crypto universe".
+  (2+ dk, iptal); dizi literal'i (`ANY(array[...])`) ms. O iki sorgu autovacuum'la birlikte `market_trades` INSERT'lerini
+  `DataFileRead`'e itti: ingestion 4,5 dk geride kaldı, strateji iki tick kripto'da stale-data stand-down yaptı. Canlı DB'de
+  ölçüm sorgusu önce `SET statement_timeout` ve düz `EXPLAIN` ile. Kaynak: `docs/wiki/operations.md` "Crypto universe".
