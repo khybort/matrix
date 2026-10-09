@@ -1,7 +1,7 @@
 ---
 title: Risk gates
 updated: 2026-10-09
-sources: [packages/python-shared/src/matrix_shared/{live_gate,trading_safety,exchange_shadow}.py, docs/TRADING.md]
+sources: [packages/python-shared/src/matrix_shared/{live_gate,trading_safety,exchange_shadow,carry_executor}.py, docs/TRADING.md]
 status: current
 ---
 
@@ -30,8 +30,15 @@ optimisation-eligible.
 - **Three human-only decisions**, by design and forever:
   `LIVE_EXECUTION_ENABLED`, `LIVE_CAPITAL_CAP_USD`, mainnet API keys.
 - **Forbidden paths**: the dev_agent may edit anything except
-  `matrix_shared/trading_safety.py`, `matrix_shared/exchange_shadow.py` and
-  `execution/safety.py`. Touching them fails its task.
+  `matrix_shared/trading_safety.py`, `matrix_shared/exchange_shadow.py`,
+  `execution/safety.py` and, since 2026-10-09, `matrix_shared/live_gate.py`
+  (the gate itself had been left open), `matrix_shared/carry_executor.py`
+  and `matrix_shared/carry_venues.py`. Touching them fails its task.
+- **Two-leg positions** (2026-10-09, [[carry-execution]]): the carry
+  executor sends the **sum of both legs** to the gate, so the per-trade cap,
+  `LIVE_CAPITAL_CAP_USD` and the certificate apply to the hedged pair. Its
+  sending transport accepts only `api-testnet.bybit.com`; dry-run cannot
+  send; a failed unwind trips the wallet circuit.
 - **Reflection cannot touch risk caps**: `reflection/parsing.py` strips
   `max_position_pct`, `daily_loss_circuit_pct`, `max_concurrent_positions`,
   `live_capital_cap_usd` and `live_execution_enabled` from any model output,

@@ -101,6 +101,7 @@ Background: [purpose-and-goals](purpose-and-goals.md), then
 - [learning-loop](learning-loop.md) — reflection, labs, lessons, memory, and their gates
 - [learning-loop-statistics](learning-loop-statistics.md) — every selector vs a zero-edge null: labs shrinkage + excess ranking, mutation CI gate, challenger z, what ε-probes buy (2026-10-09)
 - [risk-gates](risk-gates.md) — what stands between the code and real capital
+- [carry-execution](carry-execution.md) — the two-leg carry path (`CarryExecutor`): leg order, unwind and kill switch, combined-notional cap, dry-run mirror of paper carries; built, not enabled (2026-10-09)
 
 ## How it runs
 - [operations](operations.md) — commands, environment knobs, daily checks, streamed vs traded crypto universe (carry watchlist)
