@@ -83,6 +83,12 @@ async def run(market_names: list[str], cfg: _IngestCfg) -> None:
         from ingestion.binance_funding import run as run_binance_funding
         tasks.append(asyncio.create_task(run_binance_funding(), name="binance-funding"))
 
+    # Margin borrow-rate history for the short-spot carry (public REST, all
+    # coins, Bybit + Binance). Gated by BORROW_RECORDER_ENABLED.
+    if "crypto" in market_names:
+        from ingestion.borrow_recorder import run as run_borrow_recorder
+        tasks.append(asyncio.create_task(run_borrow_recorder(), name="borrow-recorder"))
+
     if not tasks:
         logger.warning("no markets to ingest; exiting")
         return
