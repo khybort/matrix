@@ -1,6 +1,6 @@
 ---
 title: Risk gates
-updated: 2026-09-19
+updated: 2026-10-09
 sources: [packages/python-shared/src/matrix_shared/{live_gate,trading_safety,exchange_shadow}.py, docs/TRADING.md]
 status: current
 ---
@@ -17,7 +17,10 @@ optimisation-eligible.
 - **Certificate** (`paper_trade_certificate`) requires, by default: 60
   observation days, 200 outcomes, win rate ≥ 0.40, total PnL > 0, drawdown
   ≤ 15 %, and — since 2026-09-13 — a **95 % CI lower bound on mean PnL per
-  trade above zero**. A positive total built on a few lucky trades does not
+  trade above zero**. Since 2026-10-09 (6dcc8f1) n, win rate and the CI count
+  **episodes**, so re-fills of one bet have their dollars summed into one
+  sample (`n_outcomes_raw` is kept). Total PnL and drawdown stay on the fill
+  path. A positive total built on a few lucky trades does not
   qualify. Certificates granted with loosened env thresholds are stamped
   `+relaxed` and are refused on mainnet. A version that later breaches the
   drawdown cap is auto-revoked on the next reflection pass.

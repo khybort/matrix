@@ -80,9 +80,11 @@ only: the dispatcher now runs a shadow-only strategy as a challenger on the
 shadow wallet, and `reflection.efficacy` cannot cut it over (no champion), so
 status comes only from evidence. It enters on the last **settled** rate within
 1 h of the settlement, only for coins in the live borrow table (public
-endpoints, 1 h cache), and stamps `borrow_rate_hourly`; the paper engine's
-carry close charges it over the hold (working-tree hunk inside the uncommitted
-carry WIP in `paper_trade.py`; ships with that WIP).
+endpoints, 1 h cache), and stamps `borrow_rate_hourly`. The paper engine's
+carry close charges borrow over the hold. That code was a working-tree hunk
+here, and it landed as the carry family (7d7b854). Borrow is now charged from
+the recorded rate series (32dcadb), and the entry filter prices borrow from
+funding depth (13eb0af); see "Borrow measurement" below.
 
 ## Open questions
 - **Borrow availability** is the binding unknown: a listed rate is not a
@@ -92,8 +94,9 @@ carry WIP in `paper_trade.py`; ships with that WIP).
   ingestion streams a carry watchlist (borrowable perps at ≤ −0.05 %, cap 20,
   with their spot legs; [[operations]] "Crypto universe"); replayed over the
   holdout it would have covered 1 103 of 1 105 episodes (~59/week, ~50/week
-  in the last 30 days) against ~5 a month before. Pending: the dispatcher must
-  hand the watchlist to `neg_funding_carry`.
+  in the last 30 days) against ~5 a month before. ~~Pending: the dispatcher must
+  hand the watchlist to `neg_funding_carry`.~~ Done 2026-10-09 in c49f08b
+  (only this module gets the watchlist).
 - Four-leg cost on illiquid spot may exceed 30 bps; the 60 bps sensitivity
   still holds (+105, t=7.9 holdout), the < $1M bucket does not at ×3 borrow.
 
@@ -569,9 +572,10 @@ below, live.
 **Fix**: the paper engine closed any carry after five minutes of adverse predicted funding
 (`funding_flip`). The study held 48 h, and a flip exit made it worse there (+82 vs +104 bps train);
 here each early exit also pays four walked legs on a fraction of the funding. Book-priced carries
-(context names a spot leg) now hold to horizon (e8bdd2f). Not changed, noted: the equity mark of an
-open carry is `rate × hours/8`, wrong by the interval factor for 1/2/4 h coins (understates KAIA ~8×);
-marking at settled funding would need a 48 h snapshot scan per position per 5 s tick.
+(context names a spot leg) now hold to horizon (e8bdd2f). ~~Not changed, noted: the equity mark of an
+open carry is `rate × hours/8`, wrong by the interval factor for 1/2/4 h coins.~~ Fixed 2026-10-09 in
+69f37c8: an open carry is marked at the funding it has settled (accumulated per position) minus the full
+round trip and the borrow accrued so far.
 
 **Funding-decay model.** Realised 48 h funding (entry 1 h after settlement, as in the replay) divided
 by the naive expectation, median per cell of prior run × depth, fitted on train (2 941 book-sized
@@ -694,8 +698,10 @@ borrow: mean ≤ 0 → back to `flat`; (3) with ≥ 2 weeks of recorder data, re
 within coin. Scripts: session scratchpad `borrow/` (`snap.py`, `fetch_fh.py`, `hold.py`), not
 committed.
 
-**Shadow tracker:** the decomposition reads `borrow_charged_usd` and does not know its source. Not a
-one-line change (the episode query, `Episode` and the report line would each change); until then
+**Shadow tracker:** ~~the decomposition reads `borrow_charged_usd` and does not know its source.~~
+Done 2026-10-09 in 845bd64: the report splits by `borrow_source` and by the `flat_keep` / `decay_keep`
+arms, evaluates the three revisit rules over `series` episodes only, and sends `review_due` once at 30
+([[operations]] "Shadow tracker"). For a by-hand check:
 `SELECT context->>'borrow_source', count(*) FROM predictions WHERE strategy_id =
 'neg_funding_carry' AND status <> 'open' GROUP BY 1` (shared) tells series from fallback; an episode
 charged at `stressed_entry` or `mixed` tells nothing (or only part) about real borrow.

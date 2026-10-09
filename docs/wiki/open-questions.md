@@ -7,88 +7,91 @@ status: current
 What is genuinely unknown, phrased so a future session can close it. Ranked by
 how much the answer would change.
 
-## Claims
-- ~~Does any signal in the book have edge before costs?~~ **Re-answered
-  2026-10-09: no measured one.** The 2026-09-20 answer (`momentum_xs` +36 bps,
-  t=6.04, n=799) was pseudo-replication: 87 % of those rows were one three-hour
-  v1 burst on 2026-09-13 re-emitting ten (symbol, side) bets every ~90 s.
-  Counted as episodes the strategy is −10.7 bps vs random entry (t=−0.98,
-  n=285); on 2026-09-21 −22 bps. The 155 fills of 2026-09-21 lost −30.7 bps,
-  and the same simulator on those signals says −26.2 gross, so the wallet
-  captured the signal within ~5 bps — there was no edge to lose
-  ([[edge-study]] Correction). The study now counts episodes, not rows. Live
-  question: **does any strategy beat random entry when each bet counts once?**
-- **Is the horizon wrong, or the entry?** *Answered for momentum_xs
-  2026-10-09 — the entry* (n=155: MAE median 149 vs MFE median 115 bps; MFE
-  reached TP in 28, MAE reached SL in 41; [[edge-study]]). 57 % of exits are horizon exits at
-  roughly minus cost — though part of that was fills arriving with only half
-  the horizon left, which is now fixed. *Test*: for closed trades, measure max favourable and
-  adverse excursion within the horizon. If MFE frequently exceeds the TP
-  distance, the problem is exit timing; if not, the entry has no predictive
-  content.
-- ~~**Can the EV ranker discriminate at all?**~~ **Answered 2026-10-09: no.**
-  All 8 891 crypto signals of 30 days (one per episode, gap-guarded replay,
-  [[strategy-scoreboard]]) bucketed by the engine's `_ev`: every decile is
-  net negative, the top decile (−21.0 bps) is no better than the bottom
-  (−18.3), and Spearman(EV, net) is **−0.057 (t=−5.4)** — slightly inverted.
-  Same on the bare `confidence x tp − (1−confidence) x sl` (−0.052), on BIST
-  (−0.002, n=644) and US (+0.084, t=1.5, n=312). Across strategies the score
-  mostly sorts by *which module* emitted (grid fills D1 and D10 alike) and each
-  module's confidence is on its own scale (matrix_agent ~0.13, bist_* ~0.95).
-  Within strategy the best is momentum_xs (+0.118, t=2.2) — not enough to
-  build on. Consequence: the ranker cannot be what selects a paying trade, and
-  the floor it feeds is only correct because nothing in the book pays.
-  *Next*: rank on a measured, per-strategy calibrated forward return instead
-  of self-reported confidence, and test it the same way.
-- **Do the carry strategies have edge?** The books said 0 % wins
-  (inverse_carry −27 bps n=53, xexch −29 bps n=20). That was accounting:
-  every carry closed on Bybit's post-settlement `+0.0000125` placeholder and
-  accrued at it ([[paper-engine]]; fixed 2026-10-09). Replayed with
-  settlement accounting, one per episode: inverse_carry **+14.9 bps net,
-  t=0.95, n=25** (unproven; spot-borrow cost not modelled), xexch −25.6
-  (t=−3.56), cash_and_carry −31.1 (t=−6.26) — those two have no edge under
-  either model. *Test*: let the fixed accounting run; re-measure
-  inverse_carry at n≥60 episodes with a borrow-cost assumption.
-- **What is the true cost model?** Slippage is now measured per symbol from our
-  own book snapshots ([[methods]]), but fees remain assumed and nothing is
-  validated against real fills. Until live or exchange-simulated fills exist,
-  every net-of-cost conclusion still carries that assumption.
-- ~~**Is the 15-second cadence justified?**~~ **Answered 2026-10-09: no.**
-  The same 8 737 crypto episodes entered 60 s after the signal instead of
-  15 s net +1.4 bps (t=2.4; strict-bar model +2.5, t=4.3); 300 s +1.7. No
-  strategy is net positive at any cadence, and on the LLM path the loop was
-  really ~39 s (median gap; p50 call 18.6 s + 15 s sleep). Recommended: agent
-  `--interval 60`. Since 09-30 every LLM call has failed, so the agent is
-  rule-only ([[market-cadence-study]]).
-- ~~**Should BIST and US be running at all right now?**~~ **Answered
-  2026-10-09: no — pause both.** Since 09-01, one per episode: BIST −43.0 bps
-  net (t=−10.4, n=638; round trip 40 bps, data ~15 min delayed), US −11.4
-  (t=−5.6, n=309); no strategy in either beats random entry at t≥2. Paper:
-  BIST −60 bps on 105 fills, US −24 on 28. They took ~38 % of weekday agent
-  LLM calls and two thirds of the ingestion log. Switch: `strategy_configs`
-  status → `'paused'` for `asset_class IN ('bist','us')` plus ingestion
-  `--markets crypto` ([[market-cadence-study]]). Re-entry needs a hypothesis
-  whose gross clears the round trip, on real-time data.
-- ~~**Someone else holds this bot token.**~~ — closed 2026-09-20 by rotation.
-  The finding stands and is recorded in [[incidents]]: with every local consumer
-  stopped, a lone traced poller took 3 conflicts in 240 s at an in-flight count
-  of 1, host-side long polls returned 409 on 2 of 8 and later 1 of 4, and no
-  container or process here held the token. The operator revoked it in
-  BotFather — proof the revoke landed is that the old token began answering
-  `getMe` with `Unauthorized` — and `scripts/rotate_telegram_token.sh` installed
-  the replacement. *The lesson that outlives the incident:* a bot token pasted
-  into a chat window is a leaked credential, and the failure it causes is
-  silent, because sending keeps working while receiving is stolen.
+## Open — trading
 
-- **Uncommitted, live, and mine to land later:** the EV floor lets a
-  *measured* edge outrank the model's own `confidence x tp_pct` estimate. The
-  floor was rejecting 174 of 178 candidates an hour (2026-09-20), every
-  momentum_xs signal among them, while that strategy measures +21 bps at the
-  95% lower bound against a ~12 bps round trip. The change is written, tested
-  (38/38) and running in the dev tree, but the EV floor itself is another
-  author's work that has not reached git, so there is no HEAD to commit it
-  against. Land it the moment their floor lands — until then it exists only in
-  the working tree and would be lost by a hard reset.
+- **Is borrow actually available on a squeezed coin, at the quoted rate, for
+  the size we want?** This is the binding unknown behind `neg_funding_carry`.
+  A listed rate is not a lendable pool, and squeezed coins are the ones whose
+  pools run dry. The 36–40× gap between funding and quoted borrow on the
+  top-5 % episodes is itself evidence that borrow was not available at that
+  rate ([[signal-research-2026-10]] "Adversarial check"). Public data cannot
+  settle it. The recorder (`margin_borrow_rates`) measures *quoted* borrow
+  only, and neither venue publishes pool size. *Settles only with* a signed
+  account query at signal time (max loanable + rate), which is Phase 5 and
+  needs mainnet keys, a human decision ([[risk-gates]]).
+- **Does `neg_funding_carry`'s shadow mean clear +30 bps per episode?** The
+  pre-registered band is +100…+300 with a floor of +30. If the edge is real,
+  expect a median far below the mean, a third to half of episodes losing a
+  little, and PnL arriving in a few squeezes. A mean at or below +30 means
+  quoted borrow and book cost, not funding, decide it, and it gets no capital.
+  *Test, already running:* the shadow tracker's verdict at 20 closed episodes
+  (48 h holds; 0 closed / 3 open at 2026-10-09 16:55 UTC). After that comes
+  `review_due` at 30 `series`-borrow episodes, with the three revisit rules
+  (hold stress, flat vs depth borrow model, naive vs decay gate). Capital
+  needs `confirmed` from `carry_edge_rows`: ≥ 20 day clusters, the
+  pre-registered n with a floor of 200, then BHY and deflated Sharpe
+  ([[operations]] "Shadow tracker", [[edge-study]] "Carry evidence"). At
+  ~50 opportunities a week before the filter, `confirmed` is months away,
+  not weeks.
+- **"No edge anywhere": what is left to test?** Every strategy in the book is
+  `unproven` or worse. 91 pre-registered research cells produced one fragile
+  carry. The strategic question is whether the system keeps searching price,
+  funding and flow data that rounds 1–3b exhausted, or turns to families
+  never tested here. Untested: dated-futures basis (round 4, in progress),
+  forward re-tests of the H8b/H11 near misses, a real liquidation feed,
+  options-implied signals, on-chain flow, listing events, cross-asset
+  conditioning, and maker quoting as a strategy. Ranked list with the
+  reasoning: [[research-backlog]] "What has not been tested". Until something
+  passes, the profitable action is to trade less. The EV floor already does
+  that.
+- **What is the true cost model?** Slippage is measured per symbol from our
+  own book snapshots ([[methods]]). Carries walk real books at open and close.
+  Fees are still assumed, and nothing is validated against real fills. Until
+  live or exchange-simulated fills exist, every net-of-cost conclusion
+  carries that assumption.
+- **Is there edge in a *subset* of the book's signals that a different filter
+  would find?** The EV ranker is not that filter (below). A per-strategy,
+  calibrated forward-return ranker has not been built or tested.
+  Meta-labelling failed (AUC 0.52 on episodes; [[methods]]).
+
+## Answered 2026-10-09
+
+- ~~Does any signal in the book have edge before costs?~~ **No.**
+  momentum_xs's +36 bps was pseudo-replication (5475933). On episodes with the
+  honest entry it is −32.1 vs random (t=−2.92), and nothing beats a null
+  ([[edge-study]]).
+- ~~Is the horizon wrong, or the entry?~~ **The entry**, measured on
+  momentum_xs: MAE median 149 vs MFE median 115 bps over 155 trades
+  ([[edge-study]] "MFE / MAE"). Book-wide, no strategy's entry beats random,
+  so horizon tuning has nothing to harvest.
+- ~~Can the EV ranker discriminate?~~ **No.** Spearman(EV, net) −0.057
+  (t=−5.4, n=8 891), with every decile net negative. The score mostly sorts by
+  emitting module ([[strategy-scoreboard]]).
+- ~~Is the 15-second cadence justified?~~ **No.** Acting at 60 s is +1.4 bps
+  (t=2.4), and the agent runs `--interval 60` since 9091f38
+  ([[market-cadence-study]]).
+- ~~Should BIST and US be running?~~ **No.** BIST −43.0 bps net (t=−10.4),
+  US −11.4 (t=−5.6), neither beats random entry. They are paused (9091f38);
+  the switch is in [[market-cadence-study]].
+- ~~Does the LLM or the graph earn its rate budget?~~ **No.** LLM side minus
+  rule lean −2.4 bps (t=−0.40) in the same hours, and graph coverage changed
+  no decision's return. The agent is `rule_only` and graph heuristic (6a0884e;
+  [[llm-value-audit]]).
+- ~~Does maker execution turn any strategy positive?~~ **No.** It is worth
+  +4…+6 bps an episode, but every arm sits 12–30 bps under zero
+  ([[maker-execution]]).
+- ~~Do the carry strategies have edge (0 % wins)?~~ **That was accounting:**
+  Bybit's post-settlement placeholder (94e55cf). Carries now book funding per
+  settlement and charge recorded borrow and walked books ([[paper-engine]]).
+  On evidence: cash_and_carry and xexch_funding_arb are retired (round 3 /
+  3b). inverse_carry measures +11.9 bps over 22 episodes, unproven. The
+  hedged version that survives research is `neg_funding_carry` (open, above).
+- ~~The EV floor's measured-edge override is uncommitted.~~ Landed in
+  5164dbc. Its motivating case (momentum_xs +21 bps at the lower bound) was
+  withdrawn the same day.
+
+## Open — infrastructure
+
 - **`shared_buffers` is 128 MB against 54 GiB of index.** Still the Postgres
   default (re-checked 2026-10-09). Measured 2026-09-20: a 60.4% buffer cache
   hit rate across 880M block reads; 2026-10-09 read 88.3%, but over a few
@@ -137,4 +140,19 @@ how much the answer would change.
   3 hours). FileVault is off, so enabling automatic login (System Settings →
   Users & Groups) closes this; a physical-security trade only the operator
   can make.
-  (3) The `REINDEX CONCURRENTLY` and `shared_buffers` items above.
+  (3) The `REINDEX CONCURRENTLY` and `shared_buffers` items above, plus
+  `autovacuum_work_mem` via `ALTER SYSTEM`. At today's 5 GB heap that one
+  is headroom, not urgent.
+
+## Closed — operations
+
+- ~~**Someone else holds this bot token.**~~ — closed 2026-09-20 by rotation.
+  The finding stands and is recorded in [[incidents]]: with every local consumer
+  stopped, a lone traced poller took 3 conflicts in 240 s at an in-flight count
+  of 1, host-side long polls returned 409 on 2 of 8 and later 1 of 4, and no
+  container or process here held the token. The operator revoked it in
+  BotFather — proof the revoke landed is that the old token began answering
+  `getMe` with `Unauthorized` — and `scripts/rotate_telegram_token.sh` installed
+  the replacement. *The lesson that outlives the incident:* a bot token pasted
+  into a chat window is a leaked credential, and the failure it causes is
+  silent, because sending keeps working while receiving is stolen.

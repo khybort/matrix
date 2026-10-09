@@ -1,6 +1,6 @@
 ---
 title: Services
-updated: 2026-09-19
+updated: 2026-10-09
 sources: [docker-compose.yml, docker-compose.dev.yml, docker-compose.limits.yml]
 status: current
 ---
@@ -11,17 +11,22 @@ supervising watcher ([[development]]).
 ## Claims
 - **Data in**
   - `ingestion-market` — Bybit WebSocket (crypto, mainnet data), yfinance
-    pollers for BIST and US, symbol discovery. Started with
-    `--markets crypto bist us`.
+    pollers for BIST and US, symbol discovery, the Binance funding poller,
+    the carry watchlist with its spot legs, and the borrow-rate recorder
+    ([[operations]]). Started with `--markets crypto` since 2026-10-09
+    (BIST/US paused).
   - `ingestion-news` — RSS feeds every 300 s into `raw_documents`.
   - `bars-aggregator` — 1m bars from trades each minute, 1h rollups, and owns
     data retention (7-day trade window).
 - **Understanding**
   - `graph` — extracts entities/relations into the AGE graph, publishes
-    `graph_signals`.
-  - `agent` — the LLM strategy (`matrix_agent`): features → rule verdict → LLM
-    verdict → blend → prediction, every 15 s.
-  - `strategy` — 12 deterministic modules, every ~30 s.
+    `graph_signals`. Heuristic (keyword) extraction since 2026-10-09
+    (`GRAPH_EXTRACT_MODE=heuristic`, backfill off; [[llm-value-audit]]).
+  - `agent` — `matrix_agent`: features → rule verdict → prediction, every
+    60 s, with no LLM call (`rule_only`, 2026-10-09). The blend path through
+    an LLM verdict is dormant.
+  - `strategy` — deterministic modules, every ~30 s; `neg_funding_carry`
+    alone also scans the carry watchlist.
   - `agent-lessons` — distils outcomes into `avoid`/`prefer` lessons.
   - `synthesis`, `brain` — narrative synthesis and the operator-facing Q&A agent.
 - **Execution and measurement**

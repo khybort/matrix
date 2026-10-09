@@ -40,7 +40,9 @@ is optimising noise.
   z ≥ 1.645 since 2026-10-09) and auto-reverts negatives, marking the version `recently_reverted` so the
   tuner does not immediately re-propose it.
 - **Lessons** (`agent_lessons`) distil outcomes into `avoid`/`prefer` patterns
-  per symbol/side/regime, with a confidence gate (0.4), a TTL (14 d) and
+  per symbol/side/regime, counted in episodes since 5f40b1d (a replay of all
+  27 historical lessons scored 0.00–0.14 on episodes; **no lesson is active
+  on 2026-10-09**), with a confidence gate (0.4), a TTL (14 d) and
   contradiction retirement. An `avoid` veto is bypassed ~25 % of the time on
   exploration trades so the lesson keeps being tested rather than becoming a
   self-fulfilling lock. (Measured 2026-10-09: the corridor has never fired;
@@ -55,26 +57,35 @@ is optimising noise.
 - **Regime** (`vol/trend/funding`, e.g. `low/flat/neutral`) tags every
   prediction and keys lessons. Reference symbols fall back to liquid
   constituents when the index proxy is not ingested.
-- **Slot scorer** moves capital between strategies, but only on n ≥ 30 closed
-  positions and using a **Wilson lower bound** win rate; the consecutive-loss
-  auto-cut is the one change allowed on thinner evidence.
-- **The loop closed end to end on evidence for the first time on 2026-09-20**:
+- **Slot scorer** moves capital between strategies, scoring each strategy's
+  last 30 bets (episodes, not fills, since 6dcc8f1) with a **Wilson lower
+  bound** win rate. It never promotes a strategy that has no active or shadow
+  config or no signal in 24 h. The consecutive-loss auto-cut is the one change
+  allowed on thinner evidence, and since 5e551a5 it can only cap slots
+  (`min(old, 1)`), never grant one. A carry strategy's signals count as
+  running (36b30cb).
+- **The loop closed end to end for the first time on 2026-09-20**, mechanically:
   the alpha-decay study measured `momentum_xs` peaking at 90 minutes against
   its configured 60 (t=3.59) → a `param_tune` proposal was filed with that
   evidence in its `metrics_window` → the tied challenger occupying the slot was
   retired under the new indifference rule → labs applied the proposal as
-  challenger v4 → efficacy now judges it on realised PnL. No step was taken by
-  hand.
+  challenger v4 → efficacy judged it on realised PnL. No step was taken by
+  hand. **The evidence it acted on is withdrawn** (2026-10-09, 5475933 /
+  7fa47cd): the horizon profile counted re-emitted rows. The machinery worked,
+  but it ran on a phantom edge.
 - **Honest limitation:** all of the above is machinery for exploiting an edge.
-  It cannot manufacture one. As of 2026-09-20 exactly one strategy has a
-  measured edge ([[edge-study]]), and the machinery is now pointed at it.
+  It cannot manufacture one. ~~As of 2026-09-20 exactly one strategy has a
+  measured edge~~ (withdrawn 2026-10-09: momentum_xs was pseudo-replication).
+  As of 2026-10-09 no strategy in the book has one ([[edge-study]]), and the
+  only candidate is the shadow `neg_funding_carry`.
 
 - **A measurement that is missing is not a measurement of zero.** The slot
   scorer reads `strategy_edge`; that cache lived only in the process, so for
   minutes after every reload it answered `None`, and `None` demoted rather than
   abstained. On 2026-09-20 a restart took `momentum_xs` from 7 slots to 3
-  seconds after the same pass had promoted it on a confirmed +29.7 bps edge —
-  the one strategy with a proven edge losing half its allocation to a reload.
+  seconds after the same pass had promoted it on a `confirmed` +29.7 bps edge
+  (that edge was later withdrawn as pseudo-replication; the persistence lesson
+  stands).
   The cache now persists to the model volume with wall-clock stamps. The
   general rule, and it applies to every gate here: distinguish *unknown* from
   *measured and bad* before acting on it.

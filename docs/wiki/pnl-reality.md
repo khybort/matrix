@@ -1,14 +1,18 @@
 ---
 title: PnL reality — why it loses money
 updated: 2026-10-09
-sources: ["db: outcomes ⋈ predictions, 30d window to 2026-09-19", "packages/python-shared/src/matrix_shared/trading.py", "db: wallets"]
+sources: ["db: outcomes ⋈ predictions, 30d window to 2026-09-19", "db: wallets.day_start_equity 2026-10-09 12:01 UTC", "edge study entry-rule correction cda6ee6", "packages/python-shared/src/matrix_shared/trading.py", "db: wallets"]
 status: current
 ---
 
 The honest state of the only thing that matters. Measured, not modelled.
 
 ## Claims
-- **Wallets (2026-09-19, paper):**
+- **Wallets, 2026-10-09 day start (paper, `wallets.day_start_equity`):**
+  crypto/default 9 473.91 (−526.09), crypto/shadow 9 841.14 (−158.86),
+  bist/default 9 908.60 (−91.40), us/default 9 999.16 (−0.84). BIST/US
+  are paused since 2026-10-09, so their figures are frozen.
+- **Wallets (2026-09-19, paper), kept for history:**
 
 | wallet | equity | vs start |
 |---|---|---|
@@ -45,16 +49,26 @@ The honest state of the only thing that matters. Measured, not modelled.
   bps (t=6.04, n=799) while its fills lost −35.8 was pseudo-replication: 87 %
   of those rows were one three-hour burst re-emitting the same ten bets
   ([[edge-study]]). Counted once per bet, with no look-ahead and no scoring
-  across bar gaps, the signals measure **−23.2 bps vs random entry (t=−2.05,
-  277 episodes from 2 188 rows, 30 d to 2026-10-09)**. The fills lost because
+  across bar gaps, the signals measured −23.2 bps vs random entry (t=−2.05,
+  277 episodes, 30 d to 2026-10-09) under the pre-signal entry rule, and
+  **−32.1 (t=−2.92, 287 episodes)** under the honest rule (entry at the first
+  bar opening after the signal; cda6ee6, [[edge-study]] "Correction —
+  pre-signal path"). It is significantly *worse* than random entry. The fills lost because
   the signal had nothing to give, not because they were late. Fills *were*
   20–53 % late across the book and the freshness gate in [[paper-engine]]
   still fixes that, but it was not hiding an edge.
-- **`grid`, `dca` and `funding_reversion` still have no signal** (−0.7, −2.7,
-  +3.0 bps vs random) and produce most of the volume — the cost engine.
+- **`grid`, `dca` and `funding_reversion` have no tradeable signal**
+  (2026-10-09, 30 d, honest entry rule, vs random time: grid +2.9 t=1.93,
+  dca +1.0 t=0.51, funding_reversion +1.7 t=0.66; gross levels +3.0 / +1.1
+  / +3.5 bps against a 12–15 bps round trip). They produced most of the
+  volume: the cost engine. (Superseded 2026-10-09: the 09-19 figures −0.7 /
+  −2.7 / +3.0 were rows-as-samples.)
 - **Therefore: no strategy in the book has demonstrated edge after costs** (2026-10-09:
-  on the corrected study none clears BHY at m=14; the best is `funding_reversion`
-  +3.5 bps vs random time, t=1.34, against a ~15 bps round trip).
+  on the corrected study none clears BHY at m≈14; under the honest entry
+  rule the best lead over random time is grid +2.9 bps, t=1.93, at +3.0 bps
+  gross against a ~15 bps round trip — cda6ee6). The only candidate is
+  outside the book: `neg_funding_carry`, shadow-only, no closed episode yet
+  ([[signal-research-2026-10]]).
   The system is not losing because of a leak or a mis-parameterisation; it is
   losing because its signals are, so far, indistinguishable from noise once
   costs are charged. G3 in [[purpose-and-goals]] is far away.
@@ -70,5 +84,6 @@ The honest state of the only thing that matters. Measured, not modelled.
 - An entry filter with measurable discrimination — the counterfactual ranker
   already reports that traded and skipped candidates perform about the same
   (traded −15.0 bps vs skipped −13.9 bps, 2026-09-13), which says the current
-  ranking adds nothing.
+  ranking adds nothing. Confirmed 2026-10-09 on 8 891 clean episodes:
+  Spearman(EV, net) −0.057 ([[open-questions]]).
 - See [[open-questions]] for the experiments that would settle this.

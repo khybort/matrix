@@ -16,6 +16,13 @@ Every emitting strategy, judged on its **signals** rather than its fills (see
   45–66 %; dca, grid and matrix_agent ~0 %.
 - Entry at the last **closed** bar, and that bar must be at most 3 minutes old,
   with no gap inside the horizon window (wall-clock span <= 1.5x horizon + 5 min).
+  **Caveat (2026-10-09, cda6ee6):** that entry rule lets up to 60 s of
+  pre-signal path into the scored window. It flatters momentum/breakout
+  entries and charges mean-reversion entries their trigger move. The tables
+  below were measured under it. For the per-strategy shift under the honest
+  rule (first bar opening after the signal), see [[edge-study]]
+  "Correction — pre-signal path". Verdicts do not change, because nothing
+  clears cost under either rule.
 - Net = simulated bracket return minus the measured round trip (crypto
   12–15 bps, BIST 40 bps).
 
@@ -36,6 +43,10 @@ Every emitting strategy, judged on its **signals** rather than its fills (see
 30 days (more power, includes retired momentum_xs and grid): best is oi_delta
 at +4.6 gross / −9.2 net (vs random time +3.3, t=0.43, n=389); grid −21.6 net
 on n=3 425 (t=−23); momentum_xs −25.7 net on its 355 real episodes.
+**Corrected 2026-10-09 (cda6ee6, honest entry, 30 d):** oi_delta −6.9 gross,
+−6.2 vs time (t=−0.85). grid +3.0 gross is about −12 net, not −21.6: the old rule
+charged it the fall that triggered each buy. momentum_xs −27.6 gross, −32.1 vs
+time (t=−2.92).
 
 Carry family (settlement-accounted replay, 30 days, one per episode):
 inverse_carry **+14.9 bps net, t=0.95, n=25**; xexch_funding_arb −25.6
@@ -45,8 +56,9 @@ for why the books showed 0 % wins.
 ## Claims
 - **No strategy in the book has a measured edge after cost** (2026-10-09).
   The one candidate found outside the book is `neg_funding_carry` (shadow,
-  2026-10-09, [[signal-research-2026-10]]): historical edge, zero paper
-  episodes so far.
+  2026-10-09, [[signal-research-2026-10]]): historical edge, 0 closed / 3
+  open paper episodes at 16:55 UTC. Its verdict comes from the shadow tracker
+  and from `carry_edge_rows` ([[edge-study]] "Carry evidence").
   The best net figure is funding_reversion at +6 bps on 32 episodes, t=0.13 —
   indistinguishable from zero. The EV floor that skips every candidate is
   right; loosening it would buy the costs above.
@@ -62,12 +74,18 @@ for why the books showed 0 % wins.
   +49…+98 against +6.6 fresh. A `confirmed` status flows into Kelly sizing and
   a full slot share ([[learning-loop]]), so this must be fixed in the study
   (entry-bar age and gap guard) before its next cache refresh.
+  **Fixed 2026-10-09 in 2a72463**: entry age ≤ 3 min, no scoring across a bar
+  gap, and the registry entries for momentum_xs (936) and matrix_agent/crypto
+  (403) marked superseded. With the guard, bist_volume_breakout is −10.7
+  (t=−1.79) and matrix_agent/crypto +2.2 vs time (t=0.82).
 - **oi_delta does not deserve capital.** Its realised paper +33 bps (n=56)
   came from which signals were filled: its filled signals replay at +29 bps
   gross (t=2.44, n=95) and its unfilled ones at −3.3, and on the full signal
   set it is +3.3 vs random (t=0.43, 30 d) and −24 (14 d). The promotion bar is
   not what blocks it; its own signal is. Realised on those same filled trades
   was −4.8 bps, so ~20 bps of the replay's gross never reached the wallet.
+  Under the honest entry rule (cda6ee6) its full signal set is −6.2 vs random
+  time (t=−0.85), which makes the case weaker still.
 - **Re-emission was still live** in the strategy service on 2026-10-09; it is
   now dropped at persistence (`strategy.persist.drop_reemissions`), so the
   prediction table counts bets, not ticks.

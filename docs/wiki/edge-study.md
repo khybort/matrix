@@ -128,10 +128,10 @@ feeding the **same** `status` field:
   (t_day −3.4), neg_funding_carry 0 closed / 3 open — all `unproven`, all
   short of 20 day clusters. Nothing is sized on them yet.
 
-Known gap: `paper_trade._kelly_fractions` subtracts `execution_cost_bps × 2`
-from the edge before Kelly. For a carry row (already net) that double-counts
-~15 bps — conservative, and only once a carry is `confirmed`. The fix belongs
-in paper_trade (pass `cost_bps=0` when `row["net_of_costs"]`).
+~~Known gap: `paper_trade._kelly_fractions` subtracts `execution_cost_bps × 2`
+from the edge before Kelly, double-counting ~15 bps on a carry row.~~ **Fixed
+2026-10-09 in 3af1eee**: Kelly does not charge the round trip again on a
+`net_of_costs` row.
 
 ## Correction — the momentum_xs edge was pseudo-replication (2026-10-09)
 
@@ -276,8 +276,11 @@ measured reason to hold capital.
   `oi_delta` looked like the one edge (+19.4 bps on fills) because its fill
   rate was 42 % and its horizon short; on the full signal set it is +1.3 bps
   (t=0.34). Do not size on fill-sampled edge.
-- **`oi_breakout` and `dca` pick direction worse than a coin flip**
-  (−14.9 t=−2.46, −5.8 t=−2.56): inverted, not mistuned. `grid` and
+- ~~**`oi_breakout` and `dca` pick direction worse than a coin flip**
+  (−14.9 t=−2.46, −5.8 t=−2.56): inverted, not mistuned.~~ **Superseded
+  2026-10-09** (rows-as-samples, 6dcc8f1; pre-signal entry, cda6ee6): on
+  episodes with the honest entry, vs random side oi_breakout −6.7 (t=−0.50),
+  dca −0.5 (t=−0.23) — no direction skill either way. `grid` and
   `funding_reversion` beat neither null and produce most of the volume. Volume without edge is
   the cost engine described in [[pnl-reality]].
 - **Multiple testing is corrected, not hand-waved.** Since 2026-09-20 the
@@ -312,8 +315,9 @@ while still losing on every trade.
 - ~~`barrier_study`, `execution_study` and `meta_label` do not yet collapse
   re-emissions.~~ Done 2026-10-09 (6dcc8f1), as are the certificate,
   efficacy, slot scorer, lab fitness, universe symbol edge, the Director
-  digest and the dashboard. Still on rows: the lesson synthesizer, reflection
-  `metrics_window`, setup memory, `allocation.load_pair_edges`, notify and
-  bulletin (see [[learning-loop]]).
+  digest and the dashboard. The last row-counting consumers moved to episodes
+  the same day: lessons (5f40b1d), reflection `metrics_window` (746b067),
+  setup memory and `load_pair_edges` (1a2ff96), notify's 24 h win rate
+  (c592b73). The deferred bulletin service was not audited.
 - Would the cost-engine strategies become positive at a much higher signal
   threshold (fewer, better trades), or is their signal empty at every threshold?

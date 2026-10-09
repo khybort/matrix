@@ -1,12 +1,16 @@
 ---
 title: Research backlog
-updated: 2026-09-20
-sources: ["external literature sweep 2026-09-20", "make edge-report / barrier-report / meta-report"]
+updated: 2026-10-09
+sources: ["external literature sweep 2026-09-20", "make edge-report / barrier-report / meta-report", "docs/wiki/signal-research-2026-10.md rounds 1–3b", "git log 06dad76..fb1d097"]
 status: current
 ---
 
 Methods not yet applied, ranked by expected value for *this* system's measured
-state: one strategy with verified edge, a book otherwise dominated by costs.
+state. On 2026-09-20 that state was "one strategy with verified edge"; that
+edge was **withdrawn 2026-10-09** (momentum_xs pseudo-replication, 5475933).
+On 2026-10-09 no strategy in the book has an edge, and the one candidate is the
+shadow `neg_funding_carry`. Entries below that lean on momentum_xs's edge are
+marked. The list of untested signal families is at the end.
 Each entry carries the single decisive experiment, so nothing is adopted on
 authority. Applied methods live in [[methods]].
 
@@ -14,7 +18,8 @@ authority. Applied methods live in [[methods]].
 `make execution-report` replayed every signal resting a limit at the signal
 bar's close, filling as maker when the market traded through it and crossing
 otherwise. Fill rates were high (82–91 %) and most strategies gained +2…+16 bps.
-**But `momentum_xs` — the one strategy with verified edge — lost 2.9 bps**
+**But `momentum_xs` — then believed to have verified edge (withdrawn
+2026-10-09) — lost 2.9 bps**
 (t=−0.35): a momentum signal's limit only fills when price comes back to it,
 i.e. exactly when the momentum has broken. Textbook adverse selection, and it
 outweighs the 6.5 bps of fee saved. Crossing remains correct for it.
@@ -29,8 +34,11 @@ episode, and maker exits add +1.7. No strategy turns net positive, so nothing
 was built. Long waits fill the losers in every arm, not only momentum.
 
 ## 2. Strategies that beat neither null — demoted, deliberately not deleted
-Eleven of thirteen beat neither null and two pick direction worse than a coin
-flip. All are at **zero slots**, so they hold no capital and cost nothing but
+Eleven of thirteen beat neither null, and two picked direction worse than a
+coin flip (that second finding was superseded on episodes on 2026-10-09; see
+[[edge-study]]). *2026-10-09:* `grid` and the momentum_xs champion are
+retired, cash_and_carry and xexch_funding_arb are retired on research
+evidence, and BIST/US are `paused`, which is reversible. All are at **zero slots**, so they hold no capital and cost nothing but
 database rows. Formal retirement was considered and rejected: a retired config
 stops emitting predictions, and predictions are the free evidence every study
 runs on ([[edge-study]] evaluates signals, not fills). A strategy that cannot
@@ -39,7 +47,12 @@ the evidence turns; a deleted one is gone. The one real cost is `matrix_agent`,
 which spends LLM calls per signal — its universe cap and HOLD cooldown bound
 that, and it is worth re-examining if the rate budget ever binds.
 
-## 3. ~~Horizon profiling~~ — MEASURED 2026-09-20, one change proposed
+## 3. ~~Horizon profiling~~ — MEASURED 2026-09-20; its one finding WITHDRAWN 2026-10-09
+
+*The momentum_xs 90-minute result below counted re-emitted rows (5475933).
+The horizon study now uses episodes and the honest entry rule (6dcc8f1,
+cda6ee6). The proposal it produced was built on a phantom edge.*
+
 `make horizon-report` measures each signal's **excess** return over a random
 entry in the same symbol at h = 1…120 min (subtracting per-symbol drift, or a
 rising tape reads as slow alpha), net of cost, with a t per horizon.
@@ -71,7 +84,10 @@ defence. The wallet's `max_position_pct` remains the ceiling in every branch,
 and a zero fraction falls back to the old sizing instead of suppressing a trade
 the slot gate allowed.
 
-Live on the first day: `momentum_xs` measures +33.2 bps at t=5.56 with a
+*Since 2026-10-09 no strategy is `confirmed`, so Kelly sizes nothing. A carry
+row is net of cost, and 3af1eee stopped Kelly from charging the round trip
+twice on it.* Historical, on the withdrawn edge:
+live on the first day, `momentum_xs` measured +33.2 bps at t=5.56 with a
 per-trade sd of 164.8 bps over 798 signals. Quarter-Kelly on eight concurrent
 positions asks for ~6.7% of equity; the 5% hard cap and then the 2% wallet gate
 both bind, so it sizes at the gate — roughly 2.3x its previous effective size.
@@ -121,7 +137,11 @@ convincing after deflation — yields the `pays` verdict that Kelly sizing
 ([[methods]]) and the EV floor act on. A row without a status keeps the old
 behaviour, so an unreadable registry can never starve the book.
 
-Standing on 2026-09-20 (14-day window):
+Standing on 2026-09-20 (14-day window). **Withdrawn 2026-10-09:**
+momentum_xs's `confirmed` came from re-emitted rows. 2a72463 marks its registry
+entry (936) superseded, along with matrix_agent/crypto (403). Since then every
+strategy is `unproven`. Carries reach the same bar through `carry_edge_rows`
+on realised episodes (cda6ee6, [[edge-study]]).
 
 | strategy | n | registered target | edge vs random entry | DSR | status |
 |---|---|---|---|---|---|
@@ -147,6 +167,16 @@ refreshes behind, with an in-flight guard. A stale edge is a fine input to a
 sizing decision; the loop stopping is not.
 
 ## Judged dead ends for this system
+*Added 2026-10-09:* pre-registered on a year of Bybit history and ticks
+([[signal-research-2026-10]]; cumulative m = 91), all rejected. The list covers
+funding and premium cross-sectional tilts, OI-conditioned and 24 h reversal,
+7 d momentum, and day-of-week and hour-of-day seasonality. Then aggressor-flow
+imbalance, large prints and 1-minute cascade fades. Also settlement drift
+before and after, Binance→Bybit lead-lag, OI build-up, and new-listing shorts.
+The positive-funding carry mirror and the perp-perp hedged negative carry fail
+too. The 5-min cascade fade (H8b) and the OI flush fade (H11) were near misses
+that failed out of sample. Re-open either one only on forward data.
+Before 2026-10-09:
 VPIN (mechanically a function of trading intensity); liquidation-cascade
 prediction (no ex-ante signature survives testing); open-interest and funding
 as sub-hour directional signals (funding is an 8 h average by construction —
@@ -159,6 +189,34 @@ return enhancer (treat it as drawdown control only). Order-flow imbalance is
 real but is a maker-quoting feature: published crypto gross edges cluster at
 0.4–3 bps against a ~10 bps floor.
 
+## What has not been tested (2026-10-09)
+The answer to "is there edge anywhere?" so far is one fragile carry. These
+families have **not** been tested in this repo. Each would need its own
+pre-registration and adds to m:
+- **Dated-futures basis carry** (round 4, H13): pre-registered in 17edd54.
+  Results go in its own section of [[signal-research-2026-10]].
+- **Forward-data re-tests** of the two near misses, both already
+  pre-specified: H8b on live `market_trades` from 2026-10-09, and H11 on a
+  quarter of forward OI.
+- **Liquidation feed**: a real one, not an aggressor-burst proxy. No history
+  exists, so the stream would have to be recorded first.
+- **Options-implied signals**: IV, skew and variance risk premium on venues
+  that list crypto options. No data is ingested.
+- **On-chain and flow data**: exchange net flows, stablecoin supply, token
+  unlock calendars. Nothing is ingested.
+- **Event-driven**: exchange listing and delisting announcements, which round 2
+  touched only through new-listing shorts.
+- **Cross-asset conditioning**: crypto against equity, rates and dollar moves.
+  The US feed exists but is paused.
+- **Pairs / cointegration stat-arb** between perps. Its costs are those of the
+  directional book, which no directional signal has yet cleared.
+- **Maker-quoting (spread capture)** as a strategy rather than an execution
+  style. Order-flow imbalance is "a maker-quoting feature" (dead ends above),
+  but our ~4 s book cadence and 5 s loop make queue position unreachable
+  today (#6).
+
 ## Open questions
 - Does #1 survive adverse selection on our actual symbol mix, most of which is
-  altcoin perps rather than BTC/ETH?
+  altcoin perps rather than BTC/ETH? *Partly answered 2026-10-09 by the tick
+  replay in [[maker-execution]]: a short rest then cross is +4…+6 bps on every
+  arm; long rests select losers.*

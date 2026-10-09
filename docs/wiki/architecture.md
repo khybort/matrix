@@ -1,6 +1,6 @@
 ---
 title: Architecture
-updated: 2026-09-19
+updated: 2026-10-09
 sources: [docker-compose.yml, docs/ARCHITECTURE.md, packages/python-shared/src/matrix_shared/]
 status: current
 ---
@@ -22,7 +22,7 @@ data; they meet in Postgres.
 - **Data flow, one lap:**
   `ingestion-market` (Bybit WS, yfinance) → `market_trades`/`market_ticker_snapshots`/`market_orderbook_snapshots` (LOCAL)
   → `bars-aggregator` → `market_bars` 1m and 1h
-  → `agent` (LLM+rule per symbol) and `strategy` (12 rule modules) → `predictions` (SHARED)
+  → `agent` (rule score per symbol; LLM off since 2026-10-09) and `strategy` (rule modules) → `predictions` (SHARED)
   → `backtest` paper engine → `paper_positions` → `outcomes`
   → `reflection` / `labs` / `agent_lessons` → `mutation_proposals` → applied as new `strategy_configs`
   → back into the next tick. [[learning-loop]] describes the gates on that last arc.
@@ -30,9 +30,14 @@ data; they meet in Postgres.
   (`matrix_shared/markets/`): `crypto` (Bybit, 24/7, shorts allowed),
   `bist` (Borsa Istanbul, long-only), `us` (S&P 500 + Nasdaq-100, added
   2026-09-14). Session hours, fees and short permission come from the adapter.
+  Since 2026-10-09 only crypto runs: BIST and US are paused
+  ([[market-cadence-study]]).
 - **The LLM is a component, not the system.** Rule models produce a verdict
-  independently; the model's verdict is blended with it ([[strategies]]), and
-  every LLM path degrades to rules when the backend is down ([[llm-stack]]).
+  independently, and every LLM path degrades to rules when the backend is down
+  ([[llm-stack]]). Since 2026-10-09 the trading path makes no LLM call at all.
+  The agent is `rule_only` and graph extraction is heuristic, because neither
+  measured any PnL contribution ([[llm-value-audit]]). The LLM remains in
+  reflection, the Director, synthesis and brain.
 
 ## Where measured models live
 

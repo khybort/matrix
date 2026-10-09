@@ -10,6 +10,13 @@ as [[strategy-scoreboard]]: non-shadow directional predictions since
 2026-09-01, **one per episode**, entry at the last *closed* 1m bar, net of the
 market's round trip (`2 × execution_cost_bps`: crypto ~15, BIST 40, US 8).
 
+**Entry-rule caveat (2026-10-09, cda6ee6).** The "strict" model here is the
+pre-signal rule the edge study withdrew. The "centred" model is close to the
+honest one. Per-strategy levels shift by up to ±12 bps under the honest rule
+([[edge-study]] "Correction — pre-signal path"). Both verdicts stand: BIST is
+40 bps of cost against single-digit gross, and the cadence result holds under
+both price models. **Both were applied 2026-10-09 in 9091f38.**
+
 ## Should BIST and US be running? — No. Pause both (2026-10-09)
 
 | | crypto | BIST | US |
@@ -115,9 +122,12 @@ Net bps per episode, centred, and the change from 15 s:
 - **Since 2026-09-30 every LLM call fails** (ledger: 0 successes 10-01…10-09;
   agent log: 309 subscription timeouts, circuit breaker open; cursor fallback
   "Authentication required"). The agent has been rule-only for 9 days; the
-  rate-budget question is currently academic.
+  rate-budget question is currently academic. *Update, later on 10-09:* the
+  backend answered again after the VM egress came back, which made the
+  [[llm-value-audit]] contention windows possible. The agent was then made
+  `rule_only` by choice (6a0884e).
 
-**Recommendation:** decision cadence 60 s for the agent
+**Recommendation (applied 2026-10-09, 9091f38):** decision cadence 60 s for the agent
 (`docker-compose.yml` `agent` command `--interval 15` → `60`, same in
 `docker-compose.dev.yml`; `DEFAULT_INTERVAL_S` in `agent/main.py`). Measured
 cost: none (crypto +1.4 bps, t=2.4); 4× fewer rule ticks, and roughly half the

@@ -159,10 +159,11 @@ Live check 2026-10-09 14:02: KAIAUSDT (1 h interval) settled at −0.50 %;
 strategy container drafted it, and the freshness guard kept all 19 watchlist
 symbols (newest datum 0.3–5.5 s old).
 
-**Open wiring (2026-10-09)**: the data streams, but the strategy dispatcher
-still hands `neg_funding_carry` only the traded set, so the module never looks
-at a watchlist coin. Until `strategy.main` gives it `crypto_symbols +
-carry_watchlist_async()`, the yield above is potential, not booked.
+~~**Open wiring (2026-10-09)**: the strategy dispatcher still hands
+`neg_funding_carry` only the traded set.~~ Closed 2026-10-09 in c49f08b. The
+dispatcher gives `neg_funding_carry`, and no other module, the watchlist.
+KAIA at 14:04 was the first booked carry ([[signal-research-2026-10]] "Live
+path").
 
 ### Borrow-rate recorder
 `services/ingestion/src/ingestion/borrow_recorder.py`, a task in `ingestion-market` (crypto only):
@@ -249,7 +250,15 @@ watchfiles restart does not replay it. To track another shadow strategy, put a
 State 2026-10-09 15:20 UTC: `collecting`, 1 open (KAIAUSDT), 0 closed; only 2
 qualifying settlements in 72 h (both KAIA) on the 19-coin watchlist, far under
 the ~21 per 72 h the 50/week expectation implies — staleness will not fire
-below 10, so a quiet watchlist reads as collecting, not broken.
+below 10, so a quiet watchlist reads as collecting, not broken. The low count
+was an artefact of the watchlist streaming only since 13:14
+([[signal-research-2026-10]] "Opportunity rate"). At 16:55 UTC:
+`COLLECTING — 0/20 closed ep, 3 open · … · 9 qualifying settlements/72h`.
+
+Read it by hand from any container that has the shared library (e.g. notify):
+`python -c "import asyncio; from matrix_shared import shadow_tracker as s; [print(s.format_line(r)) for r in asyncio.run(s.collect())]"`.
+A notify import error in its log at ~16:50 (`format_review`) came from a
+hot reload racing the shared-library edit, and cleared on the next restart.
 
 ## Storage
 

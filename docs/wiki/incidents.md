@@ -17,8 +17,8 @@ dominant failure mode here, and the reason liveness is measured by output age
   `_open_for_market(shadow=True)` resolved the wallet a second time without the
   flag, so every challenger position was booked into the default wallet with no
   per-strategy slot cap: `funding_reversion` v3 did 1 198 trades and −$343 in
-  one day. Fixed in 74eb6ff; the −346.76 refund is still pending
-  ([[pnl-reality]]). All champion/challenger comparisons before this date are
+  one day. Fixed in 74eb6ff; the −346.76 refund was applied 2026-09-19
+  (`make reset-capital`, [[pnl-reality]]). All champion/challenger comparisons before this date are
   invalid.
 - **2026-09-13 — a test truncated live `dev_tasks`.** The dev_agent conftest
   pointed at the live database; 9 task rows were lost and the live worker
@@ -48,6 +48,34 @@ dominant failure mode here, and the reason liveness is measured by output age
   284 M-row index every minute; Director filed tasks into the wrong database
   tier; phantom slot rows diluted every real strategy's share to 3 slots
   instead of 8.
+
+## 2026-09-13 → 10-09 — Four measurement artefacts that read as edge
+
+None of these lost money directly, because nothing was sized on them for long.
+But each one made a zero-edge signal look tradeable, and the learning loop
+acted on two of them. Withdrawn on 2026-10-09, in this order:
+
+1. **Re-emissions counted as trades** (5475933, 6dcc8f1, 8a28470).
+   momentum_xs's +36 bps (t=6.04) came from one three-hour v1 burst that
+   re-emitted ten bets every ~90 s. It reached `confirmed`, got 1 → 7 slots
+   and Kelly sizing at the 2 % gate, and the 90-minute horizon proposal was
+   built on it. On episodes it is −10.7 (t=−0.98).
+2. **Scoring across bar gaps** (2a72463). During the outage the "entry" was
+   the last bar before the hole. bist_volume_breakout read +116 bps on 244
+   take-profits, and matrix_agent/crypto read `confirmed` at +44.8. Both
+   registry entries are voided.
+3. **The pre-signal minute inside the entry bar** (cda6ee6). Up to 60 s
+   before the signal was scored. That flattered breakouts (oi_delta −11.9
+   bps once removed) and charged reversion entries; grid's "worse than
+   chance" came from this.
+4. **Bybit's post-settlement funding placeholder** (94e55cf). Every
+   inverse/xexch carry "flipped" at its first settlement and booked about 0
+   funding. Their 0 % win rate was the four-leg fee.
+
+**Lesson:** one definition of a bet, called by every consumer
+(`edge_study.episode_groups`); every arm of a study enters after the signal;
+never score across a hole. Details are in [[edge-study]] and
+`docs/ENGINEERING_LESSONS.md`.
 
 ## 2026-09-20 — The bot token was never ours alone
 
@@ -287,8 +315,9 @@ again until 10-09. No alert reached the operator at any point.
 
 **Not fixed here (operator / other tracks):** keep the laptop on AC — at the
 time of writing (10-09 11:59) it had been unplugged again; nothing local can
-alert once the host is dead, only before. Strategies emit on stale prices
-instead of standing down. Slots at 0 + EV floor mean the system can be fully up
+alert once the host is dead, only before. ~~Strategies emit on stale prices
+instead of standing down.~~ Fixed the same day in 7216361: a draft persists
+only when its symbol's newest bar or ticker is fresh (crypto 3 min). Slots at 0 + EV floor mean the system can be fully up
 and still never trade — that is a learning-loop question, not uptime.
 
 **The lesson:** an alert path that shares the failure domain of what it

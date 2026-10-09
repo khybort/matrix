@@ -21,9 +21,10 @@ response to a measured failure, never as decoration), and what is queued.
   same moment. Only both together separate "knows when" from "knows which way";
   judging on one null risks deleting a strategy that has the other kind of
   edge. The 2026-09-20 headline (`momentum_xs` +31.2 bps t=5.25 / +33.0 bps
-  t=5.55) is **withdrawn**: it counted re-emitted rows as trades. Counted per
-  bet it is −23.2 (t=−2.05) / −18.6 (t=−1.64); no strategy beats either null
-  after correction (2026-10-09, 30 d).
+  t=5.55) is **withdrawn** (5475933): it counted re-emitted rows as trades.
+  Counted per bet it was −23.2 (t=−2.05) / −18.6 (t=−1.64), and under the
+  honest entry rule −32.1 (t=−2.92) / −28.8 (t=−2.62) (cda6ee6). No strategy
+  beats either null after correction (2026-10-09, 30 d).
 - **One bet, one sample** (2026-10-09) — `edge_study.episode_groups`. A signal
   re-emitted for the same (strategy, market, symbol, side) inside the horizon
   of the first one is the same bet. Every study (edge, barrier, horizon,
@@ -31,6 +32,13 @@ response to a measured failure, never as decoration), and what is queued.
   count episodes; fills of one episode have their dollars summed. Effect:
   funding_reversion 13 804 rows → ~1 270 episodes, 3 101 fills → 473 bets.
   FDR/BHY cannot fix this: the error is in n, not in the p-value threshold.
+- **No pre-signal path in any arm** (2026-10-09, cda6ee6). Every arm enters
+  at the open of the first 1m bar starting at or after `generated_at` + 4 s
+  and is scored from there. The previous rule (close of the last bar before
+  the signal, scored from the bar in force) credited breakout signals the
+  move that fired them and charged reversion entries theirs: oi_delta −11.9,
+  momentum_xs −9.3, grid +10.6 bps gross on the same episodes. The barrier,
+  horizon, execution and meta-label studies use the same rule.
 - **Never score across a hole in the bars** (2026-10-09). An entry whose last
   closed bar is more than 3 min old, or a window with two consecutive bars more
   than 3 min apart, is unscorable. Without it `bist_volume_breakout` read +104
@@ -48,9 +56,11 @@ response to a measured failure, never as decoration), and what is queued.
   take-profits sitting 8.8σ (`grid`) and 6.8σ (`matrix_agent`) away — barriers
   no trade could reach, which is why 57 % of exits were time exits at minus the
   round trip. Replay (2026-09-20, rows-as-samples): `oi_breakout` −6.7 →
-  +14.1 net bps, `momentum_xs` +15.7 → +26.9. On episodes (2026-10-09, 30 d)
-  `momentum_xs` is −33.4 now and −23.4 at its best multiple; `oi_breakout`
-  −22.3 → +41.3 at m=2.0 on 188 episodes — untested for significance.
+  +14.1 net bps, `momentum_xs` +15.7 → +26.9. On episodes (2026-10-09, 30 d,
+  still under the pre-signal entry rule) `momentum_xs` is −33.4 now and
+  −23.4 at its best multiple; `oi_breakout` −22.3 → +41.3 at m=2.0 on 188
+  episodes. That is untested for significance, not re-run since cda6ee6, and
+  not a claim.
 - **Multiple-testing correction** (Benjamini-Hochberg at FDR 5 %) — testing 13
   strategies at once means an uncorrected 5 % threshold yields roughly one
   false discovery per run, the mechanism behind backtests that never repeat
@@ -70,13 +80,19 @@ response to a measured failure, never as decoration), and what is queued.
   that beats a null by more than its round trip gets a full wallet share even
   if its realised history is poor; `perf_score` reflects fills that may have
   been broken. `momentum_xs` went 1 → 7 slots on this rule — on the withdrawn
-  edge. Since 2026-10-09 a strategy with no active config or no signal in 24 h
+  edge. A losing streak can only cap slots, never grant one (5e551a5). Since 2026-10-09 a strategy with no active config or no signal in 24 h
   is never promoted.
 - **Size on the lower bound of a measured edge, not its point estimate.**
   Kelly is about an order of magnitude more sensitive to errors in the mean
   than in the variance, so a point estimate plus full Kelly is a reliable way
   to go broke while being directionally right. We take the 95% lower bound,
   quarter it, and keep the risk gate above it. See [[research-backlog]] #5.
+- **Pre-registration with a time holdout for new signal families**
+  ([[signal-research-2026-10]]). The hypothesis count is fixed before any
+  return is computed (`PREREG.txt` committed alone), the holdout is
+  evaluated once, only for train passers, and BY runs over the cumulative m
+  of the whole programme (91 through round 3b). t-statistics are clustered by
+  day or week, because same-day episodes share one regime.
 - **Correct for having searched.** Thirteen strategies scored on the same bars
   are not thirteen independent tests, and the best of them is biased upward
   even if all are worthless. Significance is Benjamini-Yekutieli, Sharpe is

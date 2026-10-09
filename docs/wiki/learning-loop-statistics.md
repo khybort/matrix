@@ -118,9 +118,10 @@ probe is maintenance: **~310 → ~105 probe signal-episodes a week
 
 Probes are now excluded from reflection's metrics and efficacy samples
 (`reflection.metrics.is_probe`). Still counted, as of 2026-10-09: the slot
-scorer (arguably right — probes do occupy the strategy's slots) and
-`edge_study._load_candidates` (shared module, not changed here; filtering
-`is_exploration` there as `is_shadow` already is would remove the dilution).
+scorer (arguably right — probes do occupy the strategy's slots). ~~And
+`edge_study._load_candidates`~~: probes left the edge study the same day in
+ad03b11, so the dilution is gone (matrix_agent/crypto 1 054 → 659 episodes in
+the 30-day table, [[edge-study]]).
 
 ## 3. Reflection's mutation trigger
 Old: n ≥ 10 episodes and (total < 0 or avg score < trigger; deployed trigger

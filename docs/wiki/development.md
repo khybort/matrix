@@ -1,6 +1,6 @@
 ---
 title: Development
-updated: 2026-09-19
+updated: 2026-10-09
 sources: [docs/ENGINEERING_LESSONS.md, docker-compose.dev.yml, packages/python-shared/src/matrix_shared/dev_watchfiles.py]
 status: current
 ---
@@ -16,6 +16,12 @@ live, and another author's uncommitted work shares it.
   `matrix_shared/dev_watchfiles.py` restarts a child that exits on its own
   (2→60 s backoff, logged). Before that a crashed worker left a healthy-looking
   empty container — three days of no trading ([[incidents]]).
+- **`make test-all` runs every suite** (7b347ce): each Python suite in its
+  own image plus the web typecheck, with a PASS/FAIL/SKIP table. It stops the
+  live `backtest` container for the backtest suite and restarts it from a trap.
+  DB tests in director, reflection, strategy, execution and labs run inside a
+  rolled-back transaction (97fb41f). Details are in [[operations]] "Tests". It
+  was all green on 2026-10-09.
 - **Tests run inside the service image** (the host has no `uv`):
   `docker run --rm --entrypoint uv matrix-<svc>:local run --no-sync pytest`
   with `src/` and `tests/` bind-mounted. Service directories use underscores,

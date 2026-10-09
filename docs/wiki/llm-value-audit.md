@@ -27,6 +27,13 @@ exactly when the LLM answered, so every signal falls in one arm:
 | rule, LLM down | rule traded, no LLM answer (outage 09-12, 09-22/23, 10-01…) |
 | explore, LLM up/down | ε-probe in the rule's lean after a hold |
 
+**Entry-rule caveat (2026-10-09, cda6ee6):** these replays used the
+pre-signal entry rule that the edge study later withdrew. The verdicts rest on
+paired, same-hours differences: LLM side vs rule-lean side on the same entry,
+and taken trades vs declined probes in the same hours. The entry rule shifts
+both arms alike, so the verdicts stand. Absolute gross levels may move by a
+few bps; matrix_agent/crypto moved −0.1 ([[edge-study]]).
+
 The 09-30 → 10-08 outage is mostly unusable (crypto bars missing 10-01…10-08);
 the entry-age and bar-gap guards drop those signals automatically
 (`unscorable` below). Rule-only evidence with fresh bars comes from 09-12/13
