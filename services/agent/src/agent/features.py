@@ -19,6 +19,13 @@ from matrix_shared.models import (
     TickerSnapshot,
 )
 
+# The venue the agent trades and whose perp stream carries OI. The ticker and
+# book tables also hold `binance` (funding poller, every ~60 s, no OI),
+# `bybit-spot` and `binance-spot` (carry spot legs) rows under the SAME symbol;
+# reading "latest row for symbol" picked one of those ~8 % of the time
+# (2026-10-09): Binance's funding, no OI, a cross-venue 5-minute price change.
+PERP_VENUE = "bybit"
+
 
 @dataclass(slots=True)
 class SymbolFeatures:
@@ -106,6 +113,7 @@ async def extract_symbol_features(symbol: str, asset_class: str = "crypto") -> S
         ob_stmt = (
             select(OrderBookSnapshot)
             .where(OrderBookSnapshot.symbol == symbol)
+            .where(OrderBookSnapshot.exchange == PERP_VENUE)
             .order_by(desc(OrderBookSnapshot.snapshot_ts))
             .limit(1)
         )
@@ -129,6 +137,7 @@ async def extract_symbol_features(symbol: str, asset_class: str = "crypto") -> S
         tk_stmt = (
             select(TickerSnapshot)
             .where(TickerSnapshot.symbol == symbol)
+            .where(TickerSnapshot.exchange == PERP_VENUE)
             .order_by(desc(TickerSnapshot.snapshot_ts))
             .limit(1)
         )
@@ -143,6 +152,7 @@ async def extract_symbol_features(symbol: str, asset_class: str = "crypto") -> S
                 older_stmt = (
                     select(TickerSnapshot.open_interest, TickerSnapshot.last_price)
                     .where(TickerSnapshot.symbol == symbol)
+                    .where(TickerSnapshot.exchange == PERP_VENUE)
                     .where(TickerSnapshot.snapshot_ts <= older)
                     .order_by(desc(TickerSnapshot.snapshot_ts))
                     .limit(1)
