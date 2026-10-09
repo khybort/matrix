@@ -80,15 +80,27 @@ def due(quotes: dict[Key, Quote], last: dict[Key, tuple[Quote, float]], now_s: f
 
 
 async def _fetch(client: httpx.AsyncClient) -> tuple[dict | None, dict | None]:
+    """Both tables. Bybit answers HTTP 200 with retCode 10006 when the shared
+    IP's rate limit is hit (the strategy and the watchlist read the same
+    endpoint), so a non-zero retCode is retried like a transport error."""
     docs: list[dict | None] = []
     for url in (_BYBIT_MARGIN, _BINANCE_MARGIN):
-        try:
-            r = await client.get(url, timeout=15)
-            r.raise_for_status()
-            docs.append(r.json())
-        except Exception as e:  # noqa: BLE001 — one venue down leaves the other
-            logger.warning(f"borrow recorder: {url.split('/')[2]} unavailable: {e}")
-            docs.append(None)
+        doc, err = None, ""
+        for attempt in range(3):
+            try:
+                r = await client.get(url, timeout=15)
+                r.raise_for_status()
+                j = r.json()
+                if j.get("retCode", 0) == 0:
+                    doc = j
+                    break
+                err = f"retCode {j.get('retCode')} {j.get('retMsg')}"
+            except Exception as e:  # noqa: BLE001 — one venue down leaves the other
+                err = str(e)
+            await asyncio.sleep(5 * (attempt + 1))
+        if doc is None:
+            logger.warning(f"borrow recorder: {url.split('/')[2]} unavailable: {err}")
+        docs.append(doc)
     return docs[0], docs[1]
 
 
