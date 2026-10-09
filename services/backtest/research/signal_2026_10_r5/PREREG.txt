@@ -87,3 +87,9 @@ survives, the negatives are written up in docs/wiki/signal-research-2026-10.md, 
 
 ------------------------------------------------------------------------------------------------------------------------
 LOG
+2026-10-09 17:10 UTC  PREREG committed in 1b2b6e1. Fetched: DVOL 1h BTC/ETH 48 601 bars each, no gaps; Bybit 1h klines
+                  BTCUSDT 50 586 / ETHUSDT 48 834 (ETH perp starts 2021-03-15), no gaps after 2021-03-24; funding 6 400 rows each,
+                  every 8 h, no gaps. 5 book snapshots per perp. Option-trade fetch running (~0.6 day-files/s).
+                  No scipy on the host: the Student-t tail is a numeric integral of the density (checked: t=2, df=30 -> 0.0273).
+                  Feature pipeline debugged on the first ~50 days of trades only (no return touched). RR25 / TERM are missing on
+                  ~20 % of early days (thin 4 h window), as the missing rule says.
