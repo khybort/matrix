@@ -94,3 +94,68 @@ carry WIP in `paper_trade.py`; ships with that WIP).
   the shadow book gathers ~5 episodes a month.
 - Four-leg cost on illiquid spot may exceed 30 bps; the 60 bps sensitivity
   still holds (+105, t=7.9 holdout), the < $1M bucket does not at ×3 borrow.
+
+## Adversarial check (2026-10-09)
+Independent attempt to break H1 on the same data (exec episodes, train
+n=3 464, holdout n=1 105), plus spot klines per episode (Bybit spot, else
+Binance spot; 4 419 of 4 569 episodes covered), today's order books for every
+episode coin, Bybit delisting announcements and the funding history of 145
+delisted perps. Scripts lived in the session scratchpad (`h1check/`), not
+committed. Mean net bps per episode, train / holdout; t clustered by ISO week
+(35 / 19 clusters).
+
+| # | check | train | holdout | effect vs study |
+|---|---|---|---|---|
+| 0 | study net, borrow ×1, 30 bps fees | +104.2 (t_wk 10.7) | +135.0 (t_wk 8.1) | — |
+| 1 | sign / interval: long perp receives −rate, each raw settlement summed once; 6/12/24/48 settlements per 48 h match 8/4/2/1 h intervals; interval switches mid-episode are handled because raw rates are summed (21 % of episodes have an entry interval ≠ today's) | no change | no change | 0 |
+| 2 | real spot hedge (perp close − spot close, not premium index) **and** entry 1 h after settlement | +99.7 | +134.4 | −4 / −1 |
+| 3 | funding on mark-to-market notional | +108.9 | +131.7 | +9 / −3 |
+| 4 | 4 taker legs (31 bps) + spread/impact from today's books, **$500** per leg (median cost 64 bps vs 30) | **+72.7** (t_wk 7.5) | **+93.4** (t_wk 6.0) | −36 / −38 |
+| 5 | same at **$5k** per leg (median cost 139 bps) | −48.1 | +1.8 (t 0.1) | −157 / −130 |
+| 6 | row 4, borrow ×3 | +18.1 (t_wk 2.0) | +23.5 (t_wk 1.5) | −55 / −70 |
+| 7 | row 4, borrow ×10 | −173.0 | −221.4 | −246 / −315 |
+| 8 | row 4, top 5 % of episodes removed | +9.3 (t_wk 2.2) | +19.8 (t_wk 3.7) | −63 / −74 |
+| 9 | row 7 (×10 borrow), top 5 % removed | −237.1 | −295.6 | — |
+| 10 | row 4, only episodes with 48 h funding ≤ 500 bps (94 % of them) | +5.5 (t_wk 1.5) | +4.7 (t_wk 0.8) | −67 / −89 |
+| 11 | clustering: study net, t by day / by week | t 12.6 / 10.7 | t 9.8 / 8.1 | t only |
+| 12 | survivorship: 145 delisted perps add 1 467 train / 130 holdout episodes; their funding leg is similar (+111 / +151 mean); 42 straddle the delisting | bound ≈ −15 | bound ≈ −10 | 0 central, −15 pessimistic |
+
+Findings:
+- **The accounting is right.** Funding sign, per-settlement counting and the
+  1/2/4/8 h intervals are correct; the premium-index basis term matches a
+  real spot-hedged P&L (17 vs 21 bps mean, corr 0.77); perp < spot at 77 % of
+  entries and the basis *converges in our favour*; entering one hour later
+  costs nothing. No look-ahead found (rate known at settlement, premium bar
+  ends at settlement). Not an artefact of the three kinds withdrawn today.
+- **The magnitude is a cost-and-borrow artefact.** Spread is real money on
+  these coins: median spot turnover of an episode coin is $0.23 M/day (perp
+  $4.4 M), round-trip impact at $5k is ~40 bps per leg. At $5k per leg the edge
+  is zero.
+- **It lives where borrow is least believable.** Top-5 % episodes collect a
+  median 951 / 1 179 bps of funding in 48 h, 36–40× the borrow charged. That
+  gap staying open for two days is itself evidence that borrow was not
+  available at that rate — anyone with borrow would have closed it. Today's
+  snapshot agrees: coins now at funding ≤ −8 bps/8 h pay median 6.2 bps/8 h to
+  borrow, against 0.4–1.0 for coins near zero funding — so charging a calm
+  coin today's rate for its squeeze understates by several ×. Without the
+  episodes paying > 500 bps in 48 h, the net is +5 bps, t < 1.6.
+- **Concentration**: top 5 % of episodes are 88 % (train) / 79 % (holdout) of
+  the $500-cost PnL; top 10 days are 21 % / 42 %; holdout's top five coins (H,
+  HOME, ONG, LSK, T) are 44 %. Concurrency is low except 2025-10-11 (163
+  episodes in one day, mean −36).
+- **Survivorship is not the problem.** Delisted coins had similar funding;
+  the bias is rather that "borrowable today" silently drops coins whose
+  lending was discontinued and adds coins whose margin arrived later — it
+  cannot be measured from public data.
+
+**Verdict: (b) real but much smaller, and not sized.** Best net estimate:
+**about +20 bps per episode at ≤ $500 per leg with borrow at ~3× today's
+rate** (week-clustered t 1.5–2.0, CI includes zero), **≈ 0 at $5k**, negative
+if squeeze borrow is ≥ 6× today's. The study's +104 / +135 bps assumes free
+spread and calm-day borrow on squeezed coins. Consequences: no capital
+allocation from this evidence; the `neg_funding_carry` shadow run is still
+worth keeping because the decisive unknown — borrow you can actually get, at
+what rate, at signal time on a squeezed coin — is only measured by a signed
+borrow quote at entry (record quoted rate and max loanable per signal), and
+the strategy should skip any episode whose quoted borrow × 48 h + measured
+book cost exceeds a third of the funding it expects.
