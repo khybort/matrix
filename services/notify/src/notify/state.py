@@ -13,9 +13,10 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import case, desc, func, select
+from sqlalchemy import desc, func, select
 
 from matrix_shared import shared_session_scope
+from matrix_shared.edge_study import episode_summary
 from matrix_shared.models import (
     Outcome,
     PaperPosition,
@@ -93,27 +94,35 @@ async def get_open_positions_summary(wallet_id: str) -> dict[str, Any]:
 
 
 async def get_recent_pnl(window_hours: int = 24) -> dict[str, Any]:
-    """Sum + count of outcomes in the last N hours."""
+    """PnL and win rate of the outcomes in the last N hours, one sample per
+    bet: a signal re-emitted or re-filled inside its horizon is the same bet
+    (`edge_study.episode_groups`), so its rows are summed before it is
+    counted as a win or a loss. Dollars are every row's."""
     from datetime import timedelta
     cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
     async with shared_session_scope() as session:
-        agg = (
+        rows = (
             await session.execute(
                 select(
-                    func.count(Outcome.id),
-                    func.sum(Outcome.pnl_usd),
-                    func.sum(case((Outcome.pnl_usd > 0, 1), else_=0)),
+                    Prediction.strategy_id, Prediction.asset_class, Prediction.symbol,
+                    Prediction.side, Prediction.generated_at, Prediction.horizon_seconds,
+                    Outcome.pnl_usd,
                 )
+                .join(Prediction, Prediction.id == Outcome.prediction_id)
                 .where(Outcome.observed_at >= cutoff)
             )
-        ).one()
-    n, total_pnl, wins = agg
-    n = int(n or 0)
-    total = Decimal(total_pnl or 0)
-    wins_n = int(wins or 0)
+        ).mappings().all()
+    return recent_pnl_summary([dict(r) for r in rows], window_hours)
+
+
+def recent_pnl_summary(rows: list[dict], window_hours: int) -> dict[str, Any]:
+    s = episode_summary(rows, lambda r: None).get(None, {"n": 0, "n_raw": 0, "wins": 0})
+    n, wins_n = int(s["n"]), int(s["wins"])
+    total = sum((Decimal(r["pnl_usd"] or 0) for r in rows), Decimal("0"))
     return {
         "window_hours": window_hours,
         "n_outcomes": n,
+        "n_raw": int(s["n_raw"]),
         "total_pnl_usd": str(total),
         "win_rate": (wins_n / n) if n > 0 else None,
         "wins": wins_n,
