@@ -23,6 +23,7 @@ from matrix_shared.agent_runtime.tool import (
     mcp_tool_names,
     tool,
 )
+from matrix_shared.edge_study import episode_groups
 from matrix_shared.subscription_llm import (
     MODEL_SONNET,
     call_subscription_agent,
@@ -40,6 +41,27 @@ from reflection.parsing import (
 
 MAX_TURNS = 6
 _SERVER = "reflection"
+# Outcome rows read before collapsing to bets; re-emitting strategies leave
+# many rows per bet, so the bet cap applies after grouping.
+RAW_ROW_CAP = 2000
+
+
+def episode_items(rows: list[dict]) -> list[dict]:
+    """One item per bet, newest first: the bet's fields, summed pnl_usd, mean
+    score and the number of rows (`fills`) it left."""
+    out = []
+    for g in episode_groups(sorted(rows, key=lambda r: r["generated_at"])):
+        bet = g[0]
+        scores = [float(r["score"]) for r in g if r["score"] is not None]
+        out.append({
+            "symbol": bet["symbol"], "side": bet["side"], "confidence": bet["confidence"],
+            "asset_class": bet["asset_class"], "created_at": bet["created_at"],
+            "reason": bet["reason"], "fills": len(g),
+            "pnl_usd": sum(float(r["pnl_usd"] or 0) for r in g),
+            "score": sum(scores) / len(scores) if scores else None,
+        })
+    out.reverse()
+    return out
 
 
 def _text(payload: Any) -> dict:
@@ -55,11 +77,12 @@ def _build_registry(strategy_id: str, asset_class: str | None = None) -> ToolReg
 
     @tool(
         "recent_outcomes",
-        "Recent outcomes for this strategy. Default returns the most recent "
-        "30 rows; if more exist, the response is summarized to top_15 + "
-        "bottom_15 + per-symbol aggregates so the model sees shape without "
-        "the full payload. Pass verbose=true (≤ 60 rows) only when you need "
-        "the full list.",
+        "Recent outcomes for this strategy, one item per bet (episode): a "
+        "signal re-emitted or re-filled inside its horizon is the same bet, so "
+        "its fills are summed into one item (`fills` = rows). Default returns "
+        "the most recent 30 bets; if more exist, the response is summarized to "
+        "top_15 + bottom_15 + per-symbol aggregates. Pass verbose=true (≤ 60 "
+        "bets) only when you need the full list.",
         {"hours": float, "verbose": bool},
     )
     async def recent_outcomes(args: dict) -> dict:
@@ -68,7 +91,7 @@ def _build_registry(strategy_id: str, asset_class: str | None = None) -> ToolReg
         cap = 60 if verbose else 30
         sql = text(
             "SELECT o.score, o.pnl_usd, o.reason, p.symbol, p.side, p.confidence, "
-            "       p.asset_class, p.created_at "
+            "       p.asset_class, p.created_at, p.strategy_id, p.generated_at, p.horizon_seconds "
             "FROM outcomes o JOIN predictions p ON p.id = o.prediction_id "
             "WHERE p.strategy_id = :sid "
             "  AND (:ac IS NULL OR p.asset_class = :ac) "
@@ -78,34 +101,32 @@ def _build_registry(strategy_id: str, asset_class: str | None = None) -> ToolReg
         try:
             async with shared_session_scope() as session:
                 rows = (await session.execute(
-                    sql, {"sid": strategy_id, "ac": asset_class, "hours": str(hours), "lim": cap}
+                    sql, {"sid": strategy_id, "ac": asset_class, "hours": str(hours), "lim": RAW_ROW_CAP}
                 )).mappings().all()
         except Exception as e:
             return _error(f"query failed: {e}")
-        items = [dict(r) for r in rows]
-        if verbose or len(items) <= 30:
-            return _text(items)
-        # Compress: top 15 / bottom 15 + per-symbol aggregates.
+        episodes = episode_items([dict(r) for r in rows])
+        n_raw = len(rows)
+        items = episodes[:cap]
+        if verbose or len(episodes) <= 30:
+            return _text({"bets": items, "total": len(episodes), "n_raw": n_raw})
+        # Compress: top 15 / bottom 15 + per-symbol aggregates over every bet.
         by_symbol: dict[str, dict] = {}
         by_reason: dict[str, dict] = {}
-        for it in items:
-            sym = str(it.get("symbol", ""))
-            agg = by_symbol.setdefault(sym, {"n": 0, "wins": 0, "pnl": 0.0})
+        for it in episodes:
+            agg = by_symbol.setdefault(str(it["symbol"]), {"n": 0, "wins": 0, "pnl": 0.0})
+            r = by_reason.setdefault(str(it["reason"]), {"n": 0, "pnl": 0.0})
             agg["n"] += 1
-            r = by_reason.setdefault(str(it.get("reason", "?")), {"n": 0, "pnl": 0.0})
             r["n"] += 1
-            try:
-                pnl = float(it.get("pnl_usd") or 0)
-                agg["pnl"] += pnl
-                r["pnl"] += pnl
-                if pnl > 0:
-                    agg["wins"] += 1
-            except (TypeError, ValueError):
-                pass
+            agg["pnl"] += it["pnl_usd"]
+            r["pnl"] += it["pnl_usd"]
+            if it["pnl_usd"] > 0:
+                agg["wins"] += 1
         return _text({
             "head": items[:15],
             "tail": items[-15:],
-            "total": len(items),
+            "total": len(episodes),
+            "n_raw": n_raw,
             "by_symbol": by_symbol,
             "by_exit_reason": by_reason,
         })
@@ -217,7 +238,7 @@ async def run_reflection_agent(
     user = (
         f"Strategy: {strategy_id}\n"
         f"Current params: {orjson.dumps(current_params).decode()}\n"
-        f"Window metrics ({m.n_outcomes} outcomes): "
+        f"Window metrics ({m.n_outcomes} bets from {m.n_raw} outcome rows; win_rate per bet): "
         f"avg_score={m.avg_score} win_rate={m.win_rate} "
         f"total_pnl_usd={m.total_pnl_usd}.\n"
         "Investigate via tools, then emit the JSON object (or {} for no change)."

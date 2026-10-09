@@ -91,7 +91,7 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
             logger.exception(f"metrics window failed for {cfg.strategy_id}: {e}")
             continue
         logger.info(
-            f"{cfg.strategy_id}/{cfg.asset_class} v{cfg.version}: n={m.n_outcomes} "
+            f"{cfg.strategy_id}/{cfg.asset_class} v{cfg.version}: n={m.n_outcomes} episodes ({m.n_raw} rows) "
             f"avg_score={m.avg_score:.4f} win_rate={m.win_rate:.3f} "
             f"pnl={m.total_pnl_usd:.4f}USD"
         )
@@ -221,6 +221,8 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
 
             metrics_snapshot = {
                 "n_outcomes": m.n_outcomes,
+                "n_raw": m.n_raw,
+                "unit": "episode",
                 "avg_score": str(m.avg_score),
                 "win_rate": str(m.win_rate),
                 "total_pnl_usd": str(m.total_pnl_usd),

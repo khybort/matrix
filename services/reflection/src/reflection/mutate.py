@@ -287,7 +287,7 @@ def rule_propose(
 
     rationale = (
         f"total_pnl_usd={m.total_pnl_usd:.2f} avg_score={m.avg_score:.4f} over "
-        f"{m.n_outcomes} outcomes (win_rate={m.win_rate:.3f}). Shifting weight "
+        f"{m.n_outcomes} bets (win_rate={m.win_rate:.3f}). Shifting weight "
         f"toward oi_delta/news, lowering signal_threshold, extending horizon toward "
         f"{TARGET_HORIZON_S}s, reducing exploration."
     )
@@ -385,7 +385,7 @@ def rule_propose_param_tune(
 
     rationale = (
         f"{strategy_id}: avg_score={m.avg_score:.4f}, win_rate={m.win_rate:.3f}, "
-        f"total_pnl_usd={m.total_pnl_usd:.2f} over {m.n_outcomes} outcomes. "
+        f"total_pnl_usd={m.total_pnl_usd:.2f} over {m.n_outcomes} bets. "
         f"Adjusting {knob}: {current} → {new_value}."
     )
 
