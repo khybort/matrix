@@ -294,9 +294,11 @@ ROLLUP_TICK_HOURS = float(os.environ.get("BARS_ROLLUP_TICK_HOURS", "3"))
 
 
 async def _tick_symbols() -> list[str] | None:
+    # The streamed set, carry watchlist included: a watchlist coin with trades
+    # but no bars is "stale" to the strategy's freshness guard.
     try:
-        from matrix_shared.markets.crypto import crypto_universe_async
-        syms = await crypto_universe_async()
+        from matrix_shared.markets.crypto import crypto_ingest_universe_async
+        syms = await crypto_ingest_universe_async()
         return list(syms) or None
     except Exception as e:  # noqa: BLE001 — fall back to the unfiltered (slow) query
         logger.debug(f"bars tick: universe lookup failed ({e}); aggregating all symbols")
@@ -323,11 +325,39 @@ async def _newest_bar_age_s() -> float | None:
         return None
 
 
+# A symbol that joins the streamed set mid-run (carry watchlist) gets this
+# much kline history once, so 1h rollups and vol lookbacks see more than the
+# minutes since it was subscribed. The first tick only records the set:
+# startup backfill already covers it.
+JOIN_BACKFILL_HOURS = float(os.environ.get("BARS_JOIN_BACKFILL_HOURS", "48"))
+_known_symbols: set[str] | None = None
+
+
+async def _backfill_joined(symbols: list[str] | None) -> None:
+    global _known_symbols
+    if not symbols:
+        return
+    cur = set(symbols)
+    if _known_symbols is None:
+        _known_symbols = cur
+        return
+    joined = sorted(cur - _known_symbols)
+    _known_symbols = cur
+    if joined and JOIN_BACKFILL_HOURS > 0:
+        try:
+            n = await rest_backfill_missing(joined, JOIN_BACKFILL_HOURS)
+            logger.info(f"joined {joined}: {n} kline rows backfilled ({JOIN_BACKFILL_HOURS:.0f}h)")
+        except Exception as e:  # noqa: BLE001 — history is a nicety; the live bars are not
+            logger.warning(f"join backfill {joined} failed: {e}")
+
+
 async def tick(lookback_minutes: int) -> int:
     """Re-aggregate the last `lookback_minutes` worth of bars. Idempotent."""
     until = datetime.now(timezone.utc)
     since = until - timedelta(minutes=lookback_minutes)
-    n = await aggregate_window(since, until, symbols=await _tick_symbols())
+    symbols = await _tick_symbols()
+    n = await aggregate_window(since, until, symbols=symbols)
+    await _backfill_joined(symbols)
     h_since = until - timedelta(hours=ROLLUP_TICK_HOURS)
     h = await rollup_1h_bars(h_since, until)
     if n or h:

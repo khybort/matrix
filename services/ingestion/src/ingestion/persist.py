@@ -1,17 +1,23 @@
-"""Batch-write market events to Postgres, routed by event type."""
+"""Batch-write market events to Postgres, routed by event type.
+
+Several streams (perp, Bybit spot, Binance spot) each run their own
+`persist_events` loop; bars from the spot legs upsert into market_bars.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterator
 
 from loguru import logger
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from matrix_shared import session_scope
-from matrix_shared.models import MarketTrade, OrderBookSnapshot, TickerSnapshot
+from matrix_shared.models import MarketBar, MarketTrade, OrderBookSnapshot, TickerSnapshot
 
 from ingestion.connectors.bybit import (
+    BarEvent,
     MarketEvent,
     OrderBookEvent,
     TickerEvent,
@@ -24,15 +30,16 @@ FLUSH_INTERVAL_S = 2.0
 
 
 class _Batches:
-    __slots__ = ("trades", "orderbooks", "tickers")
+    __slots__ = ("bars", "orderbooks", "tickers", "trades")
 
     def __init__(self) -> None:
         self.trades: list[TradePrint] = []
         self.orderbooks: list[OrderBookEvent] = []
         self.tickers: list[TickerEvent] = []
+        self.bars: list[BarEvent] = []
 
     def total(self) -> int:
-        return len(self.trades) + len(self.orderbooks) + len(self.tickers)
+        return len(self.trades) + len(self.orderbooks) + len(self.tickers) + len(self.bars)
 
 
 async def persist_events(stream: AsyncIterator[MarketEvent]) -> None:
@@ -103,10 +110,40 @@ async def persist_events(stream: AsyncIterator[MarketEvent]) -> None:
                     )
                 )
 
+            if batches.bars:
+                # One row per key: a repeated push in the same batch would make
+                # ON CONFLICT DO UPDATE touch a row twice and fail the flush.
+                latest = {(b.asset_class, b.symbol, b.ts): b for b in batches.bars}
+                stmt = pg_insert(MarketBar).values(
+                    [
+                        {
+                            "id": uuid.uuid4(),
+                            "symbol": b.symbol,
+                            "asset_class": b.asset_class,
+                            "interval": "1m",
+                            "ts": b.ts,
+                            "open": b.open,
+                            "high": b.high,
+                            "low": b.low,
+                            "close": b.close,
+                            "volume": b.volume,
+                            "source": b.exchange,
+                        }
+                        for b in latest.values()
+                    ]
+                )
+                stmt = stmt.on_conflict_do_update(
+                    constraint="uq_market_bars_class_sit",
+                    set_={c: stmt.excluded[c] for c in ("open", "high", "low", "close", "volume", "source")},
+                )
+                await session.execute(stmt)
+
         logger.info(
             f"persisted trades={len(batches.trades)} "
             f"ob={len(batches.orderbooks)} ticker={len(batches.tickers)}"
+            + (f" bars={len(batches.bars)}" if batches.bars else "")
         )
+        batches.bars.clear()
         batches.trades.clear()
         batches.orderbooks.clear()
         batches.tickers.clear()
@@ -119,6 +156,8 @@ async def persist_events(stream: AsyncIterator[MarketEvent]) -> None:
             batches.orderbooks.append(event)
         elif isinstance(event, TickerEvent):
             batches.tickers.append(event)
+        elif isinstance(event, BarEvent):
+            batches.bars.append(event)
         else:
             logger.warning(f"unknown event type: {type(event).__name__}")
             continue

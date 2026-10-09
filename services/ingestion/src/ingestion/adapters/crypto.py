@@ -1,40 +1,65 @@
-"""Crypto IngestorAdapter — wraps the existing BybitConnector + persist loop.
+"""Crypto IngestorAdapter — Bybit perp stream plus the carry spot legs.
 
-The ingestor periodically reconciles its active symbol set against
-`tradable_symbols` (UNIVERSE_RECONCILE_INTERVAL_S, default 300s). When the
-active set changes it cancels the current connector task and restarts with the
-new set — a controlled session bounce. Mirrors bist/bars.py's reconcile pattern
-(lowest risk; live WS unsubscribe/resubscribe is a follow-up).
+The perp stream follows `crypto_ingest_universe_async()`: the traded universe
+(`tradable_symbols` asset_class=crypto) plus the carry watchlist
+(asset_class=crypto_carry, refreshed hourly by ingestion.carry_watchlist).
+Every UNIVERSE_RECONCILE_INTERVAL_S (default 300 s), and right after each
+watchlist refresh, the set is re-read and the diff is (un)subscribed on the
+live socket — no reconnect, no gap for the symbols that stay.
 
-Set UNIVERSE_MANAGER_ENFORCE=true to activate dynamic universe management.
-Without it, crypto_universe() still falls back to _DEFAULT_UNIVERSE.
+On mainnet each watchlist coin's spot leg streams too (ticker every 15 s,
+closed 1m candles, top-of-book snapshot every 10 s), from Bybit spot or
+Binance spot as the watchlist row names.
+An explicit symbol list (CLI / CRYPTO_SYMBOLS) streams exactly that list.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
-import time
+from collections.abc import Callable
 
 from loguru import logger
+from sqlalchemy import text
 
+from matrix_shared import shared_session_scope
 from matrix_shared.markets import IngestorAdapter
-from matrix_shared.markets.crypto import crypto_universe_async
+from matrix_shared.markets.crypto import (
+    CARRY_WATCHLIST_ASSET_CLASS,
+    crypto_ingest_universe_async,
+)
 
+from ingestion import carry_watchlist
+from ingestion.connectors.binance_spot import BinanceSpotConnector
 from ingestion.connectors.bybit import BybitConnector
 from ingestion.persist import persist_events
 
 RECONCILE_INTERVAL_S = float(
     os.environ.get("UNIVERSE_RECONCILE_INTERVAL_S", "300")
 )
+SPOT_TICKER_INTERVAL_S = float(os.environ.get("CARRY_SPOT_TICKER_INTERVAL_S", "15"))
+SPOT_BOOK_INTERVAL_S = float(os.environ.get("CARRY_SPOT_BOOK_INTERVAL_S", "10"))
 
 
 async def _default_symbols() -> list[str]:
-    # Single source of truth — same set the strategies / agent trade, so we
-    # never stream a symbol nothing analyzes or analyze a symbol we don't
-    # stream. Override via CRYPTO_SYMBOLS. Async so the reconcile actually reads
-    # the active universe (the sync path returns _DEFAULT_UNIVERSE under a loop).
-    return await crypto_universe_async()
+    # Async so the reconcile reads the live sets (the sync path returns []
+    # under a running loop). Override via CRYPTO_SYMBOLS.
+    return await crypto_ingest_universe_async()
+
+
+async def spot_legs() -> dict[str, list[str]]:
+    """venue -> spot pairs of the active carry watchlist."""
+    async with shared_session_scope() as db:
+        rows = (await db.execute(text(
+            "SELECT components_json->>'spot_venue', components_json->>'spot_symbol' "
+            "FROM tradable_symbols WHERE asset_class = :ac AND active "
+            "AND components_json->>'spot_symbol' IS NOT NULL ORDER BY rank NULLS LAST"),
+            {"ac": CARRY_WATCHLIST_ASSET_CLASS})).all()
+    out: dict[str, list[str]] = {"bybit": [], "binance": []}
+    for venue, pair in rows:
+        if venue in out and pair not in out[venue]:
+            out[venue].append(pair)
+    return out
 
 
 class CryptoIngestor(IngestorAdapter):
@@ -52,51 +77,64 @@ class CryptoIngestor(IngestorAdapter):
         self.testnet = testnet
 
     async def run(self) -> None:
-        current_symbols = self._init_symbols or await _default_symbols()
-        last_reconcile = time.monotonic()
-
-        while True:
-            logger.info(
-                f"[crypto] ingest start: symbols={current_symbols} testnet={self.testnet}"
+        dynamic = self._init_symbols is None
+        perp = BybitConnector(self._init_symbols or await _default_symbols(), testnet=self.testnet)
+        logger.info(f"[crypto] ingest start: symbols={perp.symbols} testnet={self.testnet}")
+        streams: dict[str, Callable[[], object]] = {"perp": perp.stream}
+        bybit_spot: BybitConnector | None = None
+        binance_spot: BinanceSpotConnector | None = None
+        carry = dynamic and not self.testnet and carry_watchlist.ENABLED
+        changed = asyncio.Event()
+        if carry:
+            bybit_spot = BybitConnector(
+                [], testnet=False, category="spot",
+                ticker_interval_s=SPOT_TICKER_INTERVAL_S, book_interval_s=SPOT_BOOK_INTERVAL_S,
             )
-            connector = BybitConnector(current_symbols, testnet=self.testnet)
-            stream_task = asyncio.create_task(
-                persist_events(connector.stream()), name="crypto_stream"
-            )
+            binance_spot = BinanceSpotConnector()
+            streams["bybit-spot"] = bybit_spot.stream
+            streams["binance-spot"] = binance_spot.stream
 
-            try:
-                while not stream_task.done():
-                    await asyncio.sleep(min(10.0, RECONCILE_INTERVAL_S))
+        tasks: dict[str, asyncio.Task] = {}
 
-                    now = time.monotonic()
-                    if now - last_reconcile < RECONCILE_INTERVAL_S:
-                        continue
-                    last_reconcile = now
+        def _ensure_tasks() -> None:
+            for name, make in streams.items():
+                t = tasks.get(name)
+                if t is not None and not t.done():
+                    continue
+                if t is not None:
+                    exc = t.exception() if not t.cancelled() else None
+                    logger.warning(f"[crypto] {name} stream ended ({exc}); restarting")
+                tasks[name] = asyncio.create_task(persist_events(make()), name=f"crypto_{name}")
 
-                    new_symbols = await _default_symbols()
-                    if sorted(new_symbols) != sorted(current_symbols):
-                        logger.info(
-                            f"[crypto] universe changed: "
-                            f"{sorted(current_symbols)} -> {sorted(new_symbols)}; "
-                            "reconnecting"
-                        )
-                        stream_task.cancel()
-                        try:
-                            await stream_task
-                        except asyncio.CancelledError:
-                            pass
-                        current_symbols = new_symbols
-                        break  # restart outer loop with new symbols
-            except asyncio.CancelledError:
-                stream_task.cancel()
+        async def _reconcile() -> None:
+            await perp.set_symbols(await _default_symbols())
+            if carry and bybit_spot is not None and binance_spot is not None:
+                legs = await spot_legs()
+                await bybit_spot.set_symbols(legs["bybit"])
+                await binance_spot.set_symbols(legs["binance"])
+
+        aux: list[asyncio.Task] = []
+        if carry:
+            aux.append(asyncio.create_task(carry_watchlist.run(changed), name="carry_watchlist"))
+        loop = asyncio.get_running_loop()
+        # Spot legs resume from the stored watchlist before the first refresh lands.
+        last_reconcile = loop.time() - RECONCILE_INTERVAL_S if carry else loop.time()
+        try:
+            while True:
+                _ensure_tasks()  # a stream that died restarts within 10 s
+                due = loop.time() - last_reconcile >= RECONCILE_INTERVAL_S
+                if dynamic and (due or changed.is_set()):
+                    changed.clear()
+                    last_reconcile = loop.time()
+                    try:
+                        await _reconcile()
+                    except Exception as e:  # noqa: BLE001 — keep streaming the current set
+                        logger.warning(f"[crypto] universe reconcile failed: {e}")
                 try:
-                    await stream_task
-                except asyncio.CancelledError:
+                    await asyncio.wait_for(changed.wait(), timeout=10.0)
+                except TimeoutError:
                     pass
-                return
-
-            # If stream_task finished on its own (connector error / EOF) restart.
-            exc = stream_task.exception() if not stream_task.cancelled() else None
-            if exc:
-                logger.warning(f"[crypto] stream ended with error: {exc}; restarting")
-            await asyncio.sleep(2.0)  # brief pause before reconnect
+        finally:
+            for t in [*tasks.values(), *aux]:
+                t.cancel()
+            await asyncio.gather(*tasks.values(), *aux, return_exceptions=True)

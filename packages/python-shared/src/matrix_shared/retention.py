@@ -108,7 +108,7 @@ async def _partition_keys(policy: Policy) -> list[str]:
         logger.debug(f"retention: tradable_symbols unavailable ({e})")
     async with local_session_scope() as session:
         rows = (await session.execute(text(
-            "SELECT DISTINCT symbol FROM market_bars WHERE asset_class = 'crypto'"
+            "SELECT DISTINCT symbol FROM market_bars WHERE asset_class IN ('crypto', 'crypto_spot')"
         ))).all()
     keys.update(r[0] for r in rows)
     return sorted(keys)

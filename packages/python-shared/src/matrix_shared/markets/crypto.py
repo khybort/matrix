@@ -116,6 +116,43 @@ async def crypto_universe_async() -> list[str]:
     return await _async_db_active_universe()
 
 
+# Coins streamed for the hedged negative-funding carry but NOT traded by the
+# directional strategies: ingestion.carry_watchlist writes them to
+# tradable_symbols under this asset class (hourly, with hysteresis).
+CARRY_WATCHLIST_ASSET_CLASS = "crypto_carry"
+
+
+async def carry_watchlist_async() -> list[str]:
+    """Active carry-watchlist perps, best rank first. Empty under a
+    CRYPTO_SYMBOLS override (a pinned manual universe streams nothing else)."""
+    if os.environ.get("CRYPTO_SYMBOLS", "").strip():
+        return []
+    from matrix_shared import shared_session_scope
+
+    try:
+        async with shared_session_scope() as db:
+            res = await db.execute(
+                text(
+                    "SELECT symbol FROM tradable_symbols WHERE asset_class = :ac AND active "
+                    "ORDER BY rank NULLS LAST, symbol"
+                ),
+                {"ac": CARRY_WATCHLIST_ASSET_CLASS},
+            )
+            return [r[0] for r in res]
+    except Exception as e:  # noqa: BLE001 — the watchlist is additive; never block the core set
+        logger.debug(f"carry watchlist unavailable: {e}")
+        return []
+
+
+async def crypto_ingest_universe_async() -> list[str]:
+    """What ingestion streams and bars-aggregator aggregates: the traded
+    universe plus the carry watchlist. Strategies keep `crypto_universe_async`
+    so directional modules never trade a coin picked only for its funding."""
+    core = await crypto_universe_async()
+    seen = set(core)
+    return core + [s for s in await carry_watchlist_async() if s not in seen]
+
+
 class CryptoMarket(MarketAdapter):
     name: ClassVar[str] = "crypto"
     asset_class: ClassVar[str] = "crypto"
