@@ -16,6 +16,7 @@ from matrix_shared.barrier_study import (
     run_barrier_study,
     run_horizon_study,
 )
+from sample_units import units_table
 
 
 def main() -> None:
@@ -27,10 +28,12 @@ def main() -> None:
     a = ap.parse_args()
     if a.horizon:
         rows = asyncio.run(run_horizon_study(days=a.days, strategy_id=a.strategy))
-        print(json.dumps(rows, indent=2) if a.json else format_horizon_report(rows, days=a.days))
+        print(json.dumps(rows, indent=2) if a.json
+              else format_horizon_report(rows, days=a.days) + units_table(rows))
         return
     rows = asyncio.run(run_barrier_study(days=a.days, strategy_id=a.strategy))
-    print(json.dumps(rows, indent=2) if a.json else format_report(rows, days=a.days, grid=DEFAULT_GRID))
+    print(json.dumps(rows, indent=2) if a.json
+          else format_report(rows, days=a.days, grid=DEFAULT_GRID) + units_table(rows))
 
 
 if __name__ == "__main__":

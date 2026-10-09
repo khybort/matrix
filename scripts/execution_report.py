@@ -10,6 +10,7 @@ import asyncio
 import json
 
 from matrix_shared.execution_study import WAIT_BARS, format_report, run_execution_study
+from sample_units import units_table
 
 
 def main() -> None:
@@ -21,7 +22,7 @@ def main() -> None:
     a = ap.parse_args()
     rows = asyncio.run(run_execution_study(days=a.days, strategy_id=a.strategy, wait_bars=a.wait_bars))
     print(json.dumps(rows, indent=2) if a.json
-          else format_report(rows, days=a.days, wait_bars=a.wait_bars))
+          else format_report(rows, days=a.days, wait_bars=a.wait_bars) + units_table(rows))
 
 
 if __name__ == "__main__":

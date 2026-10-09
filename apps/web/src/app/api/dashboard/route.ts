@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sql, sqlLocal } from "@/lib/db";
+import { type FillRow, summarizeEpisodes } from "@/lib/episodes";
 
 // AGE Cypher queries need the LOAD 'age' + SET search_path prelude on every
 // transaction. asyncpg's JS cousin (postgres) accepts multi-statement strings
@@ -143,17 +144,37 @@ export async function GET(req: Request) {
           LIMIT 25
         `;
 
-    const strategyAgg = await sql`
-      SELECT p.strategy_id, p.strategy_version, p.asset_class,
-             COUNT(*) AS n, AVG(o.score)::numeric(8,4) AS avg_score,
-             SUM(o.pnl_usd)::numeric(12,4) AS total_pnl_usd,
-             SUM(CASE WHEN o.score > 0 THEN 1 ELSE 0 END)::numeric / COUNT(*)::numeric AS win_rate
+    // n / win rate / avg score per episode (lib/episodes.ts): a re-filled bet
+    // counts once. n_raw = fills, n_unscorable = orphan flat-closes.
+    const fills24h = await sql<(FillRow & { strategy_version: number })[]>`
+      SELECT p.strategy_id, p.strategy_version, p.asset_class, p.symbol, p.side,
+             p.generated_at, p.horizon_seconds, o.pnl_usd, o.score, o.reason
       FROM outcomes o
       JOIN predictions p ON p.id = o.prediction_id
       WHERE o.observed_at > NOW() - INTERVAL '24 hours'
-      GROUP BY p.strategy_id, p.strategy_version, p.asset_class
-      ORDER BY n DESC
     `;
+    const aggGroups = new Map<string, (FillRow & { strategy_version: number })[]>();
+    for (const r of fills24h) {
+      const k = `${r.strategy_id}|${r.strategy_version}|${r.asset_class}`;
+      if (!aggGroups.has(k)) aggGroups.set(k, []);
+      aggGroups.get(k)!.push(r);
+    }
+    const strategyAgg = [...aggGroups.values()]
+      .map((rs) => {
+        const e = summarizeEpisodes(rs);
+        return {
+          strategy_id: rs[0].strategy_id,
+          strategy_version: rs[0].strategy_version,
+          asset_class: rs[0].asset_class,
+          n: String(e.n),
+          n_raw: String(e.n_raw),
+          n_unscorable: String(e.n_unscorable),
+          avg_score: e.avg_score == null ? null : e.avg_score.toFixed(4),
+          total_pnl_usd: e.total_pnl_usd.toFixed(4),
+          win_rate: e.win_rate == null ? null : String(e.win_rate),
+        };
+      })
+      .sort((a, b) => Number(b.n) - Number(a.n));
 
     const mutationProposals = await sql`
       SELECT id, strategy_id, from_version, to_version, proposal_type, source,

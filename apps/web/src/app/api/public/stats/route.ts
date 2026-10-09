@@ -21,6 +21,7 @@
 
 import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
+import { type FillRow, summarizeEpisodes } from "@/lib/episodes";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -64,18 +65,19 @@ export async function GET() {
           : 0,
       }));
 
-    // --- 7d aggregate win rate & trade count -----------------------------
-    const [agg] = await sql<
-      { n: string; wins: string }[]
-    >`
-      SELECT COUNT(*)::text AS n,
-             SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END)::text AS wins
-      FROM outcomes
-      WHERE observed_at > NOW() - INTERVAL '7 days'
+    // --- 7d aggregate win rate & bet count -------------------------------
+    // Per episode (lib/episodes.ts): a bet re-filled while it was still open
+    // counts once, so the win rate is not inflated by repetition.
+    const fills7d = await sql<FillRow[]>`
+      SELECT p.strategy_id, p.asset_class, p.symbol, p.side, p.generated_at,
+             p.horizon_seconds, o.pnl_usd, o.reason
+      FROM outcomes o
+      JOIN predictions p ON p.id = o.prediction_id
+      WHERE o.observed_at > NOW() - INTERVAL '7 days'
     `;
-    const nTrades7d = Number(agg?.n ?? "0");
-    const winsLast7d = Number(agg?.wins ?? "0");
-    const winRate7d = nTrades7d > 0 ? winsLast7d / nTrades7d : null;
+    const ep7d = summarizeEpisodes(fills7d);
+    const nTrades7d = ep7d.n;
+    const winRate7d = ep7d.win_rate;
 
     // --- 7d aggregate as a percentage of starting capital ----------------
     // Single number summarises "did the system make or lose money this week".
@@ -109,6 +111,7 @@ export async function GET() {
       equity_curve_pct: equityCurvePct,
       win_rate_7d: winRate7d,
       n_trades_7d: nTrades7d,
+      n_fills_7d: ep7d.n_raw,
       pnl_pct_7d: pnlPctLast7d,
       coverage: coverage.map((c) => ({
         asset: c.asset,

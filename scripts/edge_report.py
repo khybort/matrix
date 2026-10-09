@@ -12,6 +12,7 @@ import sys
 
 from matrix_shared.edge_study import format_report, run_edge_study
 from matrix_shared.trading import execution_cost_bps
+from sample_units import units_table
 
 
 def main() -> None:
@@ -27,6 +28,7 @@ def main() -> None:
         return
     cost = float(execution_cost_bps("crypto")) * 2
     print(format_report(rows, days=a.days, cost_bps=cost), file=sys.stdout)
+    print(units_table(rows))
 
 
 if __name__ == "__main__":

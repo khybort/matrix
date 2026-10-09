@@ -25,8 +25,8 @@ def test_render_brief_is_compact_and_mentions_key_sections():
         wallets=[{"name": "default", "asset_class": "crypto", "equity": 9633.6, "net_pnl": -366.4,
                   "circuit_tripped": False}],
         pnl=[{"strategy_id": "grid", "asset_class": "crypto", "version": 4, "n_24h": 3, "pnl_24h": -0.5,
-              "n_7d": 40, "pnl_7d": -8.1, "win_rate_7d": 0.41}],
-        challengers=[{"strategy_id": "grid", "asset_class": "crypto", "version": 5, "n_outcomes": 12}],
+              "n_7d": 40, "n_raw_7d": 95, "pnl_7d": -8.1, "win_rate_7d": 0.41}],
+        challengers=[{"strategy_id": "grid", "asset_class": "crypto", "version": 5, "n": 12, "n_raw": 30}],
         efficacy={"verdicts_7d": {"pending": 2}, "rollbacks_7d": 1, "cutovers_7d": 0, "challengers_retired_7d": 0},
         dev={"by_status_7d": {"failed": 8}, "pending": 0, "spend_today_usd": 0.0, "recent_failures": []},
         lessons={"crypto/avoid": 7},
@@ -35,9 +35,49 @@ def test_render_brief_is_compact_and_mentions_key_sections():
     brief = render_brief(d)
     assert brief.startswith("🧭 Director brief 2026-09-13 12:00 UTC")
     assert "grid/crypto v4: -8.1 USD" in brief
-    assert "challengers: grid/crypto v5 (n=12)" in brief
+    assert "n=40 ep/95 fills" in brief
+    assert "challengers: grid/crypto v5 (n=12 ep/30 fills)" in brief
     assert "certs granted: 2 (1 relaxed/testnet-only)" in brief
     assert len(brief.splitlines()) <= 14
+
+
+def _fill(sec, pnl, *, sym="BTCUSDT", side="long", reason="hit_tp", version=1, method="rule"):
+    from datetime import timedelta
+    at = datetime(2026, 10, 1, 12, 0, tzinfo=UTC) + timedelta(seconds=sec)
+    return {"strategy_id": "grid", "asset_class": "crypto", "version": version, "symbol": sym, "side": side,
+            "generated_at": at, "horizon_seconds": 600, "method": method, "pnl_usd": pnl,
+            "observed_at": at, "reason": reason}
+
+
+def test_episode_summary_counts_a_refilled_bet_once():
+    from director.digest import episode_summary
+
+    # One bet filled three times (re-emitted inside its horizon), one separate
+    # loser, one flat-close that is not evidence.
+    rows = [_fill(0, 1.0), _fill(60, 1.0), _fill(120, -0.5), _fill(900, -1.0, sym="ETHUSDT"),
+            _fill(30, 0.0, reason="orphan_flat_close")]
+    (r,) = episode_summary(rows, ("strategy_id", "asset_class", "version"))
+    assert (r["n"], r["n_raw"], r["n_unscorable"]) == (2, 4, 1)
+    assert r["pnl"] == 0.5
+    assert r["win_rate"] == 0.5  # per row it would have read 0.5 of 4 = 2 wins; per episode 1 of 2
+    assert r["avg_pnl"] == 0.25
+
+
+def test_ranker_summary_uses_episodes():
+    from datetime import timedelta
+
+    from director.digest import ranker_summary
+
+    t0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+    def p(sec, pct=None, virt=None, sym="BTCUSDT"):
+        return {"strategy_id": "grid", "asset_class": "crypto", "symbol": sym, "side": "long",
+                "generated_at": t0 + timedelta(seconds=sec), "horizon_seconds": 600,
+                "pnl_pct": pct, "virtual_pct": virt}
+    rows = [p(0, virt=0.01), p(30, pct=0.002), p(60, virt=0.03),   # one episode, traded
+            p(0, virt=-0.004, sym="ETHUSDT"), p(40, virt=0.05, sym="ETHUSDT")]  # one, untraded
+    (r,) = ranker_summary(rows)
+    assert (r["n_traded"], r["n_traded_raw"], r["traded_bps"]) == (1, 1, 20.0)
+    assert (r["n_untraded"], r["n_untraded_raw"], r["untraded_bps"]) == (1, 4, -40.0)
 
 
 def test_tool_belt_side_effects_are_declared():

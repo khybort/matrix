@@ -21,7 +21,7 @@ from matrix_shared import local_session_scope, shared_session_scope
 from matrix_shared.agent_runtime.tool import ToolRegistry, tool
 from sqlalchemy import text
 
-from director.digest import SystemDigest, collect_digest
+from director.digest import FILLS_SQL, SystemDigest, collect_digest, episode_summary
 
 _SERVER = "director"
 MAX_DEV_TASKS_PER_TICK = int(os.environ.get("DIRECTOR_MAX_DEV_TASKS_PER_TICK", "2"))
@@ -80,24 +80,20 @@ def build_registry(state: TickState) -> ToolRegistry:
         return _text(state.digest.as_dict())
 
     @tool("strategy_pnl",
-          "Realised PnL per (strategy, market, version) over the last N days, champion rows only.",
+          "Realised PnL per (strategy, market, version) over the last N days, champion rows only. "
+          "n, win_rate and avg_pnl are per episode (re-fills of one bet count once); n_raw is fills.",
           {"days": int})
     async def strategy_pnl(args: dict) -> dict:
         days = max(1, min(90, int(args.get("days", 7))))
         try:
             async with shared_session_scope() as s:
-                rows = (await s.execute(text(
-                    "SELECT p.strategy_id, p.asset_class, p.strategy_version AS version, count(*) AS n, "
-                    "round(sum(o.pnl_usd),2) AS pnl, round(avg((o.pnl_usd>0)::int),3) AS win_rate, "
-                    "round(avg(o.pnl_usd),4) AS avg_pnl "
-                    "FROM outcomes o JOIN predictions p ON p.id=o.prediction_id "
-                    "WHERE o.observed_at >= now() - make_interval(days => :d) "
-                    "  AND o.reason <> 'orphan_flat_close' "
-                    "  AND coalesce(p.context->>'is_shadow','false') <> 'true' "
-                    "GROUP BY 1,2,3 ORDER BY pnl"), {"d": days})).mappings().all()
+                fills = [dict(r) for r in (await s.execute(text(
+                    FILLS_SQL + "WHERE o.observed_at >= now() - make_interval(days => :d) "
+                    "  AND coalesce(p.context->>'is_shadow','false') <> 'true'"), {"d": days})).mappings().all()]
         except Exception as e:  # noqa: BLE001
             return _error(str(e))
-        return _text([dict(r) for r in rows])
+        # n / win_rate / avg_pnl per episode (one bet, one sample); n_raw = fills.
+        return _text(episode_summary(fills, ("strategy_id", "asset_class", "version")))
 
     @tool("efficacy_report",
           "Recent mutation efficacy: applied proposals with their before/after verdict, rollbacks, "

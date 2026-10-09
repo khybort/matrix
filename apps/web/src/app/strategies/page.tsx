@@ -11,7 +11,9 @@ type StrategyAgg = {
   strategy_id: string;
   strategy_version: number;
   asset_class: string;
-  n: string;
+  n: string; // episodes (one bet, one sample)
+  n_raw?: string; // fills
+  n_unscorable?: string; // orphan flat-closes
   avg_score: string;
   total_pnl_usd: string;
   win_rate: string;
@@ -239,7 +241,7 @@ function StrategyTable({ rows }: { rows: StrategyAgg[] }) {
       <table className="matrix">
         <thead><tr>
           <th>Strategy</th><th>v</th>
-          <th className="text-right">N</th>
+          <th className="text-right" title="independent episodes / fills / unscorable">N ep / fills</th>
           <th className="text-right">Avg score</th>
           <th className="text-right">Win</th>
           <th className="text-right">PnL</th>
@@ -253,7 +255,10 @@ function StrategyTable({ rows }: { rows: StrategyAgg[] }) {
               <tr key={`${r.strategy_id}-${r.strategy_version}-${r.asset_class}`}>
                 <td className="mono">{r.strategy_id}</td>
                 <td className="mono muted">v{r.strategy_version}</td>
-                <td className="mono text-right">{r.n}</td>
+                <td className="mono text-right">
+                  {r.n}
+                  <span className="muted"> /{r.n_raw ?? "?"}{Number(r.n_unscorable ?? 0) > 0 ? ` ·${r.n_unscorable}u` : ""}</span>
+                </td>
                 <td className={`mono text-right ${sc >= 0 ? "pos" : "neg"}`}>{sc.toFixed(4)}</td>
                 <td className="mono text-right">{(wr * 100).toFixed(0)}%</td>
                 <td className={`mono text-right ${pnl >= 0 ? "pos" : "neg"}`}>
@@ -600,7 +605,7 @@ function TemplatesPanel({ strategyAgg }: { strategyAgg: StrategyAgg[] }) {
                     <div className="muted text-xs">{t.short_description}</div>
                     {live ? (
                       <div className="text-xs mt-1">
-                        live: {live.n} trades · win {pct(live.win_rate)} · pnl ${num(live.total_pnl_usd)} (24h)
+                        live: {live.n} bets ({live.n_raw ?? "?"} fills) · win {pct(live.win_rate)} · pnl ${num(live.total_pnl_usd)} (24h)
                       </div>
                     ) : (
                       <div className="muted text-xs mt-1">not active</div>

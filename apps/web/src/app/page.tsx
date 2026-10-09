@@ -45,7 +45,9 @@ type StrategyAgg = {
   strategy_id: string;
   strategy_version: number;
   asset_class: string;
-  n: string;
+  n: string; // episodes (one bet, one sample)
+  n_raw?: string; // fills
+  n_unscorable?: string; // orphan flat-closes
   avg_score: string;
   total_pnl_usd: string;
   win_rate: string;
@@ -115,7 +117,7 @@ export default function TradesPage() {
   const realized = cash + locked - starting;
   const totalPct = ((equity - starting) / starting) * 100;
   const circuitTripped = !!data.wallet.circuit_tripped_at;
-  const trades24h = data.strategyAgg.reduce((s, r) => s + Number(r.n), 0);
+  const trades24h = data.strategyAgg.reduce((s, r) => s + Number(r.n_raw ?? r.n), 0); // fills, not episodes
 
   const openByMkt = splitByMarket(data.openPositions);
   const outByMkt = splitByMarket(data.recentOutcomes);
@@ -495,7 +497,10 @@ function StrategyTable({ rows }: { rows: StrategyAgg[] }) {
                   <span className="font-medium">{r.strategy_id}</span>
                   <span className="faint"> v{r.strategy_version}</span>
                 </td>
-                <td className="text-right tnum">{r.n}</td>
+                <td className="text-right tnum" title="episodes / fills / unscorable">
+                  {r.n}
+                  <span className="faint"> /{r.n_raw ?? "?"}{Number(r.n_unscorable ?? 0) > 0 ? ` ·${r.n_unscorable}u` : ""}</span>
+                </td>
                 <td className="text-right tnum">{(wr * 100).toFixed(0)}%</td>
                 <td className={`text-right tnum font-medium ${pnl >= 0 ? "pos" : "neg"}`}>
                   {pnl >= 0 ? "+" : "−"}${Math.abs(pnl).toFixed(2)}
