@@ -105,3 +105,18 @@ def test_challenger_instances_are_tagged_and_versioned():
     # No shadow → champion only.
     only = [i for i in _instantiate_for_market(market, ["BTCUSDT"], configs, {}) if i.id == "grid"]
     assert len(only) == 1 and not getattr(only[0], "matrix_is_shadow", False)
+
+
+def test_shadow_only_strategy_runs_as_challenger():
+    """A new strategy registered only as `shadow` emits on the shadow wallet;
+    a strategy with neither row stays off."""
+    from matrix_shared.markets import get_market
+    from strategy.main import _instantiate_for_market
+
+    market = get_market("crypto")
+    configs = {("dca", "crypto"): (1, {})}
+    shadows = {("grid", "crypto"): (2, {"n_grids": 12})}
+    instances = _instantiate_for_market(market, ["BTCUSDT"], configs, shadows)
+    grids = [i for i in instances if i.id == "grid"]
+    assert [(g.version, getattr(g, "matrix_is_shadow", False)) for g in grids] == [(2, True)]
+    assert not [i for i in instances if i.id == "oi_delta"]

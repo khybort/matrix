@@ -106,25 +106,29 @@ def _instantiate_for_market(
     for cls in STRATEGIES_BY_MARKET[market.name]:
         key = (cls.id, market.asset_class)
         cfg = configs.get(key)
-        if cfg is None:
-            if configs:
-                logger.debug(f"strategy {cls.id}/{market.asset_class}: no active config row; skip")
-                continue
+        sh = shadows.get(key)
+        if cfg is None and not configs:
             out.append(instantiate(cls, symbols=symbols))
             continue
-        version, params = cfg
-        try:
-            out.append(instantiate(cls, symbols=symbols, version=version, params=params))
-        except Exception as e:
-            logger.exception(
-                f"strategy {cls.id}/{market.asset_class} v{version}: params rejected "
-                f"({e}); falling back to defaults"
-            )
-            out.append(instantiate(cls, symbols=symbols, version=version))
+        if cfg is None and sh is None:
+            logger.debug(f"strategy {cls.id}/{market.asset_class}: no active or shadow config row; skip")
+            continue
+        if cfg is not None:
+            version, params = cfg
+            try:
+                out.append(instantiate(cls, symbols=symbols, version=version, params=params))
+            except Exception as e:
+                logger.exception(
+                    f"strategy {cls.id}/{market.asset_class} v{version}: params rejected "
+                    f"({e}); falling back to defaults"
+                )
+                out.append(instantiate(cls, symbols=symbols, version=version))
         # Challenger: a `shadow` config runs side by side on the same data; its
         # drafts are tagged is_shadow so the paper engine books them in the
         # shadow wallet and reflection.efficacy can compare it to the champion.
-        sh = shadows.get(key)
+        # A strategy with ONLY a shadow row is a new signal earning its first
+        # evidence: it trades the shadow wallet alone, and with no champion to
+        # beat, efficacy never cuts it over — promotion stays with the evidence.
         if sh is not None:
             sh_version, sh_params = sh
             try:
