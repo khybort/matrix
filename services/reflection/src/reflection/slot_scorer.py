@@ -41,6 +41,18 @@ def _perf_score(win_rate: float, avg_pnl_pct: float, total_pnl_usd: float) -> fl
     return 0.4 * win_rate + 0.3 * pct_clamped + 0.3 * pnl_clamped
 
 
+def _auto_cut_slots(old_slots: int) -> int:
+    """A losing streak caps a strategy at one slot; it never grants one.
+
+    This used to be `= 1`, which re-armed every strategy another rule had
+    pulled to zero the moment its streak reached eight. On 2026-10-09 the only
+    two strategies holding champion slots in crypto were inverse_carry (30
+    straight losses) and xexch_funding_arb (23): the streak itself kept them
+    in the book while every strategy with a mixed record sat at zero.
+    """
+    return min(old_slots, 1)
+
+
 def _slots_for_score(score: float, base_share: int) -> int:
     if score >= 0.70:
         return max(1, base_share * 2)
@@ -214,11 +226,11 @@ async def score_strategy_slots() -> int:
             edge_v = await _entry_edge_verdict(config.strategy_id, config.asset_class)
 
             if consec >= CONSECUTIVE_LOSS_AUTO_CUT:
-                new_slots = 1
+                new_slots = _auto_cut_slots(old_slots)
                 if config.consecutive_losses < CONSECUTIVE_LOSS_AUTO_CUT:
                     logger.warning(
                         f"slot auto-cut: {config.strategy_id}/{config.asset_class} "
-                        f"consecutive_losses={consec} → slots {old_slots}→1"
+                        f"consecutive_losses={consec} → slots {old_slots}→{new_slots}"
                     )
             elif len(rows) < MIN_N_FOR_SLOT_CHANGE:
                 # Not enough evidence to move capital either way.

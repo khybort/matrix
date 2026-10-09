@@ -83,6 +83,12 @@ async def strategy_and_proposal(test_wallet):
     yield sid, pid
 
     async with shared_session_scope() as session:
+        # apply_proposal seeds a slot row on EVERY wallet of the market, the
+        # live champion and shadow wallets included; deleting only the test
+        # wallet's row left test_strat_* holding 5-6 live slots (2026-10-09).
+        await session.execute(
+            delete(StrategySlotConfig).where(StrategySlotConfig.strategy_id == sid)
+        )
         await session.execute(
             delete(MutationProposal).where(MutationProposal.strategy_id == sid)
         )

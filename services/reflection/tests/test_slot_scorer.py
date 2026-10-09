@@ -72,6 +72,13 @@ def test_perf_score_rewards_high_total_pnl_with_small_edge():
     assert score >= 0.5, f"expected >=0.5, got {score}"
 
 
+def test_auto_cut_caps_but_never_grants_a_slot():
+    from reflection.slot_scorer import _auto_cut_slots
+    assert _auto_cut_slots(6) == 1
+    assert _auto_cut_slots(1) == 1
+    assert _auto_cut_slots(0) == 0
+
+
 def test_slots_for_score_tiers():
     from reflection.slot_scorer import _slots_for_score
     assert _slots_for_score(0.80, base_share=10) == 20  # 2x
