@@ -34,6 +34,17 @@ LAST_N_POSITIONS = 30
 SHADOW_WALLET_NAME = "shadow"
 MIN_N_FOR_SLOT_CHANGE = int(os.environ.get("MATRIX_SLOT_MIN_N", "30"))
 
+# Hard demotion (Lever 2, 2026-09-15): pull a strategy from the ACTIVE book
+# (0 slots) — not just trim it toward 1 — when it is genuinely losing money over
+# a meaningful sample. The EV floor (paper_trade) blocks *modeled*-negative
+# trades every tick, but a strategy whose modeled EV clears cost while its
+# *realized* edge is negative (a confidently-wrong module, e.g. self-reported
+# confidence 1.0 with a 42% win rate) slips through and keeps bleeding the 1
+# floor slot. This backstop stops it. Recovery is via a fresh version
+# (labs/efficacy proposes a new params set), not an automatic un-demote.
+DEMOTE_MIN_N = int(os.environ.get("MATRIX_SLOT_DEMOTE_MIN_N", "20"))
+DEMOTE_AVG_PNL_PCT = float(os.environ.get("MATRIX_SLOT_DEMOTE_AVG_PNL_PCT", "-0.0005"))
+
 
 # Fills fetched per scored bet: enough that LAST_N_POSITIONS episodes survive
 # grouping even for a strategy that re-enters the same bet three times.
@@ -109,10 +120,21 @@ async def _is_live(session, strategy_id: str, asset_class: str) -> bool:
 
 
 def _perf_score(win_rate: float, avg_pnl_pct: float, total_pnl_usd: float) -> float:
+    """Composite performance score on [0, 1] with 0.5 = neutral.
+
+    Neutral means a coin-flip win rate and flat PnL. The consumers
+    (`allocation.edge_multiplier`, `allocation.risk_multiplier`) and the slot
+    thresholds in `_slots_for_score` all treat 0.5 as the neutral point, so the
+    score MUST stay on this scale. (Before 2026-09-15 the formula returned a
+    signed [-0.6, 1.0] value with neutral ≈ 0.2, which the [0,1]-expecting
+    consumers read as "below neutral" — every scored strategy was penalised in
+    EV ranking, notional sizing, and slot allocation regardless of real edge.)
+    """
     pct_clamped = max(-1.0, min(1.0, avg_pnl_pct / 0.02))
-    # $10 over 30 trades is a healthy positive bias; $-10 floors the term.
+    # $10 over the window is a healthy positive bias; $-10 floors the term.
     pnl_clamped = max(-1.0, min(1.0, total_pnl_usd / 10.0))
-    return 0.4 * win_rate + 0.3 * pct_clamped + 0.3 * pnl_clamped
+    score = 0.5 + 0.4 * (win_rate - 0.5) + 0.15 * pct_clamped + 0.15 * pnl_clamped
+    return max(0.0, min(1.0, score))
 
 
 def _auto_cut_slots(old_slots: int) -> int:
@@ -307,6 +329,36 @@ async def score_strategy_slots() -> int:
                 config.last_evaluated_at = datetime.now(UTC)
                 await _flush_config(session, config)
                 continue
+            elif edge_v == "harmful":
+                # Entries are significantly WORSE than random on the same
+                # symbols and brackets: anti-timed, not mistimed. No sizing or
+                # threshold change repairs that, so leave the active book.
+                new_slots = 0
+                if old_slots > 0:
+                    logger.warning(
+                        f"slot demote: {config.strategy_id}/{config.asset_class} entries are "
+                        "significantly worse than random entry — pulled from the active book"
+                    )
+            elif (
+                len(rows) >= DEMOTE_MIN_N
+                and avg_pnl_pct < DEMOTE_AVG_PNL_PCT
+                and total_pnl_usd < 0
+                and win_rate < 0.5
+                # `unknown` does NOT stay the demotion here. This branch already
+                # has strong evidence of its own — a full window of realised
+                # loss — and the edge verdict is only allowed to *rescue* a
+                # strategy from it. Absence of a rescue is not a rescue.
+                and edge_v != "pays"
+            ):
+                # Realized loser over a full window → pull from the active book.
+                new_slots = 0
+                if old_slots > 0:
+                    logger.warning(
+                        f"slot demote-to-zero: {config.strategy_id}/{config.asset_class} "
+                        f"pulled from active book — avg_pnl_pct={avg_pnl_pct:.5f} "
+                        f"total_pnl_usd={total_pnl_usd:.2f} win_rate={win_rate:.3f} "
+                        f"n={len(rows)}"
+                    )
             else:
                 new_slots = _slots_for_score(score, base_share)
                 if edge_v == "unknown" and old_slots > new_slots:

@@ -41,6 +41,20 @@ def test_expected_value_prefers_good_pairing():
     assert boosted > base
 
 
+def test_risk_multiplier_neutral_perf_is_unpenalized():
+    """perf_score 0.5 is neutral → notional multiplier ~1.0x (not the 0.25x
+    floor the pre-2026-09-15 direct-value mapping produced). A proven strategy
+    sizes up, a chronic loser sizes down."""
+    # confidence 0.6 leaves headroom below the 1.0 final clamp so the perf
+    # gradient is observable.
+    neutral = risk_multiplier(confidence=Decimal("0.6"), perf_score=0.5)
+    good = risk_multiplier(confidence=Decimal("0.6"), perf_score=1.0)
+    bad = risk_multiplier(confidence=Decimal("0.6"), perf_score=0.0)
+    assert neutral == Decimal("0.6")
+    assert good > neutral > bad
+    assert bad >= Decimal("0.05")
+
+
 def test_risk_multiplier_scales_down_on_loss_streak():
     calm = risk_multiplier(confidence=Decimal("0.8"), perf_score=0.7, pair_edge=0.7)
     hot = risk_multiplier(

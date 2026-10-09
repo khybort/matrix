@@ -98,8 +98,6 @@ def kelly_notional(
     return min(max_notional, (equity * Decimal(str(kelly_f))).quantize(Decimal("0.01")))
 
 
-
-
 def shrink_pair_edge(n: int, avg_pnl_pct: float) -> float:
     """Map realized return into [0, 1] with Bayesian shrinkage toward neutral."""
     if n <= 0:
@@ -142,10 +140,19 @@ def risk_multiplier(
     pair_edge: float | None = None,
     consecutive_losses: int = 0,
 ) -> Decimal:
-    """Scale notional by confidence, learned fit, and recent drawdown."""
+    """Scale notional by confidence, learned fit, and recent drawdown.
+
+    `perf_score` is on the canonical [0, 1] scale with 0.5 = neutral (same as
+    `edge_multiplier` and `slot_scorer._perf_score`), so it is mapped
+    `0.5 + perf_score` into a [0.25, 1.25] notional multiplier: neutral → 1.0×,
+    a proven strategy → up to 1.25×, a chronic loser → 0.25×. (Before 2026-09-15
+    this used `perf_score` directly as the multiplier, which — combined with the
+    old signed [-0.6, 1.0] score — sized every neutral/negative strategy at the
+    0.25× floor.)
+    """
     risk = confidence
     if perf_score is not None:
-        risk *= Decimal(str(max(0.25, min(1.25, perf_score))))
+        risk *= Decimal(str(max(0.25, min(1.25, 0.5 + perf_score))))
     if pair_edge is not None:
         risk *= Decimal(str(max(0.35, min(1.25, 0.35 + pair_edge))))
     if consecutive_losses >= 8:
