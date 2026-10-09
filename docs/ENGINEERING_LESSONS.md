@@ -534,3 +534,10 @@
   (re-entrant within a task) and cancels tasks spawned under it before the rollback; the reflection conftest stubs the
   refresh. Flakes that "pass on rerun" under a shared-connection fixture: look for `create_task`/`gather` in the call
   path before blaming the live service. Regression test: `packages/python-shared/tests/test_testing_rollback.py`.
+- **2026-10-09 — The dev_agent's acceptance gate must include the names check, and the suites of every consumer.**
+  `integrate` accepted a patch when the touched project's pytest passed; a dropped binding no test reaches passes, and a
+  `packages/python-shared` change ran only the shared suite although every service imports it. Now `name_errors` (ruff
+  F821/F811, `--ignore-noqa`, only errors the patch introduces vs HEAD) rejects with `failure_reason=undefined_name`, and
+  `test_targets` adds every project that declares a touched one as a uv path dependency (shared → all; graph → agent,
+  synthesis, labs). Cost: a shared change runs ~15 suites; the backtest suite can still flake against the live engine
+  (it is not stopped from inside dev_agent) — that errs toward rejecting.

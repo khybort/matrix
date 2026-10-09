@@ -118,3 +118,66 @@ def test_test_env_never_points_uv_at_the_dev_agent_venv(monkeypatch):
     monkeypatch.setenv("VIRTUAL_ENV", "/workspace/services/dev_agent/.venv")
     env = I._test_env()
     assert "UV_PROJECT_ENVIRONMENT" not in env and "VIRTUAL_ENV" not in env
+
+
+def _pyproject(root, proj, *path_deps):
+    d = root / proj
+    d.mkdir(parents=True, exist_ok=True)
+    srcs = "\n".join(f'dep{i} = {{ path = "{p}", editable = true }}' for i, p in enumerate(path_deps))
+    (d / "pyproject.toml").write_text(f'[project]\nname = "x"\n\n[tool.uv.sources]\n{srcs}\n')
+
+
+def test_a_shared_change_runs_every_consumer_suite(tmp_path):
+    """A python-shared edit used to run only python-shared's own suite, though
+    every service imports it; graph feeds agent/synthesis, and labs imports agent."""
+    _pyproject(tmp_path, "packages/python-shared")
+    _pyproject(tmp_path, "services/graph", "../../packages/python-shared")
+    _pyproject(tmp_path, "services/agent", "../../packages/python-shared", "../graph")
+    _pyproject(tmp_path, "services/labs", "../../packages/python-shared", "../agent")
+    _pyproject(tmp_path, "services/strategy", "../../packages/python-shared")
+    shared = ["packages/python-shared/src/matrix_shared/db.py"]
+    assert I.test_targets(shared, tmp_path) == [
+        "packages/python-shared", "services/agent", "services/graph", "services/labs", "services/strategy",
+    ]
+    assert I.test_targets(["services/graph/src/graph/x.py"], tmp_path) == [
+        "services/graph", "services/agent", "services/labs",
+    ]
+    assert I.test_targets(["services/strategy/src/s.py"], tmp_path) == ["services/strategy"]
+
+
+def _commit(repo, path, body):
+    (repo / path).write_text(body)
+    _run(repo, "git", "add", path)
+    _run(repo, "git", "commit", "-q", "-m", f"seed {path}")
+
+
+async def test_a_patch_that_drops_a_binding_is_rejected(repo, tmp_path):
+    """A refactor deleted an import whose user no test reached (labs
+    emit_signals, 2026-10-09): every suite passed, the service died with
+    NameError. The names gate rejects it before tests or merge."""
+    _commit(repo, "services/foo/y.py", "import os\n\n\ndef here():\n    return os.getcwd()\n")
+    wt = WorktreeManager(repo, tmp_path / "wt").create(task_id=7)
+    (wt.path / "services" / "foo" / "y.py").write_text("def here():\n    return os.getcwd()  # noqa: F821\n")
+    res = await I.integrate(wt=wt, repo_root=repo, worktree_root=tmp_path / "wt",
+                            task=_task(), review_mode="auto")
+    assert res.status == "failed" and res.failure_reason == "undefined_name"
+    assert "services/foo/y.py: F821 Undefined name `os`" in res.notes
+    assert "import os" in (repo / "services" / "foo" / "y.py").read_text()  # nothing merged
+
+
+async def test_a_duplicate_definition_is_rejected(repo, tmp_path):
+    wt = WorktreeManager(repo, tmp_path / "wt").create(task_id=7)
+    (wt.path / "services" / "foo" / "x.py").write_text(
+        "def f():\n    return 1\n\n\ndef f():\n    return 2\n\n\nx = f()\n")
+    res = await I.integrate(wt=wt, repo_root=repo, worktree_root=tmp_path / "wt",
+                            task=_task(), review_mode="auto")
+    assert res.failure_reason == "undefined_name" and "F811" in res.notes
+
+
+async def test_a_name_error_already_on_main_does_not_block_an_unrelated_patch(repo, tmp_path):
+    _commit(repo, "services/foo/y.py", "def here():\n    return missing\n")
+    wt = WorktreeManager(repo, tmp_path / "wt").create(task_id=7)
+    (wt.path / "services" / "foo" / "y.py").write_text("X = 1\n\n\ndef here():\n    return missing\n")
+    res = await I.integrate(wt=wt, repo_root=repo, worktree_root=tmp_path / "wt",
+                            task=_task(), review_mode="auto")
+    assert res.status == "merged", res.notes

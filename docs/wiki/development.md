@@ -39,7 +39,11 @@ live, and another author's uncommitted work shares it.
 - **Migrations**: `make migrate` (local) and
   `SHARED_DATABASE_URL=... make migrate-shared`. Do not add a revision while an
   uncommitted `00NN_*.py` sits in the tree.
-- **The dev_agent writes code too.** It works in a git worktree, runs the
-  affected services' tests, commits and merges into main on green. Its patches
+- **The dev_agent writes code too.** It works in a git worktree, rejects a patch
+  that introduces an undefined/redefined name in a touched file (ruff F821/F811,
+  `failure_reason=undefined_name`), runs the tests of every touched project and
+  of every project that depends on it (a `python-shared` change runs all service
+  suites; `graph` adds agent, synthesis, labs), commits and merges into main on
+  green (2026-10-09, `integrate.py`). Its patches
   are reviewable in `dev_tasks`/`dev_task_runs`; forbidden paths in
   [[risk-gates]].

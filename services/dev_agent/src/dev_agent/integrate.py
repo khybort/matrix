@@ -5,8 +5,13 @@ work stayed in an un-committed worktree (9/9 tasks, 0 commits on main). This
 module makes the label true:
 
   1. Inspect the worktree. No changes → `noop` (task still counts as done).
-  2. `run_tests`: run pytest for every touched service (`uv run --project`),
-     plus python-shared when it changed. Any failure → task `failed`
+  2. `name_errors`: undefined names / redefinitions (ruff F821, F811 — the
+     same check as `make test-all`'s `names` suite) the patch introduces in
+     the Python files it touched → task `failed` (`undefined_name`). A suite
+     only catches a dropped binding if a test reaches that line.
+     `run_tests`: run pytest for every touched project (`uv run --project`)
+     and every project that depends on one (python-shared → every service;
+     graph → agent, synthesis, labs). Any failure → task `failed`
      (`test_broke`) and the lesson synthesizer gets a real signal.
   3. Commit in the worktree (task description as message, `Task #<id>`).
   4. `DEV_AGENT_INTEGRATION=merge` (default): fast-forward-safe `git merge
@@ -25,9 +30,15 @@ touched services. Safety-critical files are protected upstream by
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import shlex
 import subprocess
+import sys
+import tempfile
+import tomllib
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -69,20 +80,98 @@ def changed_files(cwd: Path) -> list[str]:
     return files
 
 
-def test_targets(files: list[str]) -> list[str]:
-    """Project directories (relative) whose pytest suite must pass."""
+def _project_of(path: str) -> str | None:
+    parts = Path(path).parts
+    if len(parts) >= 2 and parts[0] == "services":
+        return f"services/{parts[1]}"
+    if len(parts) >= 2 and parts[0] == "packages" and parts[1] == "python-shared":
+        return "packages/python-shared"
+    return None
+
+
+def _dependents(root: Path) -> dict[str, set[str]]:
+    """project -> projects that declare it as a uv path dependency."""
+    deps: dict[str, set[str]] = {}
+    for py in [*sorted(root.glob("services/*/pyproject.toml")),
+               root / "packages/python-shared/pyproject.toml"]:
+        if not py.exists():
+            continue
+        proj = py.parent.relative_to(root).as_posix()
+        sources = tomllib.loads(py.read_text()).get("tool", {}).get("uv", {}).get("sources", {})
+        for src in sources.values():
+            if isinstance(src, dict) and "path" in src:
+                dep = (py.parent / src["path"]).resolve().relative_to(root.resolve()).as_posix()
+                deps.setdefault(dep, set()).add(proj)
+    return deps
+
+
+def test_targets(files: list[str], root: Path | None = None) -> list[str]:
+    """Project directories (relative) whose pytest suite must pass: every
+    touched project, then (with `root`) every project that depends on one,
+    transitively. A python-shared change used to run only python-shared's own
+    suite although every service imports it."""
     targets: list[str] = []
     for f in files:
-        parts = Path(f).parts
-        if len(parts) >= 2 and parts[0] == "services":
-            t = f"services/{parts[1]}"
-        elif len(parts) >= 2 and parts[0] == "packages" and parts[1] == "python-shared":
-            t = "packages/python-shared"
-        else:
-            continue
-        if t not in targets:
+        t = _project_of(f)
+        if t and t not in targets:
             targets.append(t)
-    return targets
+    if root is None:
+        return targets
+    dependents = _dependents(root)
+    seen, frontier, consumers = set(targets), list(targets), set()
+    while frontier:
+        for d in dependents.get(frontier.pop(), ()):
+            if d not in seen:
+                seen.add(d)
+                consumers.add(d)
+                frontier.append(d)
+    return targets + sorted(consumers)
+
+
+_NAME_RULES = "F821,F811"  # undefined name, redefinition of unused name
+
+
+def _ruff_names(cwd: Path, files: list[str]) -> list[dict[str, Any]]:
+    if not files:
+        return []
+    r = subprocess.run(
+        [sys.executable, "-m", "ruff", "check", "--isolated", "--no-cache", "--ignore-noqa",
+         "--select", _NAME_RULES, "--output-format", "json", *files],
+        cwd=str(cwd), capture_output=True, text=True,
+    )
+    if r.returncode not in (0, 1):
+        raise RuntimeError(f"ruff failed: {r.stderr.strip()[:300]}")
+    return json.loads(r.stdout or "[]")
+
+
+def _name_key(cwd: Path, d: dict[str, Any]) -> tuple[str, str, str]:
+    rel = Path(d["filename"]).resolve().relative_to(cwd.resolve()).as_posix()
+    # "Redefinition of unused `x` from line 3" — line numbers move with any edit.
+    return rel, d["code"], re.sub(r" from line \d+", "", d["message"])
+
+
+def name_errors(wt_path: Path, files: list[str]) -> list[str]:
+    """Undefined names / redefinitions the change INTRODUCES in the Python
+    files it touched (both checks are per-file, so the touched files are the
+    whole blast radius). Errors already present at HEAD don't block a patch;
+    `noqa` doesn't hide new ones."""
+    py = [f for f in files if f.endswith(".py") and (wt_path / f).is_file()]
+    if not py:
+        return []
+    after = Counter(_name_key(wt_path, d) for d in _ruff_names(wt_path, py))
+    if not after:
+        return []
+    with tempfile.TemporaryDirectory() as tmp:
+        base, old = Path(tmp), []
+        for f in py:
+            r = _git(wt_path, "show", f"HEAD:{f}", check=False)
+            if r.returncode == 0:
+                (base / f).parent.mkdir(parents=True, exist_ok=True)
+                (base / f).write_text(r.stdout)
+                old.append(f)
+        before = Counter(_name_key(base, d) for d in _ruff_names(base, old))
+    new = after - before
+    return [f"{f}: {code} {msg}" for (f, code, msg), n in sorted(new.items()) for _ in range(n)]
 
 
 def _test_env() -> dict[str, str]:
@@ -184,9 +273,17 @@ async def integrate(
             notes="no file changes produced",
         )
 
+    names = name_errors(wt.path, files)
+    if names:
+        return IntegrationResult(
+            status="failed", failure_reason="undefined_name",
+            notes="patch introduces undefined/redefined names:\n" + "\n".join(names[:20]),
+            tests={"targets": [], "passed": False, "names": names}, changed_files=files,
+        )
+
     tests: dict[str, Any] | None = None
     if task.get("run_tests", True):
-        targets = test_targets(files)
+        targets = test_targets(files, wt.path)
         tests = await run_tests(wt.path, targets) if targets else {"targets": [], "passed": True}
         if not tests["passed"]:
             return IntegrationResult(
