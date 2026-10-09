@@ -23,8 +23,8 @@ def _draft(symbol: str, asset_class: str = "crypto") -> PredictionDraft:
 
 def test_fresh_symbol_kept_stale_and_missing_dropped():
     latest = {
-        ("crypto", "BTCUSDT"): NOW - timedelta(seconds=20),
-        ("crypto", "ETHUSDT"): NOW - timedelta(days=3),
+        ("crypto", "BTCUSDT"): (NOW - timedelta(seconds=20), Decimal("100")),
+        ("crypto", "ETHUSDT"): (NOW - timedelta(days=3), Decimal("100")),
     }
     kept = drop_stale([_draft("BTCUSDT"), _draft("ETHUSDT"), _draft("SOLUSDT")], latest, NOW)
     assert [d.symbol for d in kept] == ["BTCUSDT"]
@@ -32,10 +32,20 @@ def test_fresh_symbol_kept_stale_and_missing_dropped():
 
 def test_threshold_is_per_market():
     # A 20-minute-old BIST bar is the feed's normal delay; for crypto it is an outage.
-    latest = {("bist", "THYAO"): NOW - timedelta(minutes=20), ("crypto", "THYAO"): NOW - timedelta(minutes=20)}
+    q = (NOW - timedelta(minutes=20), Decimal("100"))
+    latest = {("bist", "THYAO"): q, ("crypto", "THYAO"): q}
     kept = drop_stale([_draft("THYAO", "bist"), _draft("THYAO", "crypto")], latest, NOW)
     assert [d.asset_class for d in kept] == ["bist"]
 
 
 def test_market_without_threshold_passes():
     assert len(drop_stale([_draft("X", "other")], {}, NOW)) == 1
+
+
+def test_entry_price_ref_is_the_fresh_quote():
+    # dca read a 3-day-old trade as its reference; the stamp is the fresh quote.
+    d = _draft("BTCUSDT")
+    d.entry_price_ref = Decimal("93")
+    kept = drop_stale([d], {("crypto", "BTCUSDT"): (NOW - timedelta(seconds=5), Decimal("100.5"))}, NOW)
+    assert kept[0].entry_price_ref == Decimal("100.5")
+    assert kept[0].context["module_price_ref"] == "93"
