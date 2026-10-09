@@ -246,7 +246,8 @@ async def emit_signals(symbols: list[str], asset_class: str = "crypto") -> int:
     if not experiments:
         return 0
 
-    symbols = await fresh_symbols(symbols, datetime.now(UTC))
+    now = datetime.now(UTC)
+    symbols = await fresh_symbols(symbols, now)
     if not symbols:
         return 0
 
