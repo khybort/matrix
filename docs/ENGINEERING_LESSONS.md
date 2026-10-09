@@ -298,3 +298,13 @@
   Kural: her hücrede medyan, %5 kırpılmış ortalama ve en iyi %5 / en iyi 10 günün payı raporlanır. Yakın kalan bir
   hücre yalnız *görülmemiş* bir dönemde tek bir ön-kayıtlı testle yeniden açılır; onda da H11c t = 0,94 ile düştü.
   Kaynak: `docs/wiki/signal-research-2026-10.md` "Round 2 (ticks)".
+
+- **2026-10-09 — Canlı sonucu araştırmanın bandıyla kıyaslayan bekçi, "sessizlik"i zamana değil fırsat sayısına bağlar.**
+  `shadow_tracker` `neg_funding_carry`'yi ön-kayıtlı bandına (+100…+300 bps, taban +30) karşı ölçüyor. İlk çalıştırmada
+  19 coin'lik watchlist'te 72 saatte yalnız 2 nitelikli settlement vardı (ikisi KAIA); 50/hafta beklentisi ~21 ima ediyor.
+  Yalnız süreye bakan bir "72 saattir epizod yok" alarmı burada sistem değil piyasa sessizken çalardı ve ilk haftada duvar
+  kâğıdına dönerdi. Kural: "iş yok" alarmı, stratejinin o pencerede sahip olduğu fırsatları (aynı eşik, aynı evren) sayar ve
+  yalnız fırsat varken sessizliği kırık sayar; fırsat sayısı ölçülemezse kırık demez. Band ve eşikler stratejinin config
+  satırında (`strategy_configs.params.shadow_band`), alarm servisinde değil; satır kaybolursa modüldeki ön-kayıt devreye
+  girer. Ayrıştırma (fonlama = net + defter + borç) kapalı carry'de sıfır fonlama ya da hiç borç kesilmemesi gibi muhasebe
+  hatalarını ilk epizodda yakalar. Kaynak: `docs/wiki/operations.md` "Shadow tracker".

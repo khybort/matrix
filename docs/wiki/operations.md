@@ -164,6 +164,42 @@ still hands `neg_funding_carry` only the traded set, so the module never looks
 at a watchlist coin. Until `strategy.main` gives it `crypto_symbols +
 carry_watchlist_async()`, the yield above is potential, not booked.
 
+## Shadow tracker — is the only bet working?
+
+`matrix_shared/shadow_tracker.py` compares every shadow strategy that carries a
+band against that band, in episodes (`edge_study.episode_groups`), never rows.
+The band is config next to the strategy: `strategy_configs.params.shadow_band`
+(seeded 2026-10-09 for `neg_funding_carry` v1; `DEFAULT_BANDS` in the module is
+the fallback if a params rewrite drops it). Fields: `since`, `expected_bps_low/high`
+(+100…+300), `floor_bps` (+30), `min_episodes` (20), `stale_hours` (72),
+`min_qualifying` (10), `qualify_universe` (`crypto_carry`),
+`qualify_funding_max` (−0.0008), `components` (funding, borrow, book).
+
+Per closed episode: net bps = pnl / notional; book = `context.book_close.total_bps`;
+borrow = `context.borrow_charged_usd`; funding = net + book + borrow (the paper
+engine nets both costs out of pnl). Mean, median, CR1 t clustered by open day.
+
+Verdicts, most severe first: **broken** (no episode opened for 72 h while the
+watchlist had ≥ 10 settlements at ≤ −0.08 %; or a closed episode with zero
+funding over ≥ 9 h, borrow not charged, or no book cost), **collecting**
+(< 20 closed), **below_band** (mean ≤ +30: costs ate the edge, do not promote),
+**on_track**. An unknown opportunity count never flags staleness.
+
+Surfaces: one line per strategy in the Director brief
+(`shadow neg_funding_carry/crypto: COLLECTING — 0/20 closed ep, 1 open · band
++100…+300, floor +30 · last open 1h ago · 2 qualifying settlements/72h`), and a
+notify Telegram alert on a verdict change or a new broken reason, a persisting
+`broken` again every 24 h (`MATRIX_SHADOW_REALERT_S`); evaluated every 15 min
+(`MATRIX_SHADOW_TRACK_EVERY_S`). A first sighting alerts only for broken /
+below_band; the last verdict is kept in `/tmp/notify_shadow_state.json` so a
+watchfiles restart does not replay it. To track another shadow strategy, put a
+`shadow_band` in its params.
+
+State 2026-10-09 15:20 UTC: `collecting`, 1 open (KAIAUSDT), 0 closed; only 2
+qualifying settlements in 72 h (both KAIA) on the 19-coin watchlist, far under
+the ~21 per 72 h the 50/week expectation implies — staleness will not fire
+below 10, so a quiet watchlist reads as collecting, not broken.
+
 ## Storage
 
 The local database is the thing that will fill the disk, and `market_trades`
