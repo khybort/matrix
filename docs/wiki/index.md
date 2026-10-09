@@ -92,6 +92,7 @@ Background: [purpose-and-goals](purpose-and-goals.md), then
 - [edge-study](edge-study.md) — controlled test of entry timing vs random entry (honest entry rule: first bar open after the signal); carries judged on realised paper episodes
 - [strategy-scoreboard](strategy-scoreboard.md) — every emitting strategy on clean signals, net of cost (2026-10-09: none pays)
 - [signal-research-2026-10](signal-research-2026-10.md) — rounds 1–3b (m = 91 cells) on 1y Bybit history and ticks; only hedged negative-funding carry (H1) survives, much smaller after the adversarial check; round 4 (dated-futures basis) pre-registered
+- [research-harness](research-harness.md) — `matrix_shared.research`: pre-registered tests as code (commit-alone prereg, frozen cells, one holdout, ledger-wide BHY); ledger `docs/research/ledger.jsonl`, m = 91, H1 q = 4.4e-5
 - [market-cadence-study](market-cadence-study.md) — BIST/US vs their cost (pause both) and 15 s vs 60 s vs 300 s decisions (speed earns nothing)
 - [maker-execution](maker-execution.md) — resting entries/exits on Bybit ticks: +4…+6 bps per episode, but no strategy turns net positive (2026-10-09)
 - [llm-value-audit](llm-value-audit.md) — does the LLM or the knowledge graph earn its rate budget? (2026-10-09: neither; agent rule-only, graph heuristic)

@@ -466,3 +466,15 @@
   `ImportError` crash loop until the shared save landed. Order a cross-package change shared-first (or stage both in a
   scratch copy, test against it with a mounted src, then copy shared before the service). After the save, grep
   `docker compose logs --since 3m` for `Traceback`.
+
+- **2026-10-09 — A protocol that every study re-implements by hand drifts; make it a library with a ledger.**
+  Five signal-research rounds (91 tests) each re-wrote pre-registration, split, one-per-episode, clustered t and BHY,
+  and counted m four different ways (38; 29; "38 + 29 + 18"; "+ 6"). Round 1's PREREG went into git together with its
+  results, and round 3 had a fetch bug (Bybit spot klines outside the window) that only a later check caught.
+  `matrix_shared.research` is that protocol in code. The pre-registration is committed alone and its spec block is
+  frozen. Cell ids are frozen: a changed rule is a new id, so m grows. Each cell gets at most one holdout, and only
+  after its committed train verdict. Entry must come strictly after the information time. One cell gets one sample
+  per episode, and q is taken over `docs/research/ledger.jsonl` (append-only, hash-chained). A study writes only its
+  builder; never hand-roll splits, t or BHY again. When extracting a protocol, prove it by replaying a finished round
+  exactly (round 3: 36 rows, n exact, net ±0.05 bps), and give every guard a test that tries to break it.
+  Source: `docs/wiki/research-harness.md`.
