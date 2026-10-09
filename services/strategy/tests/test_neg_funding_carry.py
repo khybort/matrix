@@ -121,7 +121,10 @@ async def test_settled_negative_rate_on_borrowable_coin_emits(clean, monkeypatch
     f = d.context["entry_filter"]
     # 8 h interval -> 6 settlements in 48 h at 40 bps
     assert f["interval_h"] == 8 and f["expected_funding_bps"] == pytest.approx(240.0)
-    assert f["borrow_stressed_bps"] == pytest.approx(0.1 * 48 * M.BORROW_STRESS)
+    # depth model: max(0.1 bps/h quote, floor at 40 bps/8h) x 48 x hold stress
+    floor_h = M.depth_floor_hourly(Decimal("-0.0040"), 8) * 1e4
+    assert f["borrow_stressed_bps"] == pytest.approx(max(0.1, floor_h) * 48 * M.HOLD_STRESS, rel=1e-3)
+    assert f["borrow_flat_bps"] == pytest.approx(0.1 * 48 * M.BORROW_STRESS)
     assert f["leg_notional_usd"] == M.MAX_LEG_USD  # deep book: the $500 ceiling binds
     assert f["book_cost"]["fees_bps"] == pytest.approx(31.0)
     assert f["cost_share"] < M.MAX_COST_SHARE
@@ -136,15 +139,16 @@ async def test_missing_spot_book_never_emits(clean, monkeypatch):
 
 
 async def test_costly_book_or_borrow_skips(clean, monkeypatch):
-    # 25 bps/8h = 150 bps over 48 h; a third is 50. Deep books: 31 fees + 4
-    # impact + 14.4 borrow x3 = 49.4 -> trades. A 16 bps spot spread -> 63 -> not.
+    # 30 bps/8h = 180 bps over 48 h; a third is 60. Deep books: 31 fees + 4
+    # impact + borrow at the depth floor (3.46 bps/8h x 6 = 20.8) = 55.8 -> trades.
+    # A 16 bps spot spread -> ~72 -> not.
     _borrow(monkeypatch, {"NFCTEST": (Decimal("0.00001"), "bybit")})
-    await _settled("-0.0025")
+    await _settled("-0.0030")
     _books(monkeypatch, DEEP, DEEP)
     assert len(await M.NegFundingCarry(symbols=[SYM]).generate()) == 1
     _books(monkeypatch, DEEP, _flat_book(2.0, 8.0, 5_000))
     assert await M.NegFundingCarry(symbols=[SYM]).generate() == []
-    # 40 bps/8h, cheap books, but borrow of 2 bps/h x 48 x 3 = 288 bps
+    # 40 bps/8h, cheap books, but borrow of 2 bps/h x 48 = 96 bps (+35 > 80)
     await _settled("-0.0040")
     _borrow(monkeypatch, {"NFCTEST": (Decimal("0.0002"), "bybit")})
     _books(monkeypatch, DEEP, DEEP)
@@ -167,7 +171,7 @@ def test_walk_and_cap_on_a_known_ladder():
 def test_entry_verdict_threshold_is_a_third_of_expected_funding():
     cost = {"total_bps": 40.0, "fees_bps": 31.0}
     kw = dict(interval_h=8, hourly_borrow=Decimal("0.00001"), horizon_h=48, cost=cost,
-              leg_usd=500, stress=3.0, max_share=1 / 3)
+              leg_usd=500, stress=3.0, max_share=1 / 3, borrow_model="flat")
     # borrow 0.1 bps/h x 48 x 3 = 14.4; + 40 = 54.4 -> needs expected >= 163.2
     ok, inp = M.entry_verdict(rate=Decimal("-0.0028"), **kw)  # 168 bps
     assert ok and inp["cost_share"] == pytest.approx(54.4 / 168, rel=1e-4)
@@ -178,6 +182,24 @@ def test_entry_verdict_threshold_is_a_third_of_expected_funding():
     assert ok and inp["expected_funding_bps"] == pytest.approx(384.0)
     ok, inp = M.entry_verdict(rate=Decimal("-0.0100"), **{**kw, "leg_usd": 10})
     assert not ok and inp["skip"] == "book_too_thin"
+
+
+def test_depth_borrow_model_floors_quote_and_drops_flat_stress():
+    # floor: exp(0.082) x |f8|^0.341 bps/8h; at 40 bps/8h ~3.80 bps/8h = 0.475 bps/h
+    assert M.depth_floor_hourly(Decimal("-0.0040"), 8) * 1e4 == pytest.approx(0.475, abs=0.005)
+    # the same per-interval rate on a 1 h coin is 8x deeper per 8 h
+    assert M.depth_floor_hourly(Decimal("-0.0040"), 1) > M.depth_floor_hourly(Decimal("-0.0040"), 8)
+    cost = {"total_bps": 40.0, "fees_bps": 31.0}
+    kw = dict(rate=Decimal("-0.0040"), interval_h=8, horizon_h=48, cost=cost, leg_usd=500,
+              stress=3.0, max_share=1 / 3, borrow_model="depth", hold_stress=1.0)
+    # a quote below the floor is lifted to it
+    ok, inp = M.entry_verdict(hourly_borrow=Decimal("0.00001"), **kw)
+    assert inp["borrow_stressed_bps"] == pytest.approx(inp["borrow_depth_floor_bps"], rel=1e-6)
+    # a squeezed quote above the floor is charged x1, not x3: 0.8 bps/h x 48 = 38.4;
+    # 38.4 + 40 <= 240 / 3 keeps, the flat x3 (115.2 + 40) would not
+    ok, inp = M.entry_verdict(hourly_borrow=Decimal("0.00008"), **kw)
+    assert ok and inp["borrow_stressed_bps"] == pytest.approx(38.4)
+    assert not inp["flat_keep"] and inp["borrow_flat_bps"] == pytest.approx(115.2)
 
 
 def test_interval_from_next_settlement():
@@ -224,7 +246,7 @@ def test_decay_ratio_buckets_and_unknown_history():
 def test_decay_verdict_recorded_and_gates_only_when_selected():
     cost = {"total_bps": 40.0, "fees_bps": 31.0}
     kw = dict(rate=Decimal("-0.0028"), interval_h=8, hourly_borrow=Decimal("0.00001"),
-              horizon_h=48, cost=cost, leg_usd=500, stress=3.0, max_share=1 / 3)
+              horizon_h=48, cost=cost, leg_usd=500, stress=3.0, max_share=1 / 3, borrow_model="flat")
     # naive 168 bps keeps (54.4 <= 56); decayed 168 x 0.133 = 22.3 < 54.4
     ok, inp = M.entry_verdict(**kw, run=0, model="naive")
     assert ok and inp["naive_keep"] and not inp["decay_keep"]

@@ -29,7 +29,7 @@ module now prices the trade it would actually do, and skips it unless that
 cost leaves most of the funding on the table:
 
     expected  = |settled rate| x settlements in 48 h (at the current interval)
-    borrow    = quoted hourly borrow x 48 x MATRIX_CARRY_BORROW_STRESS (3)
+    borrow    = max(quoted hourly borrow, depth floor) x 48 x MATRIX_NFC_BORROW_HOLD_STRESS (1)
     book      = 4 taker fees + the walked impact of all four legs (perp buy /
                 sell, spot sell / buy) at the intended per-leg notional
     skip when borrow + book > expected x MATRIX_NFC_MAX_COST_SHARE (1/3)
@@ -51,10 +51,23 @@ the default stays `naive`: on the holdout the decay gate raised net per kept
 episode (+464 vs +293 bps) and survived 10x borrow, but kept 91 of 221 episodes
 on 38 of 89 coins, 39 % less money at 3x borrow and more coin concentration
 (docs/wiki/signal-research-2026-10.md, "Live path and funding decay").
+
+Borrow model (2026-10-09, "Borrow measurement"): the quote is read at signal
+time on a coin already in a squeeze, and across all 363 borrowable perps the
+quote already scales with funding depth (ln b8 = 0.082 + 0.341 ln|f8|, bps/8h).
+Mapping 289 episodes of the last 30 days through that relation, borrow over the
+48 h hold averaged 0.65x the entry level (p90 0.96, 7 % above 1x): funding
+decays, so borrow should too. The old flat x3 on the signal-time quote
+double-counted the squeeze. Now borrow = max(quote, the cross-sectional median
+at this depth) x HOLD_STRESS (1.0); MATRIX_NFC_BORROW_MODEL=flat restores
+quote x MATRIX_CARRY_BORROW_STRESS. The flat verdict is still recorded
+(`flat_keep`), so episodes only the depth model admits can be judged on the
+borrow the paper book now charges from the recorded series.
 """
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from collections.abc import Sequence
@@ -92,6 +105,16 @@ MAX_COST_SHARE = float(os.environ.get("MATRIX_NFC_MAX_COST_SHARE", str(1 / 3)))
 MAX_LEG_IMPACT_BPS = float(os.environ.get("MATRIX_CARRY_MAX_LEG_IMPACT_BPS", "10"))
 MAX_LEG_USD = float(os.environ.get("MATRIX_CARRY_UNCONFIRMED_MAX_LEG_USD", "500"))
 MIN_LEG_USD = float(os.environ.get("MATRIX_CARRY_MIN_LEG_USD", "50"))
+# Borrow model. "depth": max(quote, depth floor) x HOLD_STRESS; "flat": quote x
+# BORROW_STRESS. Floor = cross-sectional fit of the cheapest quote (bps/8h) on
+# Bybit funding depth (bps/8h, floored at 1), 70 negative-funding coins,
+# 2026-10-09 16:12 UTC: ln b8 = 0.082 + 0.341 ln|f8| (r 0.41, slope 95 % CI
+# 0.14-0.52). HOLD_STRESS = p90 of hold-mean / entry borrow under that fit over
+# 289 episodes (settled <= -0.08 %, last 30 days): 0.96.
+BORROW_MODEL = os.environ.get("MATRIX_NFC_BORROW_MODEL", "depth")
+HOLD_STRESS = float(os.environ.get("MATRIX_NFC_BORROW_HOLD_STRESS", "1.0"))
+DEPTH_FLOOR_LN_C = 0.082
+DEPTH_FLOOR_BETA = 0.341
 PERP_TAKER_BPS = float(os.environ.get("MATRIX_CARRY_PERP_TAKER_BPS", "5.5"))
 SPOT_TAKER_BPS = float(os.environ.get("MATRIX_CARRY_SPOT_TAKER_BPS", "10"))
 BOOK_MAX_AGE_S = 30.0
@@ -282,12 +305,20 @@ async def prior_settlements(symbol: str, settled_at: datetime) -> list[Decimal] 
     return [r for _, r in pts]
 
 
+def depth_floor_hourly(rate: Decimal, interval_h: int) -> float:
+    """Median quoted hourly borrow (fraction) of a coin at this funding depth,
+    from the cross-sectional fit above."""
+    f8 = max(float(-rate) * 1e4 * 8 / interval_h, 1.0)
+    return math.exp(DEPTH_FLOOR_LN_C + DEPTH_FLOOR_BETA * math.log(f8)) / 8 / 1e4
+
+
 def entry_verdict(
     *, rate: Decimal, interval_h: int, hourly_borrow: Decimal, horizon_h: float,
     cost: dict[str, float] | None, leg_usd: float,
     stress: float = BORROW_STRESS, max_share: float = MAX_COST_SHARE,
     run: int | None = None, model: str = EXPECTED_MODEL,
     decay_max_share: float = DECAY_MAX_COST_SHARE,
+    borrow_model: str = BORROW_MODEL, hold_stress: float = HOLD_STRESS,
 ) -> tuple[bool, dict]:
     """(take?, the numbers it was decided on). All bps of per-leg notional.
     Gates on the naive expectation (x max_share) unless model == "decay"
@@ -295,7 +326,11 @@ def entry_verdict(
     expected = float(-rate) * 1e4 * horizon_h / interval_h
     ratio = decay_ratio(rate, run)
     decayed = expected * ratio
-    borrow = float(hourly_borrow) * 1e4 * horizon_h * stress
+    quote = float(hourly_borrow)
+    floor = depth_floor_hourly(rate, interval_h)
+    flat = quote * 1e4 * horizon_h * stress
+    depth = max(quote, floor) * 1e4 * horizon_h * hold_stress
+    borrow = depth if borrow_model == "depth" else flat
     inputs: dict = {
         "interval_h": interval_h,
         "expected_funding_bps": round(expected, 3),
@@ -304,7 +339,12 @@ def entry_verdict(
         "decay_ratio": ratio,
         "expected_decayed_bps": round(decayed, 3),
         "borrow_quoted_bps": round(float(hourly_borrow) * 1e4 * horizon_h, 3),
+        "borrow_model": borrow_model,
+        "borrow_depth_floor_bps": round(floor * 1e4 * horizon_h, 3),
+        "borrow_hold_stress": hold_stress,
         "borrow_stress": stress,
+        "borrow_flat_bps": round(flat, 3),
+        "borrow_depth_bps": round(depth, 3),
         "borrow_stressed_bps": round(borrow, 3),
         "leg_notional_usd": round(leg_usd, 2),
         "max_cost_share": round(max_share, 4),
@@ -319,6 +359,8 @@ def entry_verdict(
     naive_ok = expected > 0 and total <= expected * max_share
     decay_ok = decayed > 0 and total <= decayed * decay_max_share
     inputs["naive_keep"], inputs["decay_keep"] = naive_ok, decay_ok
+    # the old flat x stress verdict, for judging episodes only the depth model admits
+    inputs["flat_keep"] = expected > 0 and flat + cost["total_bps"] <= expected * max_share
     if not (decay_ok if model == "decay" else naive_ok):
         inputs["skip"] = "cost_share"
         return False, inputs
@@ -481,7 +523,7 @@ class NegFundingCarry:
                 if not ok:
                     logger.info(
                         f"{STRATEGY_ID}: skip {symbol} ({inputs['skip']}): expected "
-                        f"{inputs['expected_funding_bps']:.0f} bps, borrow x{BORROW_STRESS:g} "
+                        f"{inputs['expected_funding_bps']:.0f} bps, borrow ({inputs['borrow_model']}) "
                         f"{inputs['borrow_stressed_bps']:.0f}, book "
                         f"{(cost or {}).get('total_bps', float('nan')):.0f} at ${leg_usd:.0f}/leg"
                     )
@@ -502,7 +544,7 @@ class NegFundingCarry:
                         thesis=(
                             f"settled funding {rate * 100:.4f}% at {settled_at:%H:%M}Z; short {base_coin(symbol)} "
                             f"spot (borrow {hourly * 80000:.2f} bps/8h on {venue}) / long perp for 48h; "
-                            f"expected {inputs['expected_funding_bps']:.0f} bps vs borrow x{BORROW_STRESS:g} "
+                            f"expected {inputs['expected_funding_bps']:.0f} bps vs borrow ({inputs['borrow_model']}) "
                             f"{inputs['borrow_stressed_bps']:.0f} + book {cost['total_bps']:.0f} at ${leg_usd:.0f}/leg"
                         ),
                         context={
