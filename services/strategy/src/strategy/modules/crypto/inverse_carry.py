@@ -1,17 +1,21 @@
-"""Cash-and-carry (delta-neutral funding capture) v1.
+"""Inverse carry (delta-neutral NEGATIVE-funding capture) v1.
 
-Thesis: spot-long + perp-short pair captures the funding cash flow with
-near-zero directional exposure. When perpetual funding is positive (longs
-paying shorts), the synthetic position earns:
+Mirror image of cash_and_carry. When perpetual funding is *negative* (shorts
+paying longs), the delta-neutral pair that EARNS is short-spot + long-perp:
 
-    pnl ≈ notional × (elapsed_hours / 8) × funding_rate_per_8h
+    pnl ≈ notional × (elapsed_hours / 8) × |funding_rate_per_8h|
 
-We model the synthetic as a single PaperPosition with side='delta_neutral'
-whose PnL accrues from the *live* funding rate, not from price moves.
-Live execution (actual spot-buy + perp-short on exchange) is Phase-5 work;
+We model the synthetic as a single PaperPosition with side='inverse_carry'
+whose PnL accrues from the *live* funding rate. The paper engine applies the
+direction sign (-1 for inverse), so a funding of -0.08%/8h accrues POSITIVE.
+Live execution (actual spot-sell + perp-long on exchange) is Phase-5 work;
 this module is paper-trade only.
 
-BTC funding ~0.51% / 8h ≈ 70% APY in 2026 (financefeeds.com, ainvest.com).
+Economics match cash_and_carry: the two-leg carry pays a real round-trip cost
+of ~2 × round_trip_cost_pct (≈30 bps on crypto), charged in the paper engine.
+So we require |funding| ≥ 0.08%/8h and hold 48h (6 cycles) to amortise it.
+Negative funding is rarer and usually shorter-lived than positive, so the
+funding-flip early-exit (rate crosses back to ≥0) is the key downside guard.
 """
 
 from __future__ import annotations
@@ -29,21 +33,19 @@ from matrix_shared.markets.crypto import crypto_universe
 
 from strategy.base import PredictionDraft
 
-STRATEGY_ID = "cash_and_carry"
-STRATEGY_VERSION = 4
+STRATEGY_ID = "inverse_carry"
+STRATEGY_VERSION = 1
 
-# Minimum funding rate (per 8h) to enter. The two-leg carry pays a real
-# round-trip cost of ~2 × round_trip_cost_pct (≈30 bps on crypto) — charged in
-# the paper engine since 2026-09-15 — so a single 8h capture at the old 0.01%
-# threshold booked ~1 bp against ~30 bps of fees. Break-even over the 48h hold
-# (6 funding cycles) is ~5 bps/8h; 0.08% gives a healthy margin and keeps the
-# strategy selective (only genuinely crowded funding, ~88%+ APY).
-DEFAULT_MIN_FUNDING = Decimal("0.0008")  # 0.08% / 8h
-# Funding rate that maps to confidence 1.0.
-FUNDING_CAP = Decimal("0.0020")  # 0.20% / 8h
+# Minimum funding MAGNITUDE (per 8h) to enter — the rate must be at least this
+# negative. Symmetric with cash_and_carry's 0.08%: break-even over the 48h hold
+# is ~5 bps/8h against the ~30 bps two-leg cost, so 0.08% keeps a healthy margin
+# and stays selective (only genuinely crowded-short funding).
+DEFAULT_MIN_FUNDING = Decimal("0.0008")  # 0.08% / 8h magnitude
+# Funding magnitude that maps to confidence 1.0.
+FUNDING_CAP = Decimal("0.0020")  # 0.20% / 8h magnitude
 # Hold across several funding cycles so the fixed two-leg round-trip cost is
-# amortised over many funding payments (was 8h = one cycle → cost dominated).
-# Funding-flip close still caps the downside if the rate turns negative mid-hold.
+# amortised over many funding payments. Funding-flip close caps downside if the
+# rate turns non-negative mid-hold.
 DEFAULT_HORIZON_S = 172800  # 48 hours (6 funding cycles)
 DEFAULT_CONFIDENCE = Decimal("0.70")
 
@@ -52,7 +54,7 @@ DEFAULT_CONFIDENCE = Decimal("0.70")
 COOLDOWN_S = DEFAULT_HORIZON_S
 
 
-class CashAndCarry:
+class InverseCarry:
     id: str = STRATEGY_ID
     version: int = STRATEGY_VERSION
     market: str = "crypto"
@@ -72,15 +74,14 @@ class CashAndCarry:
         now = datetime.now(UTC)
         drafts: list[PredictionDraft] = []
 
-        # Fetch the set of symbols that already have an open delta_neutral
-        # prediction (cooldown gate).
+        # Symbols that already have an open inverse_carry prediction (cooldown).
         async with shared_session_scope() as shared:
             open_preds = (
                 await shared.execute(
                     select(Prediction.symbol)
                     .where(Prediction.strategy_id == STRATEGY_ID)
                     .where(Prediction.strategy_version == self.version)
-                    .where(Prediction.side == "delta_neutral")
+                    .where(Prediction.side == "inverse_carry")
                     .where(Prediction.status == "open")
                 )
             ).scalars().all()
@@ -92,7 +93,6 @@ class CashAndCarry:
                     logger.debug(f"{STRATEGY_ID}: {symbol} cooldown (open position exists)")
                     continue
 
-                # Latest ticker with a non-null funding rate
                 tk_stmt = (
                     select(
                         TickerSnapshot.funding_rate,
@@ -111,26 +111,24 @@ class CashAndCarry:
                     continue
 
                 fr = Decimal(tk_row.funding_rate)
-                if fr < self.min_funding:
-                    # Only enter when longs are paying shorts (positive funding)
-                    # and the rate is above the profitability floor.
+                # Enter only when funding is negative enough (shorts paying
+                # longs by at least the profitability floor).
+                if fr > -self.min_funding:
                     continue
 
-                # Entry price reference — mark_price preferred for perp, fall
-                # back to last_price if mark unavailable.
                 ref_px = tk_row.mark_price or tk_row.last_price
                 if ref_px is None:
                     continue
                 ref_px = Decimal(ref_px)
 
-                # Confidence scales with funding magnitude, capped at 1.0.
-                confidence = min(fr / FUNDING_CAP, Decimal("1.0"))
+                mag = -fr  # positive magnitude
+                confidence = min(mag / FUNDING_CAP, Decimal("1.0"))
                 confidence = max(confidence, Decimal("0.10"))
 
-                apy = fr * 3 * 365 * 100  # funding_rate is per-8h; 3/day × 365
+                apy = mag * 3 * 365 * 100  # per-8h magnitude; 3/day × 365
                 thesis = (
-                    f"delta-neutral funding capture: funding={fr*100:.4f}% / 8h, "
-                    f"projected {apy:.1f}% APY"
+                    f"inverse delta-neutral funding capture: funding={fr*100:.4f}% / 8h, "
+                    f"projected {apy:.1f}% APY (short-spot / long-perp)"
                 )
 
                 drafts.append(
@@ -139,13 +137,15 @@ class CashAndCarry:
                         strategy_version=self.version,
                         symbol=symbol,
                         exchange=tk_row.exchange,
-                        side="delta_neutral",
+                        side="inverse_carry",
                         confidence=confidence,
                         horizon_seconds=self.horizon_s,
                         entry_price_ref=ref_px,
                         generated_at=now,
                         thesis=thesis,
                         context={
+                            # Signed funding (negative); the paper engine applies
+                            # the -1 direction sign to make accrual positive.
                             "funding_rate_8h": str(fr),
                             "min_funding_threshold": str(self.min_funding),
                             "projected_apy_pct": f"{float(apy):.2f}",
@@ -153,7 +153,7 @@ class CashAndCarry:
                     )
                 )
                 logger.info(
-                    f"{STRATEGY_ID}: signal {symbol} delta_neutral "
+                    f"{STRATEGY_ID}: signal {symbol} inverse_carry "
                     f"conf={confidence:.3f} funding={fr*100:.4f}%/8h apy={apy:.1f}%"
                 )
 

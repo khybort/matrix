@@ -71,7 +71,7 @@ async def test_high_funding_emits_delta_neutral():
     """A funding_rate above DEFAULT_MIN_FUNDING → generate() emits a
     delta_neutral draft for that symbol."""
     symbol = f"{_SYM}_HIGH"
-    await _insert_ticker(symbol, Decimal("0.0005"))  # 0.05% / 8h — well above floor
+    await _insert_ticker(symbol, Decimal("0.0009"))  # 0.09% / 8h — above the v4 0.08 floor
     try:
         drafts = await CashAndCarry(symbols=[symbol]).generate()
         dn = [d for d in drafts if d.symbol == symbol]
@@ -79,8 +79,7 @@ async def test_high_funding_emits_delta_neutral():
         d = dn[0]
         assert d.side == "delta_neutral"
         assert d.strategy_id == STRATEGY_ID
-        assert d.strategy_version == 1
-        assert d.horizon_seconds == 28800
+        assert d.horizon_seconds == 172800  # v4: 48h hold
         assert Decimal("0.1") <= d.confidence <= Decimal("1.0")
         assert "delta-neutral funding capture" in d.thesis
         assert "funding_rate_8h" in d.context
@@ -105,7 +104,7 @@ async def test_cooldown_blocks_repeat():
     """If an open delta_neutral prediction exists for the symbol, a second
     generate() call must return no new draft for that symbol."""
     symbol = f"{_SYM}_COOLDOWN"
-    await _insert_ticker(symbol, Decimal("0.0005"))
+    await _insert_ticker(symbol, Decimal("0.0009"))
 
     try:
         # First call — should emit

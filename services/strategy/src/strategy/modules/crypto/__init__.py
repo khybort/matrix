@@ -11,11 +11,13 @@ from strategy.modules.crypto.cash_and_carry import CashAndCarry
 from strategy.modules.crypto.dca import Dca  # noqa: F401 (retained, not active)
 from strategy.modules.crypto.funding_reversion import FundingReversion
 from strategy.modules.crypto.grid import Grid
+from strategy.modules.crypto.inverse_carry import InverseCarry
 from strategy.modules.crypto.momentum_xs import MomentumXs
 from strategy.modules.crypto.neg_funding_carry import NegFundingCarry
 from strategy.modules.crypto.oi_breakout import OiBreakout  # noqa: F401 (retained, not active)
 from strategy.modules.crypto.oi_delta import OiDelta
 from strategy.modules.crypto.screener_follow import ScreenerFollow
+from strategy.modules.crypto.xexch_funding_arb import XexchFundingArb
 
 STRATEGIES: list[type] = [
     FundingReversion,
@@ -26,6 +28,8 @@ STRATEGIES: list[type] = [
     ScreenerFollow,
     CashAndCarry,
     NegFundingCarry,
+    InverseCarry,
+    XexchFundingArb,
     Dca,
 ]
 
@@ -35,9 +39,11 @@ __all__ = [
     "Dca",
     "FundingReversion",
     "Grid",
+    "InverseCarry",
     "MomentumXs",
     "NegFundingCarry",
     "OiBreakout",
     "OiDelta",
     "ScreenerFollow",
+    "XexchFundingArb",
 ]

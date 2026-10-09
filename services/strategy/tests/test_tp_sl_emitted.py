@@ -368,7 +368,7 @@ async def test_momentum_xs_emits_tp_sl():
 async def test_cash_and_carry_no_tp_sl():
     """CashAndCarry (delta-neutral) drafts must NOT have tp_pct or sl_pct."""
     await _seed_ticker(
-        funding_rate=Decimal("0.0005"),  # > min_funding 0.0001
+        funding_rate=Decimal("0.0009"),  # > v4 min_funding 0.0008 (0.08%/8h)
         price=Decimal("100"),
     )
 
