@@ -21,7 +21,9 @@ from matrix_shared import session_scope
 from matrix_shared.models import BistSymbol
 
 DEFAULT_DISCOVER_URL = "https://api.fintables.com/companies/?format=json"
-_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9]{2,9}$")
+# BIST equity codes are 4-5 characters (bist_symbols 2026-10: 51 four, 607 five,
+# none shorter); 3-char codes in the payload are not tradable equities.
+_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9]{3,9}$")
 
 
 @dataclass(frozen=True, slots=True)
