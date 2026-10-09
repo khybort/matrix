@@ -230,3 +230,13 @@
   yeniden onaylanan dersin `n`'ini güncelliyor ama güvenini doğduğu örnekte bırakıyordu; birim değişince eski güven
   sonsuza kadar yaşardı. Kural: bir istatistiği tazeleyen her yol (confirm/touch/upsert) türetilmiş skoru da yeniden
   hesaplar; satır sayan yeni tüketici yazma, `edge_study.episode_summary` kullan.
+
+- **2026-10-09 — "Mod kapalı" bayrağı maliyeti kapatmıyordu; ve farklı haftaları kıyaslamak rejimi ölçer.**
+  `MATRIX_LLM_BLEND_MODE=rule_only` A/B kontrol kolu olarak yazılmıştı ama `decide_batch` LLM'i yine çağırıyor, yalnız
+  cevabı atıyordu: kontrol kolu tedavi kolunun bütün maliyetini ödüyordu. Kural: bir özelliği "kapatan" her bayrak, o
+  özelliğin *maliyetli çağrısından önce* kontrol edilsin ve bunun testi çağrının hiç yapılmadığını assert etsin.
+  İkinci tuzak ölçümde: LLM-yönlü işlemler −0.9 net, kural-yalnız işlemler −13.5 — "LLM 12.6 bps kazandırıyor"
+  sonucuna çok yakındı. Kural kolunun %95'i 09-12/13'ten, LLM kolu 09-13…09-30'dan; aynı saatlerde LLM'in reddettiği
+  ε-probları +13.9 brüt, aldıkları +11.7 (t=−0.19), aynı girişte kuralın eğilimi yönüne göre fark −2.4 (t=−0.4).
+  Kural: bir karar bileşeninin değerini **aynı saatlerde** ölç — eşli karşı-olgu (aynı giriş, öbür kolun yönü) veya
+  aynı dönemde onun reddettikleri; dönemler arası fark önce rejimdir. Kaynak: `docs/wiki/llm-value-audit.md`.

@@ -1,6 +1,6 @@
 ---
 title: LLM stack
-updated: 2026-09-19
+updated: 2026-10-09
 sources: [packages/python-shared/src/matrix_shared/{subscription_llm,openrouter_llm,usage_ledger}.py, scripts/claude_creds_sync.sh]
 status: current
 ---
@@ -65,3 +65,10 @@ So graph extraction is the dominant consumer by a wide margin, and it is
 research infrastructure rather than a trading signal. The lever exists if the
 rate budget ever binds — cut extraction frequency before touching anything the
 decision loop uses. Until then this is a number to watch, not to act on.
+
+**Superseded 2026-10-09** by [[llm-value-audit]]: neither the agent's LLM
+nor LLM graph extraction measured any PnL contribution, so the agent runs
+`MATRIX_LLM_BLEND_MODE=rule_only` (no call) and graph `GRAPH_EXTRACT_MODE=heuristic`.
+Note the slot layer only covers tool-loop sessions (graph agent_extract,
+synthesis, director, reflection, brain); single-shot calls, the agent's
+included, never take a global slot.
