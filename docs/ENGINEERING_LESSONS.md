@@ -269,3 +269,17 @@
   `market_trades` 7 gün tutulur (kesintiden sonra 10-09 12:01'den başlıyordu). Geçmiş tick'ler için
   `public.bybit.com/trading/<SYM>/<SYM><YYYY-MM-DD>.csv.gz` kullan. RPI printlerini at; delist olmuş sembolde dosya 404
   HTML'i döner, indirince `gzip -t` ile doğrula. Kaynak: `docs/wiki/maker-execution.md`.
+- **2026-10-09 — Akan evren ≠ işlem evreni; yeni sembol ad alanı her tüketiciyi ve retention anahtarını kontrol ettirir.**
+  Carry watchlist'i (`crypto_carry`) eklerken: (1) Bir coin'i stream etmek stratejinin onu görmesi demek değil — dispatcher
+  her kripto modülüne `crypto_universe_async()` verir; watchlist `crypto_ingest_universe_async()`'te. İşlem evrenini
+  genişletmek yönlü modüllere fonlaması için seçilmiş coin'leri trade ettirirdi; watchlist isteyen modül
+  `carry_watchlist_async()`'i kendisi okur. (2) Spot bacakları perp ile AYNI sembolü taşır (`KAIAUSDT`, exchange
+  `bybit-spot`/`binance-spot`): exchange filtresiz okuyanlar (`symbol_costs` spread medyanı, agent features'ın en yeni
+  ticker/book'u) karışır — `symbol_costs` artık `exchange='bybit'`, traded set'e giren coin'in spot bacağı 5 dk'da durur.
+  (3) Spot bar `crypto` altında perp bar'ıyla `(asset_class, symbol, interval, ts)`'de çakışır; aggregator'da aynı satıra
+  iki kez ON CONFLICT bütün tick'i düşürür → spot bar `crypto_spot` (DEFAULT partition, göç yok), spot trade hiç
+  `market_trades`'e yazılmaz. (4) Sembol bazlı retention yalnız saydığı anahtarları siler: `1000BTTUSDT` perp'inin spotu
+  `BTTUSDT` hiçbir anahtar kümesinde yoktu, sessizce sonsuza kadar büyürdü → anahtarlara `crypto_spot` bar sembolleri
+  eklendi. Kural: yeni bir sembol/exchange ad alanı yazınca o tabloyu `symbol` ile okuyan her sorguyu ve retention'ın anahtar
+  kaynağını tara. Ölçüm tuzağı: `WITH w AS (SELECT string_to_array(...) s) ... WHERE symbol = ANY(w.s)` indeksi kullanmadı
+  (2+ dk, iptal); dizi literal'i (`ANY(array[...])`) ms. Kaynak: `docs/wiki/operations.md` "Crypto universe".

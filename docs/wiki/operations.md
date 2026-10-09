@@ -1,7 +1,7 @@
 ---
 title: Operations
 updated: 2026-10-09
-sources: [Makefile, docs/OPS_HARDENING.md, scripts/, scripts/stall_watchdog.sh]
+sources: [Makefile, docs/OPS_HARDENING.md, scripts/, scripts/stall_watchdog.sh, services/ingestion/src/ingestion/carry_watchlist.py]
 status: current
 ---
 
@@ -71,6 +71,93 @@ What no local check can do: report a host that is already off. The gap message
 arrives only after it comes back, and after a power loss nothing runs until
 someone logs in (automatic login is off; FileVault is off, so it can be enabled). Keep the machine on AC; the battery alert is
 the only warning there will be.
+
+## Crypto universe — what streams, what trades
+
+Two sets since 2026-10-09 (`matrix_shared/markets/crypto.py`):
+
+- **Traded** — `crypto_universe_async()`: `tradable_symbols` asset_class
+  `crypto`, active (labs universe manager, ~25). The strategy dispatcher hands
+  this to every crypto module; the agent trades it.
+- **Streamed** — `crypto_ingest_universe_async()`: traded ∪ **carry
+  watchlist** (`tradable_symbols` asset_class `crypto_carry`). Ingestion
+  subscribes it, bars-aggregator aggregates it (`symbol = ANY(...)`).
+  A module that wants watchlist coins must ask for `carry_watchlist_async()`
+  itself — never widen the traded set, or directional modules trade coins
+  chosen for their funding.
+
+**Carry watchlist** (`services/ingestion/src/ingestion/carry_watchlist.py`,
+runs inside `ingestion-market`): hourly at :40 (so a newcomer is subscribed
+~20 min before the top-of-hour settlement `neg_funding_carry` reads), Bybit
+USDT perps whose base coin is in the Bybit/Binance borrow tables and whose
+min(last settled, live predicted) funding is ≤ −0.05 %; ≤ 20 by 24h turnover,
+traded-set symbols excluded. Hysteresis: stays while ≤ −0.02 % or for 6 h
+after it last qualified; incumbent turnover counts ×1.5 in the cap ranking.
+Any symbol with an open `inverse_carry` prediction is pinned (the paper engine
+accrues funding from the settlements the hold crosses). Row `components_json`
+holds settled / predicted / borrow venue + rate / spot venue + pair. Knobs:
+`CARRY_WATCHLIST_ENABLED`, `_N` (20), `_ENTER` (−0.0005), `_EXIT` (−0.0002),
+`_KEEP_H` (6), `_REFRESH_MINUTE` (40). One refresh = ~370 public REST calls,
+~10 s.
+
+**Spot legs**: each member's spot pair streams from the cheapest-borrow
+venue that lists it (else the other): Bybit spot (`exchange='bybit-spot'`) or
+Binance spot (`'binance-spot'`, combined-stream WS). Ticker every 15 s, book
+top-20/25 every 10 s, closed 1m candles into `market_bars` asset_class
+**`crypto_spot`** (DEFAULT partition; a spot bar under `crypto` would collide
+with the perp bar of the same name). Spot rows share the perp's symbol
+(`KAIAUSDT`) except for scaled perps (`1000BTTUSDT` → `BTTUSDT`): any reader
+of tickers/books without an `exchange` filter must not be pointed at a
+watchlist coin — `symbol_costs` filters `exchange='bybit'`, and a coin that
+joins the traded set loses its spot leg at the next 5-min reconcile.
+
+Subscriptions change on the live socket (`set_symbols` → subscribe /
+unsubscribe; Bybit spot caps a request at 10 args); nothing reconnects when
+the set moves. bars-aggregator backfills 48 h of perp klines for a symbol that
+joins mid-run (`BARS_JOIN_BACKFILL_HOURS`).
+
+Check it:
+```sql
+-- shared: current watchlist
+SELECT rank, symbol, score AS funding, liquidity_usd::bigint AS turnover,
+       components_json->>'spot_venue' AS spot
+FROM tradable_symbols WHERE asset_class = 'crypto_carry' AND active ORDER BY rank;
+```
+Logs: `carry watchlist: N active … added=[…] dropped=[…]` hourly;
+`bybit linear: +[…] -[…]`, `binance spot: +[…]` on each change.
+
+**Measured 2026-10-09 13:14–13:43 UTC** (18 watchlist perps + 18 spot legs,
+on top of 24–25 traded symbols; baseline = the traded set over the hour
+before):
+
+| table | baseline rows/day | added rows/day | added bytes/day (heap+idx, est.) |
+|---|---|---|---|
+| `market_trades` | 13.6 M | +2.9 M (+22 %) | ~0.9 GB (7 d kept → ~6 GB) |
+| `market_orderbook_snapshots` | 1.0 M | +0.78 M (perp 0.64 M, spot 0.14 M) | ~0.95 GB (2 d → ~2 GB) |
+| `market_ticker_snapshots` | 0.44 M | +0.32 M (perp 0.24 M, spot 0.07 M) | ~75 MB (30 d → ~2.3 GB) |
+| `market_bars` 1m | 34 k | +45 k (perp 22 k, spot 24 k) | ~15 MB (no retention) |
+
+About +2 GB/day gross, ~+11 GB steady state against 190 GiB free; the 23 GB
+of free space in the bloated L2 table absorbs it first (database grew 30 MB in
+the first 36 min). CPU: `ingestion-market` 5.8 % → 6.7–9.3 % (docker stats
+averages); Postgres was 36 % before and 52–75 % after, but two autovacuums
+(`market_trades`, L2) were running in the after window, so that delta is not
+the watchlist's. Retention keeps up: the time-ordered trades sweep and the
+per-symbol L2/ticker sweeps all plan as index scans; per-symbol keys now
+include `crypto_spot` bar symbols (spot pairs named unlike their perp would
+otherwise never be pruned). A cold first ticker sweep took 49 s over 103
+keys with nothing to delete (dead index entries), 0.6 s once warm.
+
+Expected yield: replaying the holdout (2026-06-01 → 10-09, 1 105 executable
+H1 episodes) through this selection (refresh at :40, cap 20, hysteresis,
+predicted ≈ next settled) covers 1 103 of them — ~59/week, ~50/week over the
+last 30 days — against ~1/week inside the traded set. Cap 10 covers 73 %,
+cap 5 37 % (the cap keeps the liquid ones, which earn more).
+
+**Open wiring (2026-10-09)**: the data streams, but the strategy dispatcher
+still hands `neg_funding_carry` only the traded set, so the module never looks
+at a watchlist coin. Until `strategy.main` gives it `crypto_symbols +
+carry_watchlist_async()`, the yield above is potential, not booked.
 
 ## Storage
 

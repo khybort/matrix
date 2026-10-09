@@ -88,10 +88,12 @@ carry WIP in `paper_trade.py`; ships with that WIP).
 - **Borrow availability** is the binding unknown: a listed rate is not a
   lendable pool, and squeezed coins are exactly the ones whose pools run dry.
   Settles only with a signed account query at signal time (Phase 5).
-- **Coverage**: the edge is outside the 25-symbol universe. Decisive next step
-  is ingestion streaming ticker + trades for every borrowable perp whose
-  settled funding ≤ −0.08 % (screener already polls all tickers). Without it
-  the shadow book gathers ~5 episodes a month.
+- **Coverage**: the edge is outside the 25-symbol universe. Since 2026-10-09
+  ingestion streams a carry watchlist (borrowable perps at ≤ −0.05 %, cap 20,
+  with their spot legs; [[operations]] "Crypto universe"); replayed over the
+  holdout it would have covered 1 103 of 1 105 episodes (~59/week, ~50/week
+  in the last 30 days) against ~5 a month before. Pending: the dispatcher must
+  hand the watchlist to `neg_funding_carry`.
 - Four-leg cost on illiquid spot may exceed 30 bps; the 60 bps sensitivity
   still holds (+105, t=7.9 holdout), the < $1M bucket does not at ×3 borrow.
 

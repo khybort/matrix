@@ -35,7 +35,7 @@ working".
 - [risk-gates](risk-gates.md) — what stands between the code and real capital
 
 ## How it runs
-- [operations](operations.md) — commands, environment knobs, daily checks
+- [operations](operations.md) — commands, environment knobs, daily checks, streamed vs traded crypto universe (carry watchlist)
 - [llm-stack](llm-stack.md) — model access, cost accounting, rate budget
 - [development](development.md) — tests, hot reload, staging rules in a shared tree
 - [incidents](incidents.md) — what has gone wrong, root causes, fixes

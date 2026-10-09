@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-10-09 — Kripto akış evreni = işlem evreni + carry watchlist (spot bacaklarıyla)
+- `ingestion-market` saatte bir (:40) `tradable_symbols` asset_class `crypto_carry`'ye ≤ 20 borçlanabilir negatif-fonlamalı perp yazar (min(son settle, tahmin) ≤ −0.05 %, histerezis, açık `inverse_carry` sabitlenir). Ingestion ve bars-aggregator `crypto_ingest_universe_async()` (işlem evreni ∪ watchlist) okur; stratejiler `crypto_universe_async()`'te kalır. Her coin'in spot bacağı Bybit spot / Binance spot'tan akar: ticker + book `exchange='bybit-spot'|'binance-spot'` (perp ile aynı sembol), 1m bar `market_bars` asset_class `crypto_spot`. Abonelikler canlı sokette değişir (yeniden bağlanma yok). `symbol_costs` artık yalnız `exchange='bybit'` kitaplarını ölçer; retention anahtarlarına `crypto_spot` bar sembolleri eklendi. Exchange filtresiz ticker/book okuyan yeni kod watchlist coin'lerinde spot satırı görebilir. Detay: `docs/wiki/operations.md` "Crypto universe".
+
 ## 2026-10-09 — Agent kural-yalnız karar verir; graph LLM'siz çıkarır
 - `agent`: `MATRIX_LLM_BLEND_MODE=rule_only` (compose varsayılanı). `rule_only` artık LLM çağrısını hiç yapmaz (önceden çağırıp cevabı atıyordu). Sebep: `docs/wiki/llm-value-audit.md` — 251 kripto bölümde LLM'in yönü kuralın kendi eğiliminden iyi değil (−2.4 bps, t=−0.4), aldığı işlemler aynı saatlerde reddettiklerinden iyi değil (−2.1, t=−0.19); LLM-yönlü net −0.9 bps (t=−0.16). Geri almak: `MATRIX_LLM_BLEND_MODE=blend`.
 - `graph`: `GRAPH_EXTRACT_MODE=heuristic` (yeni anahtar, compose varsayılanı) — ajan/LLM çıkarımı yok, anahtar kelime çıkarıcı; `GRAPH_BACKFILL_ENABLED=false`. Graph kapsamı olan kararlar olmayanlardan iyi değil (her kolda ≤); haber skorunun yönü çevirdiği 14 bölüm +5.0 (t=0.14). Geri almak: `GRAPH_EXTRACT_MODE=llm`, `GRAPH_BACKFILL_ENABLED=true`.
