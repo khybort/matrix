@@ -461,3 +461,76 @@ What would reopen it: only a new pre-registered test on forward data. Candidates
 unified-margin venue where both legs share collateral, plus a maker-only cost model (fees alone
 already exceed the median gross). Re-cutting this year would only be more searching. Data stays in
 the session scratchpad `r3/`: spot klines 2.08 M rows, books, per-episode tables.
+
+## Live path and funding decay (2026-10-09)
+**Live path, traced end to end** on the first settlements after the watchlist reached the module
+(c49f08b, 14:04 UTC):
+
+| step | KAIA 14:00 settlement (−0.50 %/1 h) | 16:00 settlement: RLC, SAND, ORCA, SKL, API3, UMA, CHR |
+|---|---|---|
+| emission (settled ≤ −0.08 %, borrowable, ≤ 1 h old) | yes, 14:04:17 (first tick 14:03:46 skipped: leg cap $0 on a wide book) | all seven seen |
+| entry filter | cost share 0.068 → kept | all skipped, every tick to 16:08: cost share > 1/3 (RLC, SAND, ORCA, SKL, API3), book too thin (UMA, CHR) |
+| EV floor / slots / one-carry-per-symbol | passed (no slot row for a shadow-only strategy = no per-strategy cap; carry floor 30 bps) | — |
+| wallet risk gate + book sizing | $500 ceiling, impact cap $3 012, risk gate 2 % of equity → **$196.82** | — |
+| booked | `shadow` wallet, `context.is_shadow = true`, `book_open` stamped | — |
+| funding | 15:00 −0.50 %, 16:00 −0.19 % booked from the ticker stream (+$1.37, 69 bps) | — |
+| borrow | quote 0.75 bps/h × 3 per started hour ($0.13 after 3 h) | — |
+| close | at horizon 10-11 14:04 | — |
+
+Live borrow quotes at signal time are the binding cost, as the adversarial check predicted:
+RLC/ORCA/SKL/API3 quoted 0.66–0.88 bps/h (×3 over 48 h = 95–126 bps), against 250–388 bps of naive
+expected funding. KAIA's own rate fell from −0.50 % to −0.19 % at its second settlement: the decay
+below, live.
+
+**Fix**: the paper engine closed any carry after five minutes of adverse predicted funding
+(`funding_flip`). The study held 48 h, and a flip exit made it worse there (+82 vs +104 bps train);
+here each early exit also pays four walked legs on a fraction of the funding. Book-priced carries
+(context names a spot leg) now hold to horizon (e8bdd2f). Not changed, noted: the equity mark of an
+open carry is `rate × hours/8`, wrong by the interval factor for 1/2/4 h coins (understates KAIA ~8×);
+marking at settled funding would need a 48 h snapshot scan per position per 5 s tick.
+
+**Funding-decay model.** Realised 48 h funding (entry 1 h after settlement, as in the replay) divided
+by the naive expectation, median per cell of prior run × depth, fitted on train (2 941 book-sized
+episodes, cells with n < 30 back off to the run bucket). Run = consecutive settlements ≤ −0.05 %
+immediately before the signal one (Bybit funding history). Turnover and interval improved the train
+fit by < 0.04 in median |log error| and were left out.
+
+| run \ depth (bps/interval) | 8–15 | 15–30 | 30–60 | ≥ 60 |
+|---|---|---|---|---|
+| 0 (fresh spike, 74 % of episodes) | 0.21 | 0.13 | 0.10 | 0.11 |
+| 1–2 | 0.30 | 0.25 | 0.13 | 0.27* |
+| 3+ | 0.62 | 0.50 | 0.35 | 0.52* |
+
+\* back-off. Persistent squeezes keep paying; fresh deep spikes unwind. The rule (model above,
+keep iff stressed borrow + book ≤ decayed expectation) was chosen on train, then evaluated once on the
+holdout. Borrow ×3, t by ISO week; $ = net × book-sized leg:
+
+| filter | split | kept | net bps (t) | median | $ total | top 5 % share | top 5 coins | coins | ×10 borrow |
+|---|---|---|---|---|---|---|---|---|---|
+| naive, 1/3 (live) | train | 1 081 | +175.6 (6.7) | +12.7 | 6 620 | 0.52 | 0.28 | 217 | +30.9 (1.5) |
+| decay, ×1.0 | train | 576 | +237.7 (6.9) | +66.9 | 5 090 | 0.39 | 0.30 | 140 | +119.5 (3.8) |
+| naive, 1/3 (live) | holdout | 221 | +292.5 (6.3) | +96.8 | 2 261 | 0.41 | 0.46 | 89 | +122.7 (2.6) |
+| decay, ×1.0 | holdout | 91 | **+463.6 (4.9)** | +238.0 | 1 390 | **0.33** | 0.62 | 38 | **+313.3 (3.3)** |
+| kept by naive only | holdout | 139 | +165.4 (4.2) | +36.0 | 885 | 0.47 | 0.46 | 74 | −15.3 (−0.4) |
+
+Median realised / expected: naive 0.21 train, 0.30 holdout; decayed 1.00 train, 1.36 holdout
+(funding was more persistent in the holdout, so the model is conservative there).
+
+**Not adopted as the gate.** Net per kept episode rises and episode concentration falls, as
+required, but coin concentration rises (top 5 coins 62 % vs 46 %, 38 vs 89 coins) and the holdout
+money falls 39 % at ×3 borrow. The episodes only the naive rule keeps earn +165 bps at ×3 borrow and
+−15 at ×10: whether they pay depends on the borrow the shadow book has yet to measure. So the
+module records `expected_decayed_bps`, `decay_ratio`, `prior_run`, `naive_keep` and `decay_keep` on
+every signal (a085008), and `MATRIX_NFC_EXPECTED_MODEL=decay` switches the gate. Revisit when ≥ 30
+closed shadow episodes exist: if the naive-only ones lose net of actual borrow, switch. Scripts:
+session scratchpad `decay/` (`features.py`, `fit.py`, `ho.py`, `PRE_HOLDOUT.txt`).
+
+**Opportunity rate vs the tracker's "2 in 72 h".** Bybit funding history for all 363 USDT perps
+whose coin is borrowable on Bybit or Binance (fetched 16:00 UTC): settlements ≤ −0.08 % numbered
+**125 in the last 72 h (26 episodes, one per coin per 48 h)** and 1 248 in 30 days (218 episodes,
+~51 a week; weekly 30–64). The replay's ~50/week holds; the market is not quiet. The tracker saw 2
+because watchlist coins stream only since 13:14 today. Replaying the current watchlist rules
+(hourly at :40, cap 20, enter −0.05 %, exit −0.02 %, 6 h keep, incumbent ×1.5, prior-day turnover)
+over 30 days: with the predicted rate proxied by the next settled one, the watchlist would have held
+211 of 218 episodes (24 of 26 in 72 h); on settled rates alone 74 of 218. The predicted-rate trigger
+does the work and the selection rules need no change. 5 of the 218 were in the traded universe.
