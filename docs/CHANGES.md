@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-10-09 — Agent kural-yalnız karar verir; graph LLM'siz çıkarır
+- `agent`: `MATRIX_LLM_BLEND_MODE=rule_only` (compose varsayılanı). `rule_only` artık LLM çağrısını hiç yapmaz (önceden çağırıp cevabı atıyordu). Sebep: `docs/wiki/llm-value-audit.md` — 251 kripto bölümde LLM'in yönü kuralın kendi eğiliminden iyi değil (−2.4 bps, t=−0.4), aldığı işlemler aynı saatlerde reddettiklerinden iyi değil (−2.1, t=−0.19); LLM-yönlü net −0.9 bps (t=−0.16). Geri almak: `MATRIX_LLM_BLEND_MODE=blend`.
+- `graph`: `GRAPH_EXTRACT_MODE=heuristic` (yeni anahtar, compose varsayılanı) — ajan/LLM çıkarımı yok, anahtar kelime çıkarıcı; `GRAPH_BACKFILL_ENABLED=false`. Graph kapsamı olan kararlar olmayanlardan iyi değil (her kolda ≤); haber skorunun yönü çevirdiği 14 bölüm +5.0 (t=0.14). Geri almak: `GRAPH_EXTRACT_MODE=llm`, `GRAPH_BACKFILL_ENABLED=true`.
+
 ## 2026-10-09 — Dersler, mutasyon kapısı, setup memory, pair edge ve Telegram win rate bölüm sayar
 - `agent_lessons`: kovalar, `_confidence` (binom z) ve koridor emekliliği `edge_study.episode_summary` ile bölüm başına; yeniden onaylanan dersin güveni de taze örnekle yeniden yazılır. `reflection.metrics_window` (`_underperforming`, param_tune yönü) ve LLM'in `recent_outcomes` aracı bölüm başına; öneri snapshot'ı `n_raw` + `unit=episode` taşır. `setup_memory` komşuları ve `allocation.load_pair_edges` (EV sıralaması + `risk_multiplier`) bölüm başına. notify 24h win rate bölüm başına (yalnız gösterim). Satır sayan yeni tüketici yazma; `episode_summary` kullan.
 

@@ -225,7 +225,7 @@ services:
         condition: service_healthy
     environment:
       <<: *python-env
-      GRAPH_BACKFILL_ENABLED: ${GRAPH_BACKFILL_ENABLED:-true}
+      GRAPH_BACKFILL_ENABLED: ${GRAPH_BACKFILL_ENABLED:-false}
       GRAPH_BACKFILL_BATCH: ${GRAPH_BACKFILL_BATCH:-2}
       GRAPH_BACKFILL_INTERVAL_S: ${GRAPH_BACKFILL_INTERVAL_S:-300}
       GRAPH_BACKFILL_COOLDOWN_S: ${GRAPH_BACKFILL_COOLDOWN_S:-3600}
@@ -239,6 +239,8 @@ services:
       GRAPH_CHUNK_MAX_CHARS: ${GRAPH_CHUNK_MAX_CHARS:-1800}
       GRAPH_CHUNK_SIM_THRESHOLD: ${GRAPH_CHUNK_SIM_THRESHOLD:-0.25}
       GRAPH_MAX_CHUNKS_PER_DOC: ${GRAPH_MAX_CHUNKS_PER_DOC:-6}
+      # heuristic = no LLM extraction; graph coverage measured no PnL (docs/wiki/llm-value-audit.md)
+      GRAPH_EXTRACT_MODE: ${GRAPH_EXTRACT_MODE:-heuristic}
     command: ["graph.main", "--interval", "20"]
     volumes:
       - matrix_claude_config:/root/.claude
@@ -258,6 +260,9 @@ services:
         condition: service_healthy
     environment:
       <<: *python-env
+      # rule_only = no LLM call per decision; the LLM measured no edge over the rule lean
+      # (docs/wiki/llm-value-audit.md). `blend` restores it.
+      MATRIX_LLM_BLEND_MODE: ${MATRIX_LLM_BLEND_MODE:-rule_only}
     command: ["agent.main", "--interval", "60"]
     volumes:
       - matrix_claude_config:/root/.claude
