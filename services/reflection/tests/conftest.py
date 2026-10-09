@@ -6,6 +6,7 @@ UUID-scoped strategy_id with cleanup.
 
 from __future__ import annotations
 
+import inspect
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -23,6 +24,23 @@ TEST_SHARED_DSN = os.environ.get(
 )
 os.environ.setdefault("SHARED_DATABASE_URL", TEST_SHARED_DSN)
 os.environ.setdefault("LOCAL_DATABASE_URL", TEST_SHARED_DSN)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _db_writes_never_commit(request):
+    """These tests run against the LIVE databases and call global passes:
+    score_strategy_slots() with MIN_N_FOR_SLOT_CHANGE=1 re-scores every live
+    slot row, revoke_breached_certificates(0.15) judges every live cert against
+    a cap tighter than the operator's, maybe_file_dev_task writes a 'pending'
+    row the live dev_agent worker claims. Every async test therefore runs in
+    an outer transaction that is rolled back — nothing it writes is committed."""
+    if not inspect.iscoroutinefunction(request.function):
+        yield
+        return
+    from matrix_shared.testing import db_writes_rolled_back
+
+    async with db_writes_rolled_back():
+        yield
 
 
 @pytest_asyncio.fixture

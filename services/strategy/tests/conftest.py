@@ -8,6 +8,7 @@ the module restricts evaluation per its `symbols` arg.
 
 from __future__ import annotations
 
+import inspect
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -182,3 +183,19 @@ async def seed_predictions():
 
     async with shared_session_scope() as session:
         await session.execute(delete(Prediction).where(Prediction.symbol == TEST_SYM))
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _db_writes_never_commit(request):
+    """Strategy tests run against the LIVE databases and emit predictions for
+    synthetic symbols that the live paper engine (not stopped for this suite)
+    could book against the real wallet. Every async test runs in an outer transaction that is rolled
+    back (matrix_shared.testing), so nothing it writes is ever committed or
+    visible to the live services."""
+    if not inspect.iscoroutinefunction(request.function):
+        yield
+        return
+    from matrix_shared.testing import db_writes_rolled_back
+
+    async with db_writes_rolled_back():
+        yield

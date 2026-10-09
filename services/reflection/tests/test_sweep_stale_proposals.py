@@ -1,4 +1,7 @@
-"""Integration tests for the stale-proposal sweep step in _tick."""
+"""Integration tests for the stale-proposal sweep step in _tick.
+
+Calls the sweep itself, not `_tick`: a full tick from a test ran the whole
+reflection cycle (mutation drafts, efficacy, slot scoring) on live data."""
 
 from __future__ import annotations
 
@@ -54,8 +57,8 @@ async def test_sweep_marks_old_pending_as_superseded():
     strategy_id = f"TEST_sweep_{uuid.uuid4().hex[:6]}"
     prop_id = await _insert_proposal(strategy_id, age_days=8)
     try:
-        from reflection.main import _tick
-        await _tick(window_hours=24, use_llm=False, min_outcomes=10, score_trigger=-0.05)
+        from reflection.main import sweep_stale_proposals
+        await sweep_stale_proposals()
 
         async with shared_session_scope() as session:
             proposal = await session.get(MutationProposal, prop_id)
@@ -73,8 +76,8 @@ async def test_sweep_preserves_recent_pending():
     strategy_id = f"TEST_sweep_{uuid.uuid4().hex[:6]}"
     prop_id = await _insert_proposal(strategy_id, age_days=1)
     try:
-        from reflection.main import _tick
-        await _tick(window_hours=24, use_llm=False, min_outcomes=10, score_trigger=-0.05)
+        from reflection.main import sweep_stale_proposals
+        await sweep_stale_proposals()
 
         async with shared_session_scope() as session:
             proposal = await session.get(MutationProposal, prop_id)

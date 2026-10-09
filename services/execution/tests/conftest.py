@@ -9,6 +9,7 @@ after, so the dev-environment data is never touched.
 
 from __future__ import annotations
 
+import inspect
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -112,3 +113,18 @@ async def grant_cert():
                 .where(PaperTradeCertificate.asset_class == ac)
                 .where(PaperTradeCertificate.version == v)
             )
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _db_writes_never_commit(request):
+    """Execution gate tests insert wallets and GRANTED certificates into the
+    LIVE shared tables, which the live gate and dashboards read. Every async test runs in an outer transaction that is rolled
+    back (matrix_shared.testing), so nothing it writes is ever committed or
+    visible to the live services."""
+    if not inspect.iscoroutinefunction(request.function):
+        yield
+        return
+    from matrix_shared.testing import db_writes_rolled_back
+
+    async with db_writes_rolled_back():
+        yield
