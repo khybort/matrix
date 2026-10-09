@@ -79,7 +79,7 @@ def _mark_hold(symbol: str, asset_class: str, now_mono: float) -> None:
     if HOLD_COOLDOWN_S > 0:
         _hold_until[(symbol, asset_class)] = now_mono + HOLD_COOLDOWN_S
 
-DEFAULT_INTERVAL_S = 15.0
+DEFAULT_INTERVAL_S = 60.0
 
 
 async def _recent_signal_exists(

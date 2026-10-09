@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-10-09 — BIST ve US durduruldu; agent karar aralığı 15 s → 60 s
+- `strategy_configs`: 5 BIST + 1 US satırı `active` → `paused` (geri almak: aynı id'lerde `status='active'`). Ingestion yalnız `--markets crypto` (compose base + dev). Sebep: `docs/wiki/market-cadence-study.md` — hiçbir BIST/US stratejisi rastgele girişi t≥2 ile yenmiyor, BIST round trip 40 bps, veri ~15 dk gecikmeli, yfinance hataları ingestion logunun %68'i.
+- `agent.main` `--interval 60` (`DEFAULT_INTERVAL_S`): aynı bahisler 60 s gecikmeyle 15 s'den 1.4–2.5 bps iyi (t=2.4–4.3); hızın getirisi yok, LLM rate bütçesi rahatlar. Paper engine'in 5 s çıkış monitörü değişmedi.
+
 ## 2026-10-09 — Alarmlar host'tan da gider; notify teslim edilemeyeni sayar ve fill'siz günü alarmlar
 - `scripts/stall_watchdog.sh` (launchd, 5 dk) artık yalnız sessiz servisi restart etmiyor: pilde çalışma, watchdog boşluğu/reboot, Docker erişilemez (OrbStack kapalıysa başlatır), container egress ölü/host sağlam, BTCUSDT ticker > 30 dk, host disk < 30 GiB için Telegram'a **host'tan** (curl) yazar. Sebep: 2026-09-30→10-06 VM egress'i öldü, notify 783 alarm üretip hiçbirini teslim edemedi; 10-06'da pil bitti, kimse duymadı. `make watchdog-install` iki Telegram anahtarını `~/Library/Application Support/matrix/watchdog.env`'e (0600) kopyalar; `make watchdog-test`. `MATRIX_WATCHDOG_HEAL_EGRESS=1` → 30 dk ölü egress'te `orb restart docker` (vars. kapalı).
 - notify: teslim edilemeyen alarmlar sayılır, kanal dönünce tek mesajla bildirilir; `no_fills` dedektörü (24 saat hiç paper pozisyon açılmadı, `MATRIX_HEALTH_FILL_STALE_S`); ticker probu `exchange='bybit'`'e pinli.

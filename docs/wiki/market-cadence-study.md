@@ -32,7 +32,7 @@ bist_volume_breakout −53.7 (210), matrix_agent/bist −46.8 (211),
 matrix_agent/us −11.4 (309). **No BIST or US strategy beats random entry at
 t≥2**, and BIST's 40 bps round trip is 3× any gross level measured there.
 
-**Verdict: pause BIST and US.** Neither has a strategy whose *gross* level
+**Verdict: pause BIST and US.** *Applied 2026-10-09 ~12:40 UTC: the 6 BIST/US `strategy_configs` rows set to `paused`, ingestion `--markets crypto`, agent `--interval 60` (see CHANGES.md).* Neither has a strategy whose *gross* level
 clears its cost, so the only thing they can do with capital is lose it; the
 regime-diversification argument does not apply to strategies with no edge
 (diversifying zero-edge books diversifies costs). BIST additionally decides on

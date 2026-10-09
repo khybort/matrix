@@ -172,7 +172,7 @@ services:
         condition: service_healthy
     environment:
       <<: *python-env
-    command: ["ingestion.main", "--mainnet"]
+    command: ["ingestion.main", "--markets", "crypto", "--mainnet"]
     restart: unless-stopped
     logging: *default_logging
 
@@ -258,7 +258,7 @@ services:
         condition: service_healthy
     environment:
       <<: *python-env
-    command: ["agent.main", "--interval", "15"]
+    command: ["agent.main", "--interval", "60"]
     volumes:
       - matrix_claude_config:/root/.claude
     restart: unless-stopped
