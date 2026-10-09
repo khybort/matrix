@@ -52,7 +52,11 @@ def test_signed_return_is_directional_and_bounded_by_the_series():
     from matrix_shared.barrier_study import signed_return_bps
 
     bars = _series([100, 101, 102])
-    assert signed_return_bps(bars, 0, "long", 2) == 200.0
-    assert signed_return_bps(bars, 0, "short", 2) == -200.0
+    # in at bar 0 (synthetic: no open, so its close), out at the close of bar 2
+    assert signed_return_bps(bars, 0, "long", 3) == 200.0
+    assert signed_return_bps(bars, 0, "short", 3) == -200.0
     assert signed_return_bps(bars, 0, "long", 5) is None      # past the end
+    # with an open, the entry is the open: nothing before the entry bar counts
+    opened = [Bar(T0 + timedelta(minutes=i), c, c, c, o) for i, (o, c) in enumerate([(99, 100), (100, 101)])]
+    assert round(signed_return_bps(opened, 0, "long", 2), 6) == round((101 - 99) / 99 * 10_000, 6)
     assert signed_return_bps(bars, -1, "long", 1) is None

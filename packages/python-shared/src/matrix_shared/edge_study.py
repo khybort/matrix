@@ -26,6 +26,18 @@ its control; one that does not is paying spread for noise.
 Returns are gross (no costs): the cost is a known constant
 (`trading.execution_cost_bps` × 2) and adding it to both arms would only shift
 both means. The report prints it so net can be read off.
+
+Entry rule (2026-10-09): every arm enters at the OPEN of the first 1m bar that
+starts at or after `generated_at + ENTRY_LATENCY` and is scored from that bar
+on. No part of the scored path precedes the signal. Until then the treatment
+entered at the close of the last bar closed before the signal and was scored
+from the bar in force, so up to a minute of pre-signal price path — the move
+that triggered a momentum or breakout signal — was credited to the strategy.
+
+Carries (CARRY_SIDES) are not brackets and are never simulated. Their evidence
+is the realised net of their closed paper episodes (`carry_edge_rows`), tested
+against zero with a day-clustered t and put through the same BHY / deflated
+Sharpe / pre-registered-n bar, so `status` means the same thing for both.
 """
 
 from __future__ import annotations
@@ -50,6 +62,7 @@ from matrix_shared.promotion import status as promotion_status
 from sqlalchemy import text
 
 from matrix_shared.db import local_session_scope, shared_session_scope
+from matrix_shared.trading import CARRY_SIDES
 
 CONTROL_DRAWS = int(os.environ.get("MATRIX_EDGE_CONTROL_DRAWS", "20"))
 # Evaluate signals, not fills. Only ~12% of predictions ever become positions
@@ -72,6 +85,11 @@ MIN_TRADES = int(os.environ.get("MATRIX_EDGE_MIN_TRADES", "30"))
 _BAR = timedelta(minutes=1)
 MAX_ENTRY_AGE = timedelta(minutes=float(os.environ.get("MATRIX_EDGE_MAX_ENTRY_AGE_MIN", "3")))
 MAX_BAR_GAP = timedelta(minutes=float(os.environ.get("MATRIX_EDGE_MAX_BAR_GAP_MIN", "3")))
+# Entry latency: the paper engine fills ~4 s after a signal (measured on the
+# momentum_xs 2026-09-21 decomposition, docs/wiki/edge-study.md). The earliest
+# price any arm may enter at is the open of the first bar starting at or after
+# generated_at + this.
+ENTRY_LATENCY = timedelta(seconds=float(os.environ.get("MATRIX_EDGE_ENTRY_LATENCY_S", "4")))
 # What one sample is. Rows cached or registered under any other unit were
 # measured on re-emitted signals counted as independent trades and are void.
 SAMPLE_UNIT = "episode"
@@ -86,6 +104,9 @@ class Bar:
     high: float
     low: float
     close: float
+    # First trade of the bar. None only in synthetic series; the entry then
+    # falls back to the bar's close (see `entry_price`).
+    open: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,39 +116,47 @@ class SimResult:
     bars_held: int
 
 
+def entry_price(bar: Bar) -> float:
+    """The price a trade entering on `bar` gets: its open (first trade at or
+    after the bar's start). Synthetic bars without an open use the close."""
+    return bar.open if bar.open is not None else bar.close
+
+
 def simulate_bracket(
-    bars: list[Bar], entry_idx: int, *, side: str, tp_pct: float, sl_pct: float, horizon_bars: int
+    bars: list[Bar], entry_idx: int, *, side: str, tp_pct: float, sl_pct: float, horizon_bars: int,
+    entry_px: float | None = None,
 ) -> SimResult:
-    """Replay one bracketed trade on 1m bars from `entry_idx` (entry = its close).
+    """Replay one bracketed trade on 1m bars entering at the OPEN of
+    `bars[entry_idx]` (or `entry_px`, e.g. a resting limit's price) and holding
+    `horizon_bars` bars: the entry bar itself and the ones after it, exiting at
+    the close of the last. Every bar scored starts at or after the entry.
 
     Take-profit wins ties within a bar, matching the paper engine. Returns the
     gross return in bps, signed for the side.
     """
     if entry_idx < 0 or entry_idx >= len(bars) or horizon_bars <= 0:
         return SimResult("no_data", 0.0, 0)
-    entry = bars[entry_idx].close
+    entry = entry_px if entry_px is not None else entry_price(bars[entry_idx])
     if entry <= 0:
         return SimResult("no_data", 0.0, 0)
     long = side != "short"
     tp_px = entry * (1 + tp_pct) if long else entry * (1 - tp_pct)
     sl_px = entry * (1 - sl_pct) if long else entry * (1 + sl_pct)
-    last = min(entry_idx + horizon_bars, len(bars) - 1)
-    if last <= entry_idx:
-        return SimResult("no_data", 0.0, 0)
-    for i in range(entry_idx + 1, last + 1):
+    last = min(entry_idx + horizon_bars - 1, len(bars) - 1)
+    for i in range(entry_idx, last + 1):
         b = bars[i]
-        if b.ts - bars[i - 1].ts > MAX_BAR_GAP:
+        if i > entry_idx and b.ts - bars[i - 1].ts > MAX_BAR_GAP:
             # A hole in the series: what follows is not reachable by holding.
             return SimResult("no_data", 0.0, 0)
         hit_tp = b.high >= tp_px if long else b.low <= tp_px
         hit_sl = b.low <= sl_px if long else b.high >= sl_px
         if hit_tp:
-            return SimResult("hit_tp", tp_pct * _BPS, i - entry_idx)
+            return SimResult("hit_tp", tp_pct * _BPS, i - entry_idx + 1)
         if hit_sl:
-            return SimResult("hit_sl", -sl_pct * _BPS, i - entry_idx)
+            return SimResult("hit_sl", -sl_pct * _BPS, i - entry_idx + 1)
     exit_px = bars[last].close
     raw = (exit_px - entry) / entry
-    return SimResult("hit_horizon", (raw if long else -raw) * _BPS, last - entry_idx)
+    return SimResult("hit_horizon", (raw if long else -raw) * _BPS, last - entry_idx + 1)
 
 
 def _norm_sf(t: float) -> float:
@@ -375,23 +404,41 @@ def sample_episodes(rows: list[dict], cap: int) -> tuple[list[dict], dict[tuple[
 
 
 def entry_index(bars: list[Bar], generated_at: datetime) -> int:
-    """The last bar whose close was known when the signal was generated.
+    """The first bar that starts at or after `generated_at + ENTRY_LATENCY`;
+    the trade enters at its open and is scored from it. -1 when there is none,
+    or when it starts more than MAX_ENTRY_AGE later (a hole after the signal:
+    the first tradeable price is not the one the strategy acted on).
 
-    Bar `ts` is the bar's START (ingestion buckets by date_trunc('minute')), so
-    the bar "in force" at `generated_at` closes up to a minute in the future.
-    Entering at its close let the treatment arm trade at a price the strategy
-    could not have seen; the control arm has no such advantage.
+    Bar `ts` is the bar's START (ingestion buckets by date_trunc('minute')).
+    Until 2026-10-09 this returned the last bar CLOSED before the signal and
+    the simulator scored from the next bar — the bar in force at
+    `generated_at`, which began up to 60 s before it. For a momentum or
+    breakout signal those seconds are the move that fired it, and they were
+    credited to the strategy as return (correctness review 2026-10-09). The
+    rule before that (enter at the close of the bar in force) let the
+    treatment trade at a price it could not have seen. Neither is honest;
+    the first price observable after the signal is.
     """
-    i = _index_at(bars, generated_at - timedelta(minutes=1))
-    # ...and only if that close is recent. When a symbol's series has a hole
-    # (the September outage, a symbol not aggregated for days) the "last
-    # closed bar" can be hours old, and the bracket then runs across the hole
-    # into prices the strategy had already seen. On 2026-10-09 that made
-    # bist_volume_breakout +116 bps (t=10): its 244 stale entries were all
-    # take-profits at +300 while the 281 fresh ones were -14 bps.
-    if i >= 0 and generated_at - (bars[i].ts + _BAR) > MAX_ENTRY_AGE:
+    at = generated_at + ENTRY_LATENCY
+    i = _first_at_or_after(bars, at)
+    # A symbol whose series has a hole after the signal (the September outage,
+    # a symbol not aggregated for days) has its next bar hours later; entering
+    # there scores a jump across the hole. On 2026-10-09 stale entries made
+    # bist_volume_breakout +116 bps (t=10); the fresh ones were -14 bps.
+    if i < 0 or bars[i].ts - at > MAX_ENTRY_AGE:
         return -1
     return i
+
+
+def _first_at_or_after(bars: list[Bar], when: datetime) -> int:
+    lo, hi = 0, len(bars)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if bars[mid].ts < when:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo if lo < len(bars) else -1
 
 
 def contiguous(bars: list[Bar], start: int, end: int) -> bool:
@@ -418,15 +465,16 @@ async def _load_bars(symbols: set[str], asset_class: str, since: datetime) -> di
         return {}
     async with local_session_scope() as s:
         rows = (await s.execute(text(
-            "SELECT symbol, ts, high, low, close FROM market_bars "
+            "SELECT symbol, ts, high, low, close, open FROM market_bars "
             "WHERE asset_class = :ac AND interval = '1m' AND ts >= :since "
             "AND symbol = ANY(:syms) ORDER BY symbol, ts"
         ), {"ac": asset_class, "since": since, "syms": list(symbols)})).all()
     out: dict[str, list[Bar]] = {}
-    for sym, ts, high, low, close in rows:
-        out.setdefault(sym, []).append(
-            Bar(ts if ts.tzinfo else ts.replace(tzinfo=UTC), float(high), float(low), float(close))
-        )
+    for sym, ts, high, low, close, open_ in rows:
+        out.setdefault(sym, []).append(Bar(
+            ts if ts.tzinfo else ts.replace(tzinfo=UTC), float(high), float(low), float(close),
+            float(open_) if open_ is not None else None,
+        ))
     return out
 
 
@@ -444,15 +492,221 @@ def _index_at(bars: list[Bar], when: datetime) -> int:
 
 
 async def _family_size(days: float) -> int:
-    """How many (strategy, market) hypotheses the book tests in this window."""
+    """How many (strategy, market) hypotheses the book tests in this window:
+    every pair that emitted a directional signal, plus every carry pair with a
+    closed paper episode in the carry window (they share the promotion bar)."""
     async with shared_session_scope() as s:
         n = (await s.execute(text(
-            "SELECT count(DISTINCT (strategy_id, asset_class)) FROM predictions "
-            "WHERE generated_at >= now() - make_interval(secs => :secs) "
-            "AND side IN ('long','short') "
-            "AND coalesce(context->>'is_shadow','false') = 'false'"
-        ), {"secs": days * 86400})).scalar()
+            "SELECT count(*) FROM ("
+            " SELECT strategy_id, asset_class FROM predictions "
+            " WHERE generated_at >= now() - make_interval(secs => :secs) "
+            " AND side IN ('long','short') "
+            " AND coalesce(context->>'is_shadow','false') = 'false' "
+            " UNION "
+            " SELECT p.strategy_id, p.asset_class FROM paper_positions pp "
+            " JOIN predictions p ON p.id = pp.prediction_id "
+            " WHERE p.generated_at >= now() - make_interval(secs => :csecs) "
+            " AND p.side = ANY(:carry) AND pp.closed_at IS NOT NULL"
+            ") f"
+        ), {"secs": days * 86400, "csecs": CARRY_DAYS * 86400, "carry": sorted(CARRY_SIDES)})).scalar()
     return int(n or 1)
+
+
+# ---------------------------------------------------------------- carries
+#
+# A carry (CARRY_SIDES: hedged funding capture) has no entry-time question for
+# a bracket replay to answer: its result is funding received minus four taker
+# fees, the two books walked at open and close, and borrow on the short spot
+# leg — none of which a 1m-bar bracket models. Until 2026-10-09
+# `_load_candidates` read only long/short, so a carry could never reach
+# `confirmed`: `paper_trade._promotion_confirmed` was always False for it, the
+# book-priced carry stayed at its $500/leg ceiling and Kelly never applied.
+#
+# Evidence for a carry is therefore REALISED, never simulated: the net bps of
+# each closed paper episode (pnl_usd is already net of funding, fees, book
+# cost and borrow; shadow_tracker.decompose splits it), tested against zero
+# with a day-clustered t — carries opened the same day share one funding
+# regime and are not independent bets — and pushed through the same BHY,
+# deflated Sharpe and pre-registered n as every directional row.
+
+# Carry episodes are sparse (neg_funding_carry ~50 a week) and the
+# pre-registered floor is 200, so a 14-day window could never reach it.
+CARRY_DAYS = float(os.environ.get("MATRIX_EDGE_CARRY_DAYS", "90"))
+# Day clusters required before a carry's t is read at all: with few clusters
+# the cluster-robust SE is itself noise and the normal approximation flatters.
+CARRY_MIN_DAYS = int(os.environ.get("MATRIX_EDGE_CARRY_MIN_DAYS", "20"))
+
+_CARRY_FILLS_SQL = (
+    "SELECT p.strategy_id, p.asset_class, p.symbol, p.side, p.generated_at, p.horizon_seconds, "
+    "       pp.notional_usd, pp.opened_at, pp.closed_at, pp.pnl_usd, "
+    "       p.context->>'borrow_rate_hourly' AS borrow_rate_hourly, "
+    "       p.context->>'borrow_charged_usd' AS borrow_charged_usd, "
+    "       p.context->'book_close'->>'total_bps' AS book_close_bps "
+    "FROM paper_positions pp JOIN predictions p ON p.id = pp.prediction_id "
+    "WHERE p.side = ANY(:carry) "
+    "  AND p.generated_at >= now() - make_interval(secs => :secs) "
+    "  AND coalesce(p.context->>'is_exploration','false') = 'false' "
+)
+
+
+async def _load_carry_fills(days: float, strategy_id: str | None) -> list[dict]:
+    """Every carry paper position (open or closed) in the window, with what
+    `shadow_tracker.decompose` needs. Shadow-wallet fills are included: a
+    carry's paper book IS its evidence (neg_funding_carry trades only in the
+    shadow wallet), unlike a directional signal, which is replayed whether or
+    not it was filled. Episodes before a strategy's registered shadow band
+    `since` (its current accounting) are dropped."""
+    sql = _CARRY_FILLS_SQL + ("  AND p.strategy_id = :sid " if strategy_id else "") + "ORDER BY p.generated_at"
+    params: dict[str, Any] = {"carry": sorted(CARRY_SIDES), "secs": days * 86400}
+    if strategy_id:
+        params["sid"] = strategy_id
+    async with shared_session_scope() as s:
+        rows = [dict(r) for r in (await s.execute(text(sql), params)).mappings().all()]
+    if not rows:
+        return rows
+    try:
+        from matrix_shared.shadow_tracker import load_bands
+
+        bands = await load_bands()
+    except Exception as e:  # noqa: BLE001 — a missing band only widens the window
+        logger.debug(f"carry evidence: shadow bands unavailable ({e})")
+        bands = {}
+    since: dict[tuple[str, str], datetime] = {}
+    for key, band in bands.items():
+        if band.get("since"):
+            ts = datetime.fromisoformat(band["since"])
+            since[key] = ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+    return [
+        r for r in rows
+        if (k := (r["strategy_id"], r["asset_class"])) not in since or r["generated_at"] >= since[k]
+    ]
+
+
+def carry_edge_rows(fills: list[dict]) -> tuple[list[dict], dict[tuple[str, str], list[float]]]:
+    """One evidence row per carry (strategy, market) from its CLOSED paper
+    episodes, shaped like a directional row so `verdict`, the promotion bar
+    and every reader treat it alike. Returns (rows, per-episode net bps by key).
+
+    The null is zero: a carry is paid its realised net, not its lead over a
+    control, so `edge_bps` = `gross_bps` = mean net per episode and
+    `net_of_costs` tells `verdict` not to charge the round trip again. Open
+    episodes are not evidence yet (`n_open`). The t is clustered by the UTC day
+    the episode opened (`t_day`); with fewer than CARRY_MIN_DAYS clusters `t`
+    is 0 and p is 1.
+    """
+    from matrix_shared.shadow_tracker import clustered_t, decompose
+
+    by_key: dict[tuple[str, str], list[dict]] = {}
+    for r in fills:
+        by_key.setdefault((r["strategy_id"], r["asset_class"]), []).append(r)
+    rows: list[dict] = []
+    returns: dict[tuple[str, str], list[float]] = {}
+    for (sid, ac), rs in by_key.items():
+        eps = decompose(rs, components=())
+        closed = [e for e in eps if e.closed and e.notional_usd]
+        net = [float(e.net_bps) for e in closed]
+        days = [e.opened_at.date().isoformat() for e in closed]
+        n = len(net)
+        mean = sum(net) / n if n else 0.0
+        sd = math.sqrt(sum((x - mean) ** 2 for x in net) / (n - 1)) if n > 1 else 0.0
+        n_days = len(set(days))
+        t_day = (clustered_t(net, days) or 0.0) if n > 1 else 0.0
+        # Too few day clusters: no test in either direction — neither `pays`
+        # nor `harmful` may be read off a handful of funding regimes.
+        thick = n_days >= CARRY_MIN_DAYS
+        t = t_day if thick else 0.0
+        p = two_sided_p(t) if thick else 1.0
+
+        def _m(xs: list[float | None]) -> float | None:
+            v = [x for x in xs if x is not None]
+            return round(sum(v) / len(v), 2) if v else None
+
+        rows.append({
+            "strategy": sid,
+            "market": ac,
+            "kind": "carry",
+            "net_of_costs": True,
+            "n": n,
+            "n_raw": len(rs),
+            "n_open": len(eps) - len(closed),
+            "n_unscorable": 0,
+            "n_days": n_days,
+            "unit": SAMPLE_UNIT,
+            "n_filled": n,
+            "gross_bps": round(mean, 2),
+            "control_bps": 0.0,
+            "edge_bps": round(mean, 2),
+            "t": round(t, 2),
+            "t_day": round(t_day, 2),
+            "side_edge_bps": 0.0,
+            "t_side": 0.0,
+            "p": round(p, 5),
+            "significant": p < 0.05 and n >= MIN_TRADES,
+            "control_side_bps": 0.0,
+            "realised_net_bps": round(mean, 2),
+            "sim_tp_rate": None,
+            "sd_bps": round(sd, 2),
+            "funding_bps": _m([e.bps(e.funding_usd) for e in closed]),
+            "borrow_bps": _m([e.bps(e.borrow_usd) for e in closed]),
+            "book_bps": _m([e.bps(e.book_usd) for e in closed]),
+        })
+        returns[(sid, ac)] = net
+    return rows, returns
+
+
+def apply_promotion_bar(
+    rows: list[dict], returns: dict[tuple[str, str], list[float]], *, family: int, registry: Registry,
+) -> bool:
+    """Family-wide multiple-testing correction, deflated Sharpe, pre-registered
+    n and `status`, in place, for directional and carry rows alike. Returns
+    whether the registry changed (the caller saves it)."""
+    testable = [r for r in rows if r["n"] >= MIN_TRADES]
+    m = max(len(rows), family or 0, 1)
+    # Hypotheses outside this run enter as p=1: the conservative stand-in for
+    # tests we did not see, which puts every row we did see at the top ranks.
+    pad = [1.0] * max(0, (family or 0) - len(testable))
+    # Benjamini-Yekutieli, not Benjamini-Hochberg: every strategy here is scored
+    # on the same bars, symbols and overlapping windows, so BH's independence
+    # assumption is violated and its FDR guarantee does not hold. BHY is valid
+    # under arbitrary dependence at a cost of H(m) ~ 3.2x at m=13. BH is kept
+    # alongside so the two can be compared rather than argued about.
+    keep_bh = benjamini_hochberg([r["p"] for r in testable] + pad)
+    keep = benjamini_yekutieli([r["p"] for r in testable] + pad)
+    keep_side = benjamini_yekutieli([two_sided_p(r["t_side"]) for r in testable] + pad)
+    for r, k, ks, kbh in zip(testable, keep, keep_side, keep_bh):
+        r["significant"] = bool(k)
+        r["significant_bh"] = bool(kbh)
+        r["significant_side"] = bool(ks)
+        # The bar for keeping a strategy: beat at least one null convincingly.
+        r["has_edge"] = bool((k and r["edge_bps"] > 0) or (ks and r["side_edge_bps"] > 0))
+    for r in rows:
+        r["family"] = m
+        if r["n"] < MIN_TRADES:
+            r["significant"] = r["significant_side"] = r["has_edge"] = False
+            r["significant_bh"] = False
+
+    # Deflate each Sharpe for the fact that we looked at every strategy, then
+    # pre-register the sample size the survivors owe us.
+    # Targets registered on rows-as-samples are void, not binding: the rule
+    # was fine, the unit it was fed was wrong (momentum_xs's 936 came from a
+    # burst of re-emissions). Mark them so `get` ignores them and a strategy
+    # that still looks good on episodes registers afresh below.
+    changed = registry.retire_stale() > 0
+    for r in rows:
+        arm = returns.get((r["strategy"], r["market"]), [])
+        d = deflated_sharpe(arm, n_trials=m)
+        r["dsr"] = round(d["dsr"], 4) if d else None
+        r["sharpe"] = round(d["sharpe"], 4) if d else None
+        if r.get("has_edge") and r.get("sd_bps"):
+            edge = max(float(r["edge_bps"]), float(r.get("side_edge_bps") or 0.0))
+            if registry.register(r["strategy"], r["market"], edge_bps=edge, sd_bps=float(r["sd_bps"])):
+                changed = True
+        reg = registry.get(r["strategy"], r["market"])
+        r["required_n"] = int(reg["required_n"]) if reg else None
+        r["status"] = promotion_status(
+            r, registry=registry, n_trials=m, significant=bool(r.get("has_edge")),
+        )
+    return changed
 
 
 async def run_edge_study(
@@ -471,7 +725,8 @@ async def run_edge_study(
     """
     rng = random.Random(seed)
     rows_in = await _load_candidates(days, strategy_id)
-    if not rows_in:
+    carry_in = await _load_carry_fills(CARRY_DAYS, strategy_id)
+    if not rows_in and not carry_in:
         logger.warning("edge study: no predictions in window")
         return []
     if family is None:
@@ -522,6 +777,8 @@ async def run_edge_study(
         for _ in range(draws):
             if upper <= 1:
                 break
+            # Same entry rule as the treatment: open of the drawn bar, scored
+            # from that bar on.
             c = simulate_bracket(
                 series, rng.randint(0, upper), side=t["side"], tp_pct=tp, sl_pct=sl, horizon_bars=horizon_bars
             )
@@ -536,7 +793,7 @@ async def run_edge_study(
             if cs.reason != "no_data":
                 e.control_side.append(cs.ret_bps)
 
-    _treatment_returns = {
+    returns = {
         (e.strategy_id, e.asset_class): list(e.treatment) for e in acc.values()
     }
     rows = []
@@ -546,61 +803,27 @@ async def run_edge_study(
             e.realised_net_bps /= e.n_filled
         if e.n:
             e.tp_rate /= e.n
-        rows.append(e.as_row())
-    # Multiple-testing correction across every strategy tested in this run.
-    testable = [r for r in rows if r["n"] >= MIN_TRADES]
-    m = max(len(rows), family or 0, 1)
-    # Hypotheses outside this run enter as p=1: the conservative stand-in for
-    # tests we did not see, which puts every row we did see at the top ranks.
-    pad = [1.0] * max(0, (family or 0) - len(testable))
-    # Benjamini-Yekutieli, not Benjamini-Hochberg: every strategy here is scored
-    # on the same bars, symbols and overlapping windows, so BH's independence
-    # assumption is violated and its FDR guarantee does not hold. BHY is valid
-    # under arbitrary dependence at a cost of H(m) ~ 3.2x at m=13. BH is kept
-    # alongside so the two can be compared rather than argued about.
-    keep_bh = benjamini_hochberg([r["p"] for r in testable] + pad)
-    keep = benjamini_yekutieli([r["p"] for r in testable] + pad)
-    keep_side = benjamini_yekutieli([two_sided_p(r["t_side"]) for r in testable] + pad)
-    for r, k, ks, kbh in zip(testable, keep, keep_side, keep_bh):
-        r["significant"] = bool(k)
-        r["significant_bh"] = bool(kbh)
-        r["significant_side"] = bool(ks)
-        # The bar for keeping a strategy: beat at least one null convincingly.
-        r["has_edge"] = bool((k and r["edge_bps"] > 0) or (ks and r["side_edge_bps"] > 0))
-    for r in rows:
-        r["family"] = m
-        if r["n"] < MIN_TRADES:
-            r["significant"] = r["significant_side"] = r["has_edge"] = False
-            r["significant_bh"] = False
+        rows.append({**e.as_row(), "kind": "directional"})
 
-    # Deflate each Sharpe for the fact that we looked at every strategy, then
-    # pre-register the sample size the survivors owe us. Advisory: a failure
-    # here must never stop the study from returning its rows.
+    # Carries: realised episodes, never simulated. A pair with directional
+    # signals keeps its directional row (one status per strategy and market).
+    c_rows, c_returns = carry_edge_rows(carry_in)
+    directional = {(r["strategy"], r["market"]) for r in rows}
+    for r in c_rows:
+        k = (r["strategy"], r["market"])
+        if k in directional:
+            logger.warning(f"edge study: {k[0]}/{k[1]} emits directional and carry sides; "
+                           "carry evidence not scored for it")
+            continue
+        rows.append(r)
+        returns[k] = c_returns[k]
+
+    # Multiple-testing correction across every strategy tested in this run,
+    # deflated Sharpe and the pre-registered n. Advisory: a failure here must
+    # never stop the study from returning its rows.
     try:
         registry = Registry.load()
-        # Targets registered on rows-as-samples are void, not binding: the
-        # rule was fine, the unit it was fed was wrong (momentum_xs's 936 came
-        # from a burst of re-emissions). Mark them so `get` ignores them and a
-        # strategy that still looks good on episodes registers afresh below.
-        changed = registry.retire_stale() > 0
-        for r in rows:
-            arm = _treatment_returns.get((r["strategy"], r["market"]), [])
-            d = deflated_sharpe(arm, n_trials=m)
-            r["dsr"] = round(d["dsr"], 4) if d else None
-            r["sharpe"] = round(d["sharpe"], 4) if d else None
-            if r.get("has_edge") and r.get("sd_bps"):
-                edge = max(float(r["edge_bps"]), float(r.get("side_edge_bps") or 0.0))
-                if registry.register(
-                    r["strategy"], r["market"], edge_bps=edge, sd_bps=float(r["sd_bps"])
-                ):
-                    changed = True
-            reg = registry.get(r["strategy"], r["market"])
-            r["required_n"] = int(reg["required_n"]) if reg else None
-            r["status"] = promotion_status(
-                r, registry=registry, n_trials=m,
-                significant=bool(r.get("has_edge")),
-            )
-        if changed:
+        if apply_promotion_bar(rows, returns, family=family or 0, registry=registry):
             registry.save()
     except Exception as e:  # noqa: BLE001 — the promotion bar is advisory
         logger.warning(f"promotion bar unavailable ({e}); rows returned without it")
@@ -757,6 +980,10 @@ def verdict(row: dict | None, *, cost_bps: float, min_t: float = 2.0) -> str:
     """
     if not row or row["n"] < MIN_TRADES:
         return "unproven"
+    # A carry row is realised net of fees, book and borrow already
+    # (`carry_edge_rows`); charging the round trip again would count it twice.
+    if row.get("net_of_costs"):
+        cost_bps = 0.0
     t_time, t_side = row["t"], row.get("t_side", 0.0)
     e_time, e_side = row["edge_bps"], row.get("side_edge_bps", 0.0)
     beats_a_null = (t_time >= min_t and e_time >= cost_bps) or (

@@ -26,7 +26,7 @@ def test_buy_limit_does_not_fill_in_a_market_that_only_runs_up():
     bars = _bars([(100, 100, 100), (102, 100.5, 101.5), (103, 101.6, 102.5)])
     e = post_only_entry(bars, 0, "long", wait_bars=1)
     assert not e.filled and not e.maker
-    assert e.idx == 1          # caller crosses here
+    assert e.idx == 2          # caller crosses at the open of the bar after the window
 
 
 def test_sell_limit_mirrors_the_buy_case():

@@ -40,6 +40,7 @@ from matrix_shared.edge_study import (
     _load_bars,
     _load_candidates,
     entry_index,
+    entry_price,
     sample_episodes,
     simulate_bracket,
     welch,
@@ -60,22 +61,26 @@ class Entry:
 
 
 def post_only_entry(bars: list[Bar], idx: int, side: str, wait_bars: int = WAIT_BARS) -> Entry:
-    """Rest a limit at `bars[idx].close` and wait `wait_bars` bars for a touch.
+    """Rest a limit at the first price observable after the signal (the open
+    of `bars[idx]`, `edge_study.entry_index`) and wait `wait_bars` bars after
+    the entry bar for a touch.
 
     A buy fills when the market trades down to the limit (bar low <= limit); a
-    sell when it trades up to it. Unfilled after the window, the caller either
-    crosses (taker at the then-current close) or skips.
+    sell when it trades up to it. The entry bar itself cannot fill it: its low
+    is at or below its open by construction and 1m bars cannot order a touch
+    against the order's arrival. Unfilled after the window, the caller either
+    crosses (taker at the open of the bar after the window) or skips.
     """
     if idx < 0 or idx >= len(bars) - 1:
         return Entry(False, idx, False)
-    limit = bars[idx].close
+    limit = entry_price(bars[idx])
     long = side != "short"
     last = min(idx + wait_bars, len(bars) - 1)
     for i in range(idx + 1, last + 1):
         touched = bars[i].low <= limit if long else bars[i].high >= limit
         if touched:
             return Entry(True, i, True)
-    return Entry(False, last, False)
+    return Entry(False, last + 1, False)
 
 
 @dataclass
@@ -131,8 +136,7 @@ async def run_execution_study(
         series = bars.get((t["asset_class"], t["symbol"]))
         if not series:
             continue
-        # The limit rests at the last price the strategy had seen, not at the
-        # close of a bar that was still forming when it decided.
+        # The limit rests at the first price observable after the signal.
         idx = entry_index(series, t["generated_at"])
         if idx <= 0 or idx >= len(series) - 2:
             continue
@@ -161,12 +165,12 @@ async def run_execution_study(
             # shorter by the bars spent waiting.
             left = max(1, horizon_bars - (e.idx - idx))
             r = simulate_bracket(series, e.idx, side=t["side"], tp_pct=tp, sl_pct=sl,
-                                 horizon_bars=left)
+                                 horizon_bars=left, entry_px=entry_price(series[idx]))
             net = r.ret_bps - maker_round if r.reason != "no_data" else 0.0
             row.maker_net.append(net)
             row.passive_only_net.append(net)
         else:
-            # crossed after the wait: taker cost, entry at the later close
+            # crossed after the wait: taker cost, entry at the next bar's open
             left = max(1, horizon_bars - (e.idx - idx))
             r = simulate_bracket(series, e.idx, side=t["side"], tp_pct=tp, sl_pct=sl,
                                  horizon_bars=left)

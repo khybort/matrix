@@ -12,16 +12,19 @@ from matrix_shared.edge_study import Bar, _index_at, simulate_bracket, welch
 T0 = datetime(2026, 9, 19, tzinfo=UTC)
 
 
-def _bars(closes, *, highs=None, lows=None) -> list[Bar]:
+def _bars(closes, *, highs=None, lows=None, opens=None) -> list[Bar]:
     highs = highs or closes
     lows = lows or closes
-    return [Bar(T0 + timedelta(minutes=i), h, l, c) for i, (c, h, l) in enumerate(zip(closes, highs, lows))]
+    opens = opens or closes
+    return [Bar(T0 + timedelta(minutes=i), h, l, c, o)
+            for i, (c, h, l, o) in enumerate(zip(closes, highs, lows, opens))]
 
 
 def test_take_profit_hit_returns_the_tp_distance():
-    bars = _bars([100, 100, 100], highs=[100, 101.5, 100], lows=[100, 100, 100])
+    # entry at bar 0's open (100); bar 0 itself is part of the scored path
+    bars = _bars([100, 100, 100], highs=[100.5, 101.5, 100], lows=[100, 100, 100])
     r = simulate_bracket(bars, 0, side="long", tp_pct=0.01, sl_pct=0.005, horizon_bars=2)
-    assert r.reason == "hit_tp" and r.ret_bps == 100.0 and r.bars_held == 1
+    assert r.reason == "hit_tp" and r.ret_bps == 100.0 and r.bars_held == 2
 
 
 def test_stop_loss_hit_returns_the_negative_sl_distance():
@@ -30,31 +33,44 @@ def test_stop_loss_hit_returns_the_negative_sl_distance():
     assert r.reason == "hit_sl" and r.ret_bps == -50.0
 
 
+def test_the_entry_bar_after_its_open_is_scored():
+    bars = _bars([100, 100], highs=[101.5, 100], lows=[100, 100])
+    r = simulate_bracket(bars, 0, side="long", tp_pct=0.01, sl_pct=0.005, horizon_bars=1)
+    assert r.reason == "hit_tp" and r.bars_held == 1
+
+
 def test_take_profit_wins_ties_inside_one_bar_like_the_engine():
-    bars = _bars([100, 100], highs=[100, 101.5], lows=[100, 99.0])
+    bars = _bars([100, 100], highs=[101.5, 100], lows=[99.0, 100])
     assert simulate_bracket(bars, 0, side="long", tp_pct=0.01, sl_pct=0.005, horizon_bars=1).reason == "hit_tp"
 
 
-def test_horizon_exit_uses_the_last_close_and_signs_by_side():
-    bars = _bars([100, 100.2, 100.3])
+def test_horizon_exit_enters_at_the_open_exits_at_the_last_close_and_signs_by_side():
+    bars = _bars([100.2, 100.3, 101], opens=[100, 100.2, 100.3])
     long = simulate_bracket(bars, 0, side="long", tp_pct=0.05, sl_pct=0.05, horizon_bars=2)
     short = simulate_bracket(bars, 0, side="short", tp_pct=0.05, sl_pct=0.05, horizon_bars=2)
-    assert long.reason == "hit_horizon" and round(long.ret_bps, 1) == 30.0
+    assert long.reason == "hit_horizon" and round(long.ret_bps, 1) == 30.0 and long.bars_held == 2
     assert round(short.ret_bps, 1) == -30.0
 
 
 def test_short_brackets_invert():
-    bars = _bars([100, 100], highs=[100, 100], lows=[100, 98.9])
+    bars = _bars([100, 100], highs=[100, 100], lows=[98.9, 100])
     assert simulate_bracket(bars, 0, side="short", tp_pct=0.01, sl_pct=0.005, horizon_bars=1).reason == "hit_tp"
-    bars2 = _bars([100, 100], highs=[100, 100.6], lows=[100, 100])
+    bars2 = _bars([100, 100], highs=[100.6, 100], lows=[100, 100])
     assert simulate_bracket(bars2, 0, side="short", tp_pct=0.01, sl_pct=0.005, horizon_bars=1).reason == "hit_sl"
 
 
 def test_missing_or_edge_data_is_reported_not_guessed():
     bars = _bars([100, 101])
     assert simulate_bracket(bars, 5, side="long", tp_pct=0.01, sl_pct=0.01, horizon_bars=2).reason == "no_data"
-    assert simulate_bracket(bars, 1, side="long", tp_pct=0.01, sl_pct=0.01, horizon_bars=2).reason == "no_data"
+    assert simulate_bracket(bars, -1, side="long", tp_pct=0.01, sl_pct=0.01, horizon_bars=2).reason == "no_data"
+    assert simulate_bracket(bars, 0, side="long", tp_pct=0.01, sl_pct=0.01, horizon_bars=0).reason == "no_data"
     assert simulate_bracket([], 0, side="long", tp_pct=0.01, sl_pct=0.01, horizon_bars=2).reason == "no_data"
+
+
+def test_entry_px_overrides_the_open():
+    bars = _bars([100, 100], highs=[100, 100.6], lows=[99, 100], opens=[100, 100])
+    r = simulate_bracket(bars, 0, side="long", tp_pct=0.01, sl_pct=0.05, horizon_bars=2, entry_px=99.6)
+    assert r.reason == "hit_tp"
 
 
 def test_index_at_finds_the_bar_in_force():
@@ -189,15 +205,39 @@ def test_re_emissions_of_one_bet_collapse_into_one_episode():
     assert len(one_per_episode(mixed)) == 4
 
 
-def test_entry_bar_is_the_last_one_closed_before_the_signal():
-    """Bar ts is the bar's start; the bar in force at signal time closes in the
-    future, so its close is a price the strategy could not have traded at."""
+def test_entry_is_the_first_bar_starting_after_the_signal_plus_latency():
+    """Bar ts is the bar's start. No part of the scored path may precede the
+    signal: the bar in force at generated_at began before it, so the trade
+    enters at the open of the NEXT bar (or later, by the engine's latency)."""
+    from matrix_shared.edge_study import ENTRY_LATENCY, entry_index
+
+    assert ENTRY_LATENCY == timedelta(seconds=4)
+    bars = _bars([1, 2, 3, 4, 5])
+    assert entry_index(bars, T0 + timedelta(minutes=2, seconds=30)) == 3
+    assert entry_index(bars, T0 + timedelta(minutes=2)) == 3                 # 2:04 > bar 2's start
+    assert entry_index(bars, T0 + timedelta(minutes=1, seconds=56)) == 2     # exactly 2:00
+    assert entry_index(bars, T0 + timedelta(minutes=1, seconds=57)) == 3
+    assert entry_index(bars, T0 - timedelta(seconds=30)) == 0
+    assert entry_index(bars, T0 + timedelta(minutes=4, seconds=1)) == -1     # no later bar
+
+
+def test_the_move_that_fired_the_signal_is_not_credited():
+    """A breakout fires at 10:00:40 on a jump at 10:00:20. The old rule entered
+    at the close of the 09:59 bar and scored from the 10:00 bar, so the jump
+    itself paid the take-profit. Entering at the 10:01 open, it does not."""
     from matrix_shared.edge_study import entry_index
 
-    bars = _bars([1, 2, 3, 4])
-    assert entry_index(bars, T0 + timedelta(minutes=2, seconds=30)) == 1   # bar 1 closed at 2:00
-    assert entry_index(bars, T0 + timedelta(minutes=2)) == 1
-    assert entry_index(bars, T0 + timedelta(seconds=30)) == -1             # nothing closed yet
+    closes = [100, 100, 102, 102, 102]
+    bars = _bars(closes, highs=[100, 100, 102.2, 102.1, 102.1], lows=[100, 100, 100, 101.9, 101.9],
+                 opens=[100, 100, 100, 102, 102])
+    signal = T0 + timedelta(minutes=2, seconds=40)
+    i = entry_index(bars, signal)
+    assert i == 3 and bars[i].ts >= signal
+    r = simulate_bracket(bars, i, side="long", tp_pct=0.01, sl_pct=0.01, horizon_bars=2)
+    assert r.reason == "hit_horizon" and abs(r.ret_bps) < 1e-9
+    # the pre-fix rule, for the record: entry at bar 1's close, scored from bar 2
+    old_entry = bars[1].close
+    assert (bars[2].high - old_entry) / old_entry >= 0.01
 
 
 def test_beating_a_losing_null_is_not_paying():
@@ -251,7 +291,11 @@ async def test_a_single_strategy_run_is_corrected_for_the_whole_family(monkeypat
     async def load_bars(syms, ac, since):
         return {"X": bars}
 
+    async def no_carries(days, sid):
+        return []
+
     monkeypatch.setattr(E, "_load_candidates", cands)
+    monkeypatch.setattr(E, "_load_carry_fills", no_carries)
     monkeypatch.setattr(E, "_load_bars", load_bars)
     monkeypatch.setattr(E.Registry, "save", lambda self, path=None: None)
     alone = (await E.run_edge_study(days=1, strategy_id="momentum_xs", family=1))[0]
@@ -263,14 +307,16 @@ async def test_a_single_strategy_run_is_corrected_for_the_whole_family(monkeypat
 
 
 def test_a_stale_entry_bar_is_unscorable_not_entered_hours_early():
-    """A hole in the series must not let the entry land before it: bars stop at
-    minute 3 and resume at minute 300, a signal at 300:30 has no fresh close."""
+    """A hole after the signal must not let the entry land hours later: bars
+    stop at minute 3 and resume at minute 300, so a signal at 2:30 has no
+    tradeable price within MAX_ENTRY_AGE."""
     from matrix_shared.edge_study import entry_index
 
     bars = [Bar(T0 + timedelta(minutes=m), 100, 100, 100) for m in (0, 1, 2, 300, 301, 302)]
-    assert entry_index(bars, T0 + timedelta(minutes=300, seconds=30)) == -1   # last close 4h old
-    assert entry_index(bars, T0 + timedelta(minutes=302, seconds=30)) == 4    # 301 closed at 302:00
-    assert entry_index(bars, T0 + timedelta(minutes=2, seconds=30)) == 1
+    assert entry_index(bars, T0 + timedelta(minutes=2, seconds=30)) == -1    # next bar 4h later
+    assert entry_index(bars, T0 + timedelta(minutes=299, seconds=30)) == 3
+    assert entry_index(bars, T0 + timedelta(minutes=300, seconds=30)) == 4
+    assert entry_index(bars, T0 + timedelta(minutes=0, seconds=30)) == 1
 
 
 def test_a_window_with_a_hole_is_not_simulated_across_it():

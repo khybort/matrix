@@ -33,6 +33,7 @@ from matrix_shared.edge_study import (
     _load_candidates,
     contiguous,
     entry_index,
+    entry_price,
     sample_episodes,
     simulate_bracket,
 )
@@ -134,7 +135,9 @@ async def run_barrier_study(
         idx = entry_index(series, t["generated_at"])
         if idx <= 0 or idx >= len(series) - 1:
             continue
-        sigma_h = horizon_vol(realised_vol(series, idx), horizon_bars)
+        # Volatility the strategy could know: bars that closed before the
+        # entry bar (`entry_index` is the first bar after the signal).
+        sigma_h = horizon_vol(realised_vol(series, idx - 1), horizon_bars)
         if sigma_h <= 0:
             continue
         tp = float(t["tp_pct"]) if t["tp_pct"] is not None else 0.01
@@ -198,11 +201,16 @@ DRIFT_DRAWS = int(os.environ.get("MATRIX_HORIZON_DRIFT_DRAWS", "40"))
 
 
 def signed_return_bps(bars: list[Bar], idx: int, side: str, horizon_bars: int) -> float | None:
-    """Plain signed return over the horizon, no barriers: the alpha itself."""
-    j = idx + horizon_bars
-    if idx < 0 or j >= len(bars) or bars[idx].close <= 0 or not contiguous(bars, idx, j):
+    """Plain signed return over the horizon, no barriers: the alpha itself.
+    Same entry rule as `simulate_bracket`: in at the open of `bars[idx]`, out
+    at the close `horizon_bars` bars later (the entry bar counts)."""
+    j = idx + horizon_bars - 1
+    if idx < 0 or horizon_bars <= 0 or j >= len(bars) or not contiguous(bars, idx, j):
         return None
-    raw = (bars[j].close - bars[idx].close) / bars[idx].close
+    entry = entry_price(bars[idx])
+    if entry <= 0:
+        return None
+    raw = (bars[j].close - entry) / entry
     return (raw if side != "short" else -raw) * _BPS
 
 
