@@ -39,15 +39,17 @@ from matrix_shared.agent_runtime.tool import ToolRegistry
 API_URL = os.environ.get("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions")
 MODELS_URL = os.environ.get("OPENROUTER_MODELS_URL", "https://openrouter.ai/api/v1/models")
 
+# `or`, not a get() default: compose passes these as `${VAR:-}`, i.e. set but
+# empty, which made every model id "" and the fallback list empty.
 OPENROUTER_IDS = {
-    "haiku": os.environ.get("MATRIX_OPENROUTER_MODEL_HAIKU", "google/gemini-2.0-flash-exp:free"),
-    "sonnet": os.environ.get("MATRIX_OPENROUTER_MODEL_SONNET", "deepseek/deepseek-chat-v3-0324:free"),
-    "opus": os.environ.get("MATRIX_OPENROUTER_MODEL_OPUS", "qwen/qwen3-235b-a22b:free"),
+    "haiku": os.environ.get("MATRIX_OPENROUTER_MODEL_HAIKU") or "google/gemini-2.0-flash-exp:free",
+    "sonnet": os.environ.get("MATRIX_OPENROUTER_MODEL_SONNET") or "deepseek/deepseek-chat-v3-0324:free",
+    "opus": os.environ.get("MATRIX_OPENROUTER_MODEL_OPUS") or "qwen/qwen3-235b-a22b:free",
 }
 FALLBACK_MODELS: tuple[str, ...] = tuple(
-    m.strip() for m in os.environ.get(
-        "MATRIX_OPENROUTER_FALLBACKS",
-        "meta-llama/llama-3.3-70b-instruct:free,mistralai/mistral-small-3.1-24b-instruct:free",
+    m.strip() for m in (
+        os.environ.get("MATRIX_OPENROUTER_FALLBACKS")
+        or "meta-llama/llama-3.3-70b-instruct:free,mistralai/mistral-small-3.1-24b-instruct:free"
     ).split(",") if m.strip()
 )
 _TIMEOUT_S = float(os.environ.get("MATRIX_OPENROUTER_TIMEOUT_S", "60"))
