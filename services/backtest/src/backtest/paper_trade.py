@@ -822,7 +822,8 @@ async def _kelly_fractions(
             continue
         if not row:
             continue
-        cost_bps = float(execution_cost_bps(asset_class) * 2)  # round trip
+        # A carry row is realised PnL, already net of fees, book cost and borrow.
+        cost_bps = 0.0 if row.get("net_of_costs") else float(execution_cost_bps(asset_class) * 2)
         if verdict(row, cost_bps=cost_bps) != "pays":
             continue
         # Size on whichever null the strategy actually beat: knowing *when* and
