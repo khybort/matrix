@@ -93,3 +93,9 @@ LOG
                   No scipy on the host: the Student-t tail is a numeric integral of the density (checked: t=2, df=30 -> 0.0273).
                   Feature pipeline debugged on the first ~50 days of trades only (no return touched). RR25 / TERM are missing on
                   ~20 % of early days (thin 4 h window), as the missing rule says.
+2026-10-09 17:30 UTC  Option-trade fetch done: 4 050 day-windows (BTC+ETH), 4.83 M trades, all with iv, 0 retries (5 workers by date
+                  span, ~0.3 s between calls each). features: RR25 present on 64 % (BTC) / 51 % (ETH) of days, TERM 81 % / 70 %,
+                  PC3, VRP, DVOLchg ~100 %.
+2026-10-09 17:36 UTC  TRAIN decision (research.py train). Measured round-trip spread at $5k: BTC 0.012 bps, ETH 0.040 bps.
+                  No cell has net > 0 with t_wk >= 2: closest A.hi.3 +185.4 bps, t_wk 1.72 (n 39, 29 weeks); P.7 +122.8, t 1.18.
+                  k = 0 train passers -> no holdout opens. Train rows written to docs/research/ledger.jsonl (r5.*).
