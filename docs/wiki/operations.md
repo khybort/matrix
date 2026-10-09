@@ -276,3 +276,38 @@ unclean shutdown, so `last_autovacuum` reads NULL — not evidence that it never
 ran. Recommendation: `REINDEX INDEX CONCURRENTLY` each of the four, smallest
 first (no write lock; needs a deliberate operator run — the session's
 permission policy refused it as a shared-resource change).
+
+## Tests
+
+One command runs every suite the way the dev_agent's acceptance depends on:
+
+```bash
+make test-all                                   # all Python suites + web typecheck
+make test-all SUITES="shared strategy"          # a subset (service dir names, `shared`, `web`)
+make test-all SUITES=strategy PYTEST_ARGS="-x -k carry"
+SKIP_WEB=1 scripts/test_all.sh                  # same script, no typecheck
+```
+
+`scripts/test_all.sh` runs each service's suite inside its own image with
+`docker compose run --no-deps --entrypoint uv … run --no-sync pytest`, bind-mounting
+the service's `src/`, `tests/`, `pyproject.toml` and the shared `src/`, so the
+working tree (pytest config included) is what runs, with the container's env.
+Ingestion's image has no dev group (`--with pytest --with pytest-asyncio`);
+`dev_agent` gets `DEV_AGENT_TEST_DSN` pointing at `postgres` (its conftest then
+redirects to the isolated `matrix_devagent_test` DB). The web check is
+`next typegen && tsc --noEmit` in the dev-stage web image — route-handler
+signature errors only exist in the generated `.next/types`. It ends with a
+per-suite PASS/FAIL/SKIP table; per-suite logs land in `$LOG_DIR` (temp dir
+by default).
+
+Live-data guards: the backtest suite shares postgres-shared with the paper
+engine, so the script stops the `backtest` container for that suite and
+restarts it from a trap (also on failure or Ctrl-C). The director, reflection,
+strategy, execution and labs suites run every async test inside
+`matrix_shared.testing.db_writes_rolled_back()` (outer transaction, always
+rolled back), because they call global passes on live tables.
+`test_auto_apply_safe` still needs `LABS_TEST_SHARED_DSN`; `bulletin` is
+skipped unless its phase6 image is built.
+
+State 2026-10-09: all 15 Python suites + web green (shared 264, reflection 91,
+strategy 110, dev_agent 95, notify 60, backtest 51, …), ~2 min end to end.

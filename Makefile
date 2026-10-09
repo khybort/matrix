@@ -530,6 +530,10 @@ brain-test: ## Run brain pure-logic test suite (host, no DB/SDK)
 shared-test: ## Run matrix-shared test suite (host)
 	cd packages/python-shared && uv run --no-sync pytest -v
 
+.PHONY: test-all
+test-all: ## Every Python suite in its docker image + web typecheck. Vars: SUITES="shared strategy" PYTEST_ARGS="-x"
+	@PYTEST_ARGS="$(PYTEST_ARGS)" scripts/test_all.sh $(SUITES)
+
 .PHONY: install-hooks
 install-hooks: ## Install git hooks (pre-push + commit message sanitizer)
 	cp infra/hooks/pre-push .git/hooks/pre-push

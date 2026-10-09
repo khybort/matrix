@@ -315,3 +315,42 @@
   çıktıyı commit'ten önce görmedim). `git reset --soft HEAD~1` ile geri alındı (index'leri stage'li kaldı), commit
   `git commit -m … -- <yollar>` ile yeniden yapıldı: `--only` semantiği yalnız verilen yolları commit'ler, başkasının
   stage'ine dokunmaz. Kural: çok ajanlı ağaçta commit her zaman `git commit -- <yollar>`; `git show --stat HEAD` ile hemen doğrula.
+
+- **2026-10-09 — Compose `${VAR:-}` değişkeni "tanımlı ama boş" geçirir; `os.environ.get(X, default)` default'u hiç kullanmaz.**
+  `test_single_shot_falls_back_on_unavailable_model` "gerçek OpenRouter 404'ü" sanılıyordu; oysa test zaten MockTransport
+  kullanıyordu. Konteynerde `MATRIX_OPENROUTER_MODEL_*` ve `MATRIX_OPENROUTER_FALLBACKS` boş string geldiği için bütün
+  model id'leri `""`, yedek listesi boştu: canlıda OpenRouter her çağrıyı model `""` ile yapıyordu. Düzeltme
+  `os.environ.get(X) or default`. Aynı sınıf hata `subscription_llm.MODEL_HAIKU/SONNET/OPUS`'ta da var (haiku'ya
+  sabitlenen çağrılar sessizce DEFAULT_MODEL'e düşüyor); test göstermediği için dokunulmadı, açık madde. Kural: compose'un
+  `${VAR:-}` ile geçirdiği her değişken için `get(X) or default` yaz; testteki "ağ hatası" mesajını görünce önce env'e bak.
+
+- **2026-10-09 — "Backend yok" testi, kimlik dosyası volume'dan geldiği için gerçek LLM çağrısı yapıyordu.**
+  `test_yields_nothing_when_no_*backend` env token'larını siliyordu ama `_subscription_ready()` `~/.claude/.credentials.json`'u
+  da sayıyor ve o dosya konteynere senkronlu volume'dan geliyor → test abonelik üzerinden canlı bir Haiku çağrısı yapıp
+  5 olay döndürdü. Kural: LLM'siz testte `CLAUDE_CONFIG_DIR=tmp_path`, `OPENROUTER_API_KEY` sil, cursor login'i yamala;
+  backend tespiti env + dosya + CLI üçlüsüdür. Benzer şekilde `test_bybit_connector` yalnız `BYBIT_API_KEY`'i boşaltıyordu,
+  `testnet=True` ise `BYBIT_TESTNET_*`'u okur → modül düzeyinde autouse fixture dört anahtarı da siler.
+
+- **2026-10-09 — Paylaşılan DB'ye bağlanan testler global geçişleri canlı tablolar üzerinde çalıştırıyordu.**
+  Denetimde: `score_strategy_slots()` testleri `MIN_N_FOR_SLOT_CHANGE=1` ile BÜTÜN canlı slot satırlarını yeniden puanlıyordu;
+  `revoke_breached_certificates(max_drawdown_pct=0.15)` her canlı sertifikayı operatörün 0.50 eşiği yerine 0.15'e göre
+  yargılıyordu; sweep testi tam bir reflection `_tick`'i (mutasyon taslakları, efficacy, slot) canlı veride koşuyordu;
+  director/reflection testleri canlı `dev_tasks`'a 'pending' görev yazıyordu (canlı worker alabilir). Çözüm:
+  `matrix_shared.testing.db_writes_rolled_back()` — tier başına tek bağlantı + dış transaction, modüllerdeki
+  `*_session_scope` referanslarını savepoint'li scope'la değiştirir, çıkışta rollback. director, reflection, strategy,
+  execution, labs conftest'lerinde her async test için autouse. Sweep `_tick`'ten `sweep_stale_proposals()` olarak ayrıldı.
+  Kural: canlı DB'ye dokunan bir teste ancak yazdıkları rollback'le geri alınıyorsa izin ver; "kendi UUID'imle temizlerim"
+  yetmez, çünkü test edilen fonksiyonun kendisi globalse (tarama/puanlama/iptal) senin satırlarınla sınırlı kalmaz.
+
+- **2026-10-09 — Önbellekli engine başka bir event loop'a bağlıysa advisory-lock testi sessizce yerel limitere düşüyor.**
+  `test_global_rate_slots` namespace yamasına rağmen kırmızıydı: `get_shared_engine()` önceki testin loop'unda kurulmuştu,
+  `_acquire_global_slot` "attached to a different loop" hatasını yutup yalnız yerel semafora düştü; iki limiter aynı anda
+  girdi. Ayrıca b, a'nın bağlantı kurma gecikmesi 0.2 s'yi aşınca slotu önce kapabiliyordu. Düzeltme: testin başında ve
+  sonunda `reset_engines()`, b'yi a'nın gerçekten içeride olduğunu bildiren bir `Event`'ten sonra başlat. Kural: "degrade
+  olur, devam eder" tasarımlı kodun testinde degrade yolunun sessizce test edilmediğinden emin ol.
+
+- **2026-10-09 — Tek komut: `make test-all` (`scripts/test_all.sh`).** Her suite kendi imajında, src/tests/pyproject mount'lu,
+  özet tablolu; backtest suite'i için canlı `backtest` konteyneri durdurulup trap ile her durumda yeniden başlatılır.
+  macOS bash 3.2'de `set -u` boş diziyi "unbound" sayar — script `-u` kullanmaz. Web typecheck'inde önce `next typegen`:
+  Next 15 route-handler imza hatası (`params` artık Promise) yalnız `.next/types`'ta görünür, temiz konteynerde `tsc` yeşil
+  der. BIST discover regex'i 3 karakterli kodu kabul ediyordu; gerçek BIST kodları 4–5 karakter (bist_symbols: 51×4, 607×5).

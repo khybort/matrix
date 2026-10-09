@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-10-09 — Testler tek komutla koşar; DB testleri canlı tabloya commit edemez
+- `make test-all` (`scripts/test_all.sh`): 16 Python suite'i kendi imajında + web typecheck, özet tablo; backtest suite'i için canlı `backtest` konteyneri durdurulur, trap ile her durumda başlatılır. Yeni `matrix_shared.testing.db_writes_rolled_back()`: director/reflection/strategy/execution/labs conftest'lerinde her async test dış transaction içinde koşar ve rollback'lenir (global slot puanlama / sertifika iptali / dev_tasks yazımı canlıya değmez). `openrouter_llm`: compose'un boş geçirdiği `MATRIX_OPENROUTER_MODEL_*`/`_FALLBACKS` artık default'a düşer (önceden model `""`). `reflection.main.sweep_stale_proposals()` `_tick`'ten ayrıldı (davranış aynı). Detay: `docs/wiki/operations.md` "Tests".
+
 ## 2026-10-09 — Kripto akış evreni = işlem evreni + carry watchlist (spot bacaklarıyla)
 - `ingestion-market` saatte bir (:40) `tradable_symbols` asset_class `crypto_carry`'ye ≤ 20 borçlanabilir negatif-fonlamalı perp yazar (min(son settle, tahmin) ≤ −0.05 %, histerezis, açık `inverse_carry` sabitlenir). Ingestion ve bars-aggregator `crypto_ingest_universe_async()` (işlem evreni ∪ watchlist) okur; stratejiler `crypto_universe_async()`'te kalır. Her coin'in spot bacağı Bybit spot / Binance spot'tan akar: ticker + book `exchange='bybit-spot'|'binance-spot'` (perp ile aynı sembol), 1m bar `market_bars` asset_class `crypto_spot`. Abonelikler canlı sokette değişir (yeniden bağlanma yok). `symbol_costs` artık yalnız `exchange='bybit'` kitaplarını ölçer; retention anahtarlarına `crypto_spot` bar sembolleri eklendi. Exchange filtresiz ticker/book okuyan yeni kod watchlist coin'lerinde spot satırı görebilir. Detay: `docs/wiki/operations.md` "Crypto universe".
 
