@@ -178,6 +178,18 @@ SCORE_CAP_PCT = Decimal("0.01")  # ±1% horizon caps the score at ±1
 ORPHAN_STALE_THRESHOLD_S = 86400  # 24h past close_by
 WALLET_SNAPSHOT_INTERVAL_S = float(os.environ.get("WALLET_SNAPSHOT_INTERVAL_S", "60"))
 
+# EV floor (Lever 1, 2026-09-15): don't open a position unless its risk-adjusted
+# expected value clears the market's round-trip cost. Before this the engine
+# ranked candidates by EV but still opened the least-bad *negative*-EV ones just
+# to fill open slots — manufacturing the hit_horizon fee-bleed (2985 crypto
+# trades @ -9.7 bps over 3d that went nowhere and only paid fees). With a floor
+# the book sits in cash when nothing clears costs, so realized PnL reflects real
+# edge instead of slot-filling noise. Value is the required EV as a MULTIPLE of
+# `round_trip_cost_pct`; 1.0 = must at least cover costs. This is a conservatism
+# gate (it only ever *blocks* a trade, never loosens a risk limit) so it is not
+# a forbidden auto-mutation under docs/TRADING.md.
+MIN_EV_OVER_COST = float(os.environ.get("MATRIX_MIN_EV_OVER_COST", "1.0"))
+
 
 async def _latest_funding_rate(symbol: str, exchange: str = "bybit") -> Decimal | None:
     """Latest funding rate for a crypto perp on `exchange` (default bybit).
@@ -724,8 +736,9 @@ _KELLY_LOGGED: dict[tuple[str, str], float] = {}
 
 async def _kelly_fractions(
     strategy_ids: set[str], *, asset_class: str, concurrency: int
-) -> dict[str, float]:
-    """Quarter-Kelly fraction of equity per strategy, keyed by strategy_id.
+) -> dict[str, dict[str, float]]:
+    """Per strategy: `kelly_f` (fraction of equity to size) and `edge_frac`
+    (the measured per-trade edge's 95% lower bound, as a fraction).
 
     Only strategies the controlled study calls `pays` get an entry; everything
     else is absent from the dict and keeps the existing sizing. Advisory by
@@ -734,7 +747,7 @@ async def _kelly_fractions(
     """
     from matrix_shared.edge_study import strategy_edge, verdict
 
-    out: dict[str, float] = {}
+    out: dict[str, dict[str, float]] = {}
     for sid in strategy_ids:
         try:
             row = await strategy_edge(sid, asset_class)
@@ -761,7 +774,14 @@ async def _kelly_fractions(
             concurrency=int(concurrency or 1),
         )
         if f:
-            out[sid] = f
+            # The same lower bound Kelly sized on, kept in fraction units for
+            # the EV floor: a measured edge is a better estimate of what a
+            # trade is worth than confidence x tp_pct ever was.
+            se = abs(float(edge_bps)) / float(t_stat) if t_stat else 0.0
+            out[sid] = {
+                "kelly_f": f,
+                "edge_frac": max(0.0, float(edge_bps) - 1.96 * se) / 10_000.0,
+            }
             key = (sid, asset_class)
             if abs(_KELLY_LOGGED.get(key, -1.0) - f) > 1e-4:
                 _KELLY_LOGGED[key] = f
@@ -1052,10 +1072,35 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
     # Track newly opened counts per strategy/symbol to enforce soft caps.
     newly_opened: dict[str, int] = {}
     opened = 0
+    ev_floored = 0
 
     for p in candidates:
         if opened >= wallet_slots_left:
             break
+
+        # EV floor: skip any candidate whose risk-adjusted EV doesn't clear the
+        # market's round-trip cost. Candidates are pre-sorted by EV desc and the
+        # crypto/us/bist cost is symbol-independent, so this is effectively a
+        # break — but we `continue` to stay correct if a future fee model makes
+        # cost symbol-specific or the sort key diverges from `_ev`.
+        # A carry pays fees on two legs, so it must clear 2× cost.
+        leg_mult = 2 if _is_carry(p.side) else 1
+        floor = float(round_trip_cost_pct(p.asset_class, p.symbol)) * leg_mult * MIN_EV_OVER_COST
+        # `_ev` is the *model's* opinion: confidence x tp_pct − (1−confidence) x
+        # sl_pct. For a strategy the controlled study has measured, we have a
+        # better number — what its signals actually returned against both nulls
+        # — and where the two disagree the measurement wins. Without this the
+        # floor rejected 174 of 178 candidates an hour (2026-09-20) including
+        # every momentum_xs signal, whose measured edge is +21 bps at the 95%
+        # lower bound against a ~12 bps round trip. The floor still blocks
+        # anything unmeasured, and a carry still has to clear both legs.
+        ev_used = _ev(p)
+        measured = (kelly_f.get(p.strategy_id) or {}).get("edge_frac")
+        if measured and leg_mult == 1:
+            ev_used = max(ev_used, measured)
+        if ev_used < floor:
+            ev_floored += 1
+            continue
 
         if _is_carry(p.side) and p.symbol in carry_occupied:
             logger.debug(
@@ -1122,7 +1167,7 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
         kn = kelly_notional(
             equity=equity,
             max_notional=max_notional,
-            kelly_f=kelly_f.get(p.strategy_id),
+            kelly_f=(kelly_f.get(p.strategy_id) or {}).get("kelly_f"),
         )
         if kn:
             logger.debug(
@@ -1185,6 +1230,12 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             )
         except Exception as e:  # noqa: BLE001 — shadow must not break paper
             logger.warning(f"shadow open error pred={p.id}: {e}")
+    if ev_floored:
+        logger.info(
+            f"ev_floor[{asset_class}{'/shadow' if shadow else ''}]: "
+            f"skipped {ev_floored} candidate(s) below {MIN_EV_OVER_COST:.2f}x round-trip cost; "
+            f"opened {opened}"
+        )
     return opened
 
 
