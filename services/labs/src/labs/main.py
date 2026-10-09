@@ -27,7 +27,7 @@ from loguru import logger
 from sqlalchemy import desc, select
 
 from matrix_shared import shared_session_scope
-from matrix_shared.markets.crypto import crypto_universe
+from matrix_shared.markets.crypto import crypto_universe_async
 from matrix_shared.models import LabEvaluation, LabExperiment
 
 from labs.evaluate import emit_signals, episode_counts, refresh_fitness, score_due_evaluations
@@ -111,11 +111,12 @@ async def run(
     auto_apply_safe: bool = False,
     auto_apply_min_fitness: Decimal = Decimal("0.05"),
 ) -> None:
-    # Resolve symbols inside the event loop so crypto_universe() (which uses
-    # asyncio.run() internally) doesn't bind the lru_cache'd asyncpg engine
-    # to a pre-main loop before asyncio.run() creates the real one.
+    # Resolve symbols inside the event loop via the async single-source-of-truth.
+    # The sync crypto_universe() returns [] when a loop is already running (it
+    # guards against asyncio.run() re-entry), which silently starved the lab
+    # eval pipeline — always use the async variant here.
     if not symbols:
-        symbols = crypto_universe()
+        symbols = await crypto_universe_async()
 
     await seed_initial_population(asset_class="crypto")
     await seed_initial_population(asset_class="bist")
@@ -343,7 +344,9 @@ def main() -> None:
         async def _one():
             await seed_initial_population(asset_class="crypto")
             await seed_initial_population(asset_class="bist")
-            opened, scored, stale = await _eval_tick(args.symbols or crypto_universe())
+            opened, scored, stale = await _eval_tick(
+                args.symbols or await crypto_universe_async()
+            )
             logger.info(f"once: opened={opened} scored={scored} stale={stale}")
             for ac in ("crypto", "bist"):
                 report = await run_evolution_cycle(

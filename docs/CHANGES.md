@@ -550,6 +550,25 @@
 - `execution.safety.should_submit_live` gate 0 + `exchange_shadow._per_trade_allowed`
   both refuse when mainnet + any override is set. TRADING.md hard limit #6.
 
+## 2026-09-12 — Labs eval pipeline unstuck + stall watchdog
+
+- **fix(labs)**: `labs/main.py` called the *sync* `crypto_universe()` inside the
+  `asyncio.run(run())` loop. The sync path returns `[]` under a running loop (it
+  guards against `asyncio.run()` re-entry), so `emit_signals` iterated 0 symbols
+  → 0 lab evaluations since ~2026-06-01 → evolution frozen ("only N ranked
+  candidates; waiting"). Switched both call sites to `await crypto_universe_async()`.
+  Lab eval now opens ~17 signals/tick again; evolution resumes as evals score.
+- **chore(reliability)**: `scripts/stall_watchdog.sh` + `infra/launchd/` agents
+  (`make watchdog-install`). macOS suspend freezes Docker VM asyncio timers;
+  `restart: unless-stopped` doesn't help (process stays alive, sleep never fires).
+  Watchdog restarts loop-services silent past a per-service budget; `caffeinate -s`
+  keeps the host awake on AC. (agent-lessons + synthesis had been frozen since
+  2026-07-08 from exactly this.)
+- **known-gap**: LLM synthesis layer (agent-lessons/synthesis themes, dev_agent
+  self-coding) still idle — container cursor CLI unauthenticated + stale images
+  lack the binary. Needs `make build` + one-time `make cursor-login-docker` (or
+  `CURSOR_API_KEY`). Algorithmic self-learning is restored regardless.
+
 ## 2026-09-12 — Otonomi denetimi + planı (`docs/AUTONOMY_PLAN.md`)
 
 - Ajan/tool, memory, self-learning ve insan-bağımlı ops noktaları denetlendi; bulgular dosya:satır
