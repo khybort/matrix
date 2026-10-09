@@ -240,3 +240,14 @@
   ε-probları +13.9 brüt, aldıkları +11.7 (t=−0.19), aynı girişte kuralın eğilimi yönüne göre fark −2.4 (t=−0.4).
   Kural: bir karar bileşeninin değerini **aynı saatlerde** ölç — eşli karşı-olgu (aynı giriş, öbür kolun yönü) veya
   aynı dönemde onun reddettikleri; dönemler arası fark önce rejimdir. Kaynak: `docs/wiki/llm-value-audit.md`.
+
+- **2026-10-09 — Bir filtrenin neyi seçtiğini saf bir karşılaştırıcıyla doğrula; maliyeti düz bps değil defterden al.**
+  `neg_funding_carry`'ye "stres borç + 4 bacak defter maliyeti > beklenen fonlamanın 1/3'ü ise atla" filtresi kondu
+  (deftere yürüyerek ölçülen maliyet, bacak başına ≤10 bps etki ile boyut, onaylanana dek $500 tavan; spot defteri yoksa
+  pozisyon yok). Replay'de tutulan epizodlar +176 / +293 bps (borç ×3) gösterdi, ama aynı sayıda epizodu yalnız beklenen
+  fonlamaya göre seçmek +167 / +291 veriyor: filtre maliyeti modellemiyor, derin fonlamayı seçiyor. Çünkü giriş oranıyla
+  "beklenen 48 saat" gerçekleşenin 4–7 katı (medyan oran 0,15 / 0,25). Kural: (1) yeni bir eşik/filtre raporlanırken aynı
+  n'de tek-değişkenli bir karşılaştırıcı da raporlanır; fark yoksa mekanizma iddia edilmez. (2) İlikit olmayan bacaklı
+  stratejide maliyet düz `round_trip_cost_pct` ile değil, açılış ve kapanışta defter yürüyüşüyle yazılır (medyan 64 bps vs
+  varsayılan 30). Eksik hedge bacağı = açılmayan pozisyon, asla sahte hedge. Kaynak: `docs/wiki/signal-research-2026-10.md`
+  "Shadow-book hardening".

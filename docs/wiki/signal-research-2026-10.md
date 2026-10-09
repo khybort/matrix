@@ -159,3 +159,88 @@ what rate, at signal time on a squeezed coin — is only measured by a signed
 borrow quote at entry (record quoted rate and max loanable per signal), and
 the strategy should skip any episode whose quoted borrow × 48 h + measured
 book cost exceeds a third of the funding it expects.
+
+## Shadow-book hardening (2026-10-09)
+Goal: the `neg_funding_carry` shadow book should earn what real money would
+earn, so its eventual promotion status means something.
+
+**Entry filter** (strategy, at signal time). Per signal:
+- expected = |settled rate| × settlements in 48 h at the interval in force
+  (from the gap to `next_funding_ts`: 1/2/4/8 h);
+- borrow = quoted hourly rate (cheapest of Bybit/Binance public tables) × 48 ×
+  `MATRIX_CARRY_BORROW_STRESS` (3);
+- book = 4 taker fees (perp 5.5 + spot 10 bps, ×2 = 31) + all four walked
+  fills (perp buy/sell, spot sell/buy, against mid) at the intended per-leg
+  size. Spot leg = the borrow venue's `<COIN>USDT`. Books come from
+  `market_orderbook_snapshots` if ≤ 30 s old, else public REST depth;
+- per-leg size = largest notional at which each of the four walks stays within
+  `MATRIX_CARRY_MAX_LEG_IMPACT_BPS` (10) of mid, capped at $500
+  (`MATRIX_CARRY_UNCONFIRMED_MAX_LEG_USD`); under $50 is a skip;
+- **skip when borrow + book > expected × `MATRIX_NFC_MAX_COST_SHARE` (1/3)**, or
+  when either book is missing (no spot book = no hedge = no signal).
+All of it is recorded in `predictions.context` (`entry_filter`, `spot_venue`,
+`spot_symbol`, `leg_cap_usd`, `book_sources`).
+
+**Paper accounting** (`backtest.carry_books`, used by `paper_trade` for any
+carry whose context names a spot leg). At open the engine fetches both books
+again, refuses the position if either is missing, and lowers the size to the
+impact cap and the $500 ceiling. The ceiling lifts only when
+`edge_study.strategy_edge` reports promotion status `confirmed`; unknown counts
+as not confirmed. The wallet risk gate stays the upper bound in every case.
+The two opening walks are stamped as `context.book_open` in the same
+transaction as the position. At close it charges the four fees, the recorded
+opening walks and the closing walks on the books at close (the open-time
+estimate if a book is gone; `book_close.close_source` says which), plus
+borrow at the entry quote × stress for every started hour
+(`borrow_charged_usd`). Other carries keep the flat two-leg cost.
+
+**Replay** of the filter over the study's exec episodes (the same episodes as
+`services/backtest/research/signal_2026_10/`, with the adversarial check's
+`h1check` columns). Books are full public depth for every episode coin, fetched
+2026-10-09 13:28 UTC and applied to all past episodes, as in the check. Net =
+funding on MTM notional + real spot hedge, entry 1 h after settlement, minus
+the book-walked cost at the book-capped size, minus borrow at the stated
+multiple of today's quote. t clustered by ISO week.
+
+| set | train n | train net bps (t_wk) | holdout n | holdout net bps (t_wk) |
+|---|---|---|---|---|
+| all exec, flat $500, borrow ×3 (= check row 6, today's books) | 3 370 | +19.3 (2.1) | 1 059 | +20.3 (1.2) |
+| all exec, book-capped size, borrow ×3 | 3 103 | +34.7 (3.5) | 972 | +34.6 (1.9) |
+| **filter kept, borrow ×3** | **1 081** | **+175.6 (6.7)**, median +12.7 | **221** | **+292.5 (6.3)**, median +96.8 |
+| filter kept, borrow ×1 | 1 081 | +216.9 (7.7) | 221 | +341.0 (7.2) |
+| filter kept, borrow ×10 | 1 081 | +30.9 (1.5) | 221 | +122.7 (2.6) |
+| filter kept, ×3, top 5 % removed | 1 026 | +87.3 (5.2) | 209 | +177.5 (6.7) |
+| filter kept, ×3, 48 h funding ≤ 500 bps | 931 | +29.4 (2.7) | 172 | +72.3 (4.7) |
+
+Drops, train / holdout: no book today 361 / 133 (mostly delisted or no spot
+pair), impact cap < $50 162 / 38, cost share > 1/3 1 860 / 713. Kept legs
+average $355 / $336 (median ≈ $400: the $500 ceiling rarely binds before the
+10 bps cap does). That is about **$6 / $10 per episode**, 136 / 52 episodes a
+month across 217 / 89 coins, if ingestion covers every borrowable perp.
+Win rate 53 % / 66 %. Concentration is lower than in the unfiltered set but
+still high: top 5 % of kept episodes are 52 % / 41 % of their PnL, the top 5
+coins 28 % / 46 % (holdout: H, LSK, COTI, HOME, SKR), and the top 10 days
+24 % / 47 %.
+
+How to read it:
+- **The filter works by selecting deep funding, not by modelling costs.**
+  Keeping the same number of episodes ranked by expected funding alone gives
+  +167 / +291 (overlap 925 / 170). Expected funding at the entry rate overstates
+  what is realised by 4–7× (median realised / expected 0.15 train, 0.25
+  holdout: rates decay fast). So the 1/3 rule is lenient in practice. Against a
+  decay-adjusted expectation (about share ≤ 0.08 of the naive one) it keeps
+  190 / 22 episodes at +354 / +929 bps (borrow ×3) and +235 / +787 at ×10.
+- **Borrow is still the open risk, and the replay understates it.** The
+  replay charges today's calm quote. Live, the filter reads the quote at signal
+  time, which for a coin in a squeeze is several times higher (median
+  6.2 bps/8 h at funding ≤ −8 bps/8 h). The live filter will therefore keep
+  fewer episodes than the replay. At ×10 borrow the train set is not
+  significant (t 1.5). Quoted ≠ lendable: a missing pool is still invisible
+  without a signed query.
+- **What the shadow book should show if the edge is real:** roughly +100 to
+  +300 bps per kept episode net of everything (median far below the mean,
+  a third to half of episodes losing a little), at ~$350 per leg, with PnL arriving
+  in a few squeezes. A shadow mean near +30 bps or below means the quoted
+  borrow, not the funding, was the gap. Judging needs the promotion bar's
+  registered n, not a month of results. Replay scripts: session scratchpad
+  `shb/` (`fetch_books.py`, `replay.py`), not committed.
