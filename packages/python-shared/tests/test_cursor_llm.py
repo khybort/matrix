@@ -16,7 +16,11 @@ from matrix_shared.subscription_llm import (
 
 
 @pytest.mark.asyncio
-async def test_yields_nothing_when_no_backend(monkeypatch):
+async def test_yields_nothing_when_no_backend(monkeypatch, tmp_path):
+    # The container mounts the synced OAuth session at /root/.claude; without
+    # redirecting CLAUDE_CONFIG_DIR this "no backend" test made a real LLM call.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
     monkeypatch.delenv("CURSOR_API_KEY", raising=False)

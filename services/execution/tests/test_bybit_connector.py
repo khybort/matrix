@@ -27,6 +27,16 @@ from execution.bybit_connector import (
 asyncio_mark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_bybit_creds(monkeypatch):
+    """The container env carries real (and at times expired) Bybit keys.
+    `BybitConnector(testnet=True)` reads the BYBIT_TESTNET_* pair, so blanking
+    only BYBIT_API_KEY let the ambient testnet key through and the
+    "creds missing" test hit the exchange. Tests that need creds set them."""
+    for k in ("BYBIT_API_KEY", "BYBIT_API_SECRET", "BYBIT_TESTNET_API_KEY", "BYBIT_TESTNET_API_SECRET"):
+        monkeypatch.delenv(k, raising=False)
+
+
 def _market_order(symbol: str = "BTCUSDT") -> OrderRequest:
     return OrderRequest(
         category="linear",
