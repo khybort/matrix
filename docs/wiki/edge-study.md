@@ -102,8 +102,14 @@ four fees, two book walks and borrow), so carries get their own evidence path
 feeding the **same** `status` field:
 
 - `carry_edge_rows`: one row per carry (strategy, market) from its **closed
-  paper positions** over `MATRIX_EDGE_CARRY_DAYS` (90 d; the band's `since`
-  when the strategy has a shadow band). Shadow-wallet fills count — a carry's
+  paper positions** over `MATRIX_EDGE_CARRY_DAYS` (90 d), closed at or after
+  `MATRIX_EDGE_CARRY_EVIDENCE_SINCE` (2026-10-09 13:39:14 UTC: per-settlement
+  funding went live with 7d7b854; earlier closes exited on the settlement
+  placeholder at the four-leg fee and measure the bug), and from the band's
+  `since` when the strategy has a later one. Until that cutoff existed only
+  neg_funding_carry had a start date, so all 70 inverse_carry closes in the
+  window (2026-09-18 → 10-09 13:14, almost all −25…−35 bps flip exits) were its
+  evidence; after the cutoff it has none yet. Shadow-wallet fills count — a carry's
   paper book is its evidence. Positions are grouped into episodes
   (`shadow_tracker.decompose` → `episode_groups`); the sample is each
   episode's realised net bps (`pnl_usd` is already net of funding, fees, book
@@ -123,7 +129,8 @@ feeding the **same** `status` field:
   0 `pays`** at m=13; ≤ 5 % confirm even at m=1. With per-day correlation an
   i.i.d. t rejects a true zero in >15 % of runs; the day-clustered t stays
   under 10 %. A +80 bps carry on the same noise confirms.
-- Live, 2026-10-09: cash_and_carry 57 episodes / 9 days −3.1 bps,
+- Live, 2026-10-09 (before the accounting cutoff, so mostly placeholder-flip
+  closes): cash_and_carry 57 episodes / 9 days −3.1 bps,
   inverse_carry 22 / 13 days +11.9, xexch_funding_arb 13 / 6 days −20.3
   (t_day −3.4), neg_funding_carry 0 closed / 3 open — all `unproven`, all
   short of 20 day clusters. Nothing is sized on them yet.

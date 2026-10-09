@@ -535,6 +535,18 @@ CARRY_DAYS = float(os.environ.get("MATRIX_EDGE_CARRY_DAYS", "90"))
 # Day clusters required before a carry's t is read at all: with few clusters
 # the cluster-robust SE is itself noise and the normal approximation flatters.
 CARRY_MIN_DAYS = int(os.environ.get("MATRIX_EDGE_CARRY_MIN_DAYS", "20"))
+# Carry closes booked before this instant are not evidence. Until the
+# per-settlement funding accounting went live (backtest.carry_funding, wired
+# into the paper engine at 7d7b854, 2026-10-09 13:39:14 UTC) a carry booked
+# `hours/8 x rate_at_close` and exited on Bybit's post-settlement placeholder:
+# 51 of 51 inverse/xexch carries "flipped" at their first settlement and closed
+# at the four-leg fee (~ -24 bps) with no funding. Those episodes measure the
+# bug, not the strategy. A strategy's own band `since`, when later, wins.
+# Matched on closed_at: an episode opened before and closed after the fix is
+# booked under the new accounting end to end.
+CARRY_EVIDENCE_SINCE = datetime.fromisoformat(
+    os.environ.get("MATRIX_EDGE_CARRY_EVIDENCE_SINCE") or "2026-10-09T13:39:14+00:00"
+)
 
 _CARRY_FILLS_SQL = (
     "SELECT p.strategy_id, p.asset_class, p.symbol, p.side, p.generated_at, p.horizon_seconds, "
@@ -555,14 +567,17 @@ async def _load_carry_fills(days: float, strategy_id: str | None) -> list[dict]:
     `shadow_tracker.decompose` needs. Shadow-wallet fills are included: a
     carry's paper book IS its evidence (neg_funding_carry trades only in the
     shadow wallet), unlike a directional signal, which is replayed whether or
-    not it was filled. Episodes before a strategy's registered shadow band
-    `since` (its current accounting) are dropped."""
+    not it was filled. Positions closed before CARRY_EVIDENCE_SINCE (the old
+    funding accounting) and episodes before a strategy's registered shadow
+    band `since` (its current accounting) are dropped."""
     sql = _CARRY_FILLS_SQL + ("  AND p.strategy_id = :sid " if strategy_id else "") + "ORDER BY p.generated_at"
     params: dict[str, Any] = {"carry": sorted(CARRY_SIDES), "secs": days * 86400}
     if strategy_id:
         params["sid"] = strategy_id
     async with shared_session_scope() as s:
         rows = [dict(r) for r in (await s.execute(text(sql), params)).mappings().all()]
+    cutoff = CARRY_EVIDENCE_SINCE if CARRY_EVIDENCE_SINCE.tzinfo else CARRY_EVIDENCE_SINCE.replace(tzinfo=UTC)
+    rows = [r for r in rows if r["closed_at"] is None or _aware(r["closed_at"]) >= cutoff]
     if not rows:
         return rows
     try:
@@ -579,8 +594,12 @@ async def _load_carry_fills(days: float, strategy_id: str | None) -> list[dict]:
             since[key] = ts if ts.tzinfo else ts.replace(tzinfo=UTC)
     return [
         r for r in rows
-        if (k := (r["strategy_id"], r["asset_class"])) not in since or r["generated_at"] >= since[k]
+        if (k := (r["strategy_id"], r["asset_class"])) not in since or _aware(r["generated_at"]) >= since[k]
     ]
+
+
+def _aware(ts: datetime) -> datetime:
+    return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
 
 
 def carry_edge_rows(fills: list[dict]) -> tuple[list[dict], dict[tuple[str, str], list[float]]]:

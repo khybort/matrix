@@ -175,3 +175,62 @@ def test_champion_and_shadow_challenger_are_not_pooled():
     # Shadow only (neg_funding_carry trades nowhere else): judged on the shadow book.
     (only,), _ = E.carry_edge_rows(challenger)
     assert only["arm"] == "shadow" and only["n"] == 300
+
+
+@pytest.mark.asyncio
+async def test_carry_closes_under_the_old_funding_accounting_are_not_evidence(monkeypatch):
+    """Before the per-settlement funding fix went live (2026-10-09 13:39 UTC)
+    every inverse/xexch carry exited on Bybit's post-settlement placeholder at
+    the four-leg fee: those closes measure the bug. Only neg_funding_carry had
+    a band `since`, so inverse_carry's pre-fix closes entered its evidence.
+    A later band `since` still wins; open positions and positions opened before
+    but closed after the fix (booked end to end by the new code) are kept."""
+    from contextlib import asynccontextmanager
+
+    from matrix_shared import shadow_tracker
+
+    fix = datetime(2026, 10, 9, 13, 39, 14, tzinfo=UTC)  # carry_funding went live (7d7b854)
+
+    def fill(sid, sym, opened, closed):
+        return {"strategy_id": sid, "asset_class": "crypto", "symbol": sym, "side": "inverse_carry",
+                "generated_at": opened, "opened_at": opened, "closed_at": closed}
+
+    h = timedelta(hours=1)
+    rows = [
+        fill("inverse_carry", "OLDUSDT", fix - 30 * h, fix - 29 * h),       # placeholder flip, pre-fix
+        fill("inverse_carry", "EDGEUSDT", fix - 2 * h, fix - timedelta(seconds=1)),
+        fill("inverse_carry", "SPANUSDT", fix - 2 * h, fix + 6 * h),         # opened before, closed after
+        fill("inverse_carry", "NEWUSDT", fix + h, fix + 9 * h),
+        fill("inverse_carry", "OPENUSDT", fix - 3 * h, None),
+        fill("neg_funding_carry", "NFCAUSDT", fix + h, fix + 5 * h),         # before its band since
+        fill("neg_funding_carry", "NFCBUSDT", fix + 3 * h, fix + 8 * h),
+    ]
+
+    class _Result:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return rows
+
+    class _Session:
+        async def execute(self, *a, **k):
+            return _Result()
+
+    @asynccontextmanager
+    async def fake_scope():
+        yield _Session()
+
+    async def bands():
+        return {("neg_funding_carry", "crypto"): {"since": (fix + 2 * h).isoformat()}}
+
+    monkeypatch.setattr(E, "shared_session_scope", fake_scope)
+    monkeypatch.setattr(shadow_tracker, "load_bands", bands)
+    kept = {r["symbol"] for r in await E._load_carry_fills(90, None)}
+    assert kept == {"SPANUSDT", "NEWUSDT", "OPENUSDT", "NFCBUSDT"}
+    assert E.CARRY_EVIDENCE_SINCE == fix  # the default (MATRIX_EDGE_CARRY_EVIDENCE_SINCE)
+
+    # Configurable: an earlier cutoff lets the pre-fix closes back in.
+    monkeypatch.setattr(E, "CARRY_EVIDENCE_SINCE", fix - 40 * h)
+    kept = {r["symbol"] for r in await E._load_carry_fills(90, None)}
+    assert {"OLDUSDT", "EDGEUSDT"} <= kept and "NFCAUSDT" not in kept
