@@ -9,7 +9,8 @@ MutationProposal (audit trail — live slots already updated in the same tick).
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from loguru import logger
 from sqlalchemy import func, select
@@ -32,6 +33,79 @@ CONSECUTIVE_LOSS_AUTO_CUT = 8
 LAST_N_POSITIONS = 30
 SHADOW_WALLET_NAME = "shadow"
 MIN_N_FOR_SLOT_CHANGE = int(os.environ.get("MATRIX_SLOT_MIN_N", "30"))
+
+
+# Fills fetched per scored bet: enough that LAST_N_POSITIONS episodes survive
+# grouping even for a strategy that re-enters the same bet three times.
+FILLS_PER_BET_LOOKBACK = 4
+# A strategy must have emitted a directional signal this recently to be
+# promoted. Slots granted to a strategy that emits nothing are dead capacity,
+# and its trailing record is frozen, so the same "promote" fired every pass.
+EMISSION_WINDOW_H = float(os.environ.get("MATRIX_SLOT_EMISSION_WINDOW_H", "24"))
+
+
+@dataclass(slots=True)
+class _Bet:
+    pnl_usd: float
+    notional_usd: float
+    closed_at: datetime
+
+
+def _bets(fills) -> list[_Bet]:
+    """(PaperPosition, generated_at, horizon_seconds) rows → episodes, oldest
+    first; dollars and notional summed over the fills of each episode."""
+    from matrix_shared.edge_study import episode_groups
+
+    items = sorted(
+        (
+            {
+                "strategy_id": "", "asset_class": p.asset_class, "symbol": p.symbol,
+                "side": p.side, "generated_at": gen, "horizon_seconds": hz, "pos": p,
+            }
+            for p, gen, hz in fills
+        ),
+        key=lambda r: r["generated_at"],
+    )
+    floor = datetime.min.replace(tzinfo=UTC)
+    out = [
+        _Bet(
+            pnl_usd=sum(float(r["pos"].pnl_usd or 0) for r in g),
+            notional_usd=sum(float(r["pos"].notional_usd or 0) for r in g),
+            closed_at=max((r["pos"].closed_at or floor) for r in g),
+        )
+        for g in episode_groups(items)
+    ]
+    out.sort(key=lambda b: b.closed_at)
+    return out
+
+
+def _cap_promotion(old_slots: int, new_slots: int, *, live: bool) -> int:
+    """No promotion for a strategy that is not running: without an active or
+    shadow config, or without a signal in EMISSION_WINDOW_H, slots can only
+    hold or fall. momentum_xs has had no active config since 2026-09-21, yet
+    reflection logged "slot promote 2→8" for it every ~11 minutes on 09-26."""
+    return new_slots if live or new_slots <= old_slots else old_slots
+
+
+async def _is_live(session, strategy_id: str, asset_class: str) -> bool:
+    has_config = (await session.execute(
+        select(StrategyConfig.version)
+        .where(StrategyConfig.strategy_id == strategy_id)
+        .where(StrategyConfig.asset_class == asset_class)
+        .where(StrategyConfig.status.in_(("active", "shadow")))
+        .limit(1)
+    )).first() is not None
+    if not has_config:
+        return False
+    since = datetime.now(UTC) - timedelta(hours=EMISSION_WINDOW_H)
+    return (await session.execute(
+        select(Prediction.id)
+        .where(Prediction.strategy_id == strategy_id)
+        .where(Prediction.asset_class == asset_class)
+        .where(Prediction.generated_at >= since)
+        .where(Prediction.side.in_(("long", "short")))
+        .limit(1)
+    )).first() is not None
 
 
 def _perf_score(win_rate: float, avg_pnl_pct: float, total_pnl_usd: float) -> float:
@@ -174,46 +248,41 @@ async def score_strategy_slots() -> int:
             ).scalar_one() or 1
             base_share = max(1, wallet.max_concurrent_positions // n_active)
 
-            # Last N closed positions for this strategy+wallet
-            rows = list(
-                (
-                    await session.execute(
-                        select(PaperPosition)
-                        .join(Prediction, Prediction.id == PaperPosition.prediction_id)
-                        .where(PaperPosition.wallet_id == config.wallet_id)
-                        .where(PaperPosition.status == "closed")
-                        .where(Prediction.strategy_id == config.strategy_id)
-                        .order_by(PaperPosition.closed_at.desc())
-                        .limit(LAST_N_POSITIONS)
-                    )
-                ).scalars()
-            )
+            # Last N closed BETS for this strategy+wallet. A position whose
+            # signal re-emitted inside an earlier one's horizon on the same
+            # (symbol, side) is the same bet held again, so fills are grouped
+            # into episodes (edge_study.episode_groups) and each episode is one
+            # sample: one wrong call held three times used to read as three
+            # consecutive losses and three draws toward MIN_N_FOR_SLOT_CHANGE.
+            fills = (
+                await session.execute(
+                    select(PaperPosition, Prediction.generated_at, Prediction.horizon_seconds)
+                    .join(Prediction, Prediction.id == PaperPosition.prediction_id)
+                    .where(PaperPosition.wallet_id == config.wallet_id)
+                    .where(PaperPosition.status == "closed")
+                    .where(Prediction.strategy_id == config.strategy_id)
+                    .order_by(PaperPosition.closed_at.desc())
+                    .limit(LAST_N_POSITIONS * FILLS_PER_BET_LOOKBACK)
+                )
+            ).all()
+            rows = _bets(fills)[-LAST_N_POSITIONS:]
 
             if not rows:
                 continue
 
-            wins = sum(1 for r in rows if (r.pnl_usd or 0) > 0)
+            wins = sum(1 for r in rows if r.pnl_usd > 0)
             # Conservative win rate: Wilson lower bound, so thin samples score
             # low instead of lucky.
             win_rate = wilson_lower(wins, len(rows))
             avg_pnl_pct = (
-                sum(
-                    float(r.pnl_usd or 0) / float(r.notional_usd or 1)
-                    for r in rows
-                )
-                / len(rows)
+                sum(r.pnl_usd / (r.notional_usd or 1.0) for r in rows) / len(rows)
             )
-            total_pnl_usd = sum(float(r.pnl_usd or 0) for r in rows)
+            total_pnl_usd = sum(r.pnl_usd for r in rows)
 
             # Consecutive losses: walk from newest closed backward
-            sorted_rows = sorted(
-                rows,
-                key=lambda r: r.closed_at or datetime.min.replace(tzinfo=UTC),
-                reverse=True,
-            )
             consec = 0
-            for r in sorted_rows:
-                if (r.pnl_usd or 0) < 0:
+            for r in reversed(rows):
+                if r.pnl_usd < 0:
                     consec += 1
                 else:
                     break
@@ -267,6 +336,19 @@ async def score_strategy_slots() -> int:
                             f"{new_slots}→{base_share} on measured entry edge"
                         )
                     new_slots = max(new_slots, base_share)
+
+            if new_slots > old_slots:
+                capped = _cap_promotion(
+                    old_slots, new_slots,
+                    live=await _is_live(session, config.strategy_id, config.asset_class),
+                )
+                if capped != new_slots:
+                    logger.info(
+                        f"slot promote withheld: {config.strategy_id}/{config.asset_class} "
+                        f"{old_slots}→{new_slots} — no active config or no signal in "
+                        f"{EMISSION_WINDOW_H:g} h"
+                    )
+                    new_slots = capped
 
             config.perf_score = score
             config.consecutive_losses = consec

@@ -41,6 +41,7 @@ from typing import Any
 
 from loguru import logger
 from matrix_shared import local_session_scope, shared_session_scope
+from matrix_shared.edge_study import episode_pnls
 from matrix_shared.models import MutationProposal, Outcome, Prediction, StrategyConfig
 from sqlalchemy import desc, func, select
 
@@ -81,7 +82,7 @@ class Sample:
     total: float
 
     @classmethod
-    def from_pnls(cls, pnls: list[Decimal]) -> "Sample":
+    def from_pnls(cls, pnls: list[Decimal] | list[float]) -> "Sample":
         n = len(pnls)
         if n == 0:
             return cls(0, 0.0, 0.0, 0.0)
@@ -113,13 +114,25 @@ def verdict_for(before: Sample, after: Sample, *, applied_age_h: float) -> tuple
 async def _sample(
     session, strategy_id: str, asset_class: str, version: int, since: datetime, until: datetime | None
 ) -> Sample:
-    """One aggregate query (n, mean, sample variance, total) — no row transfer."""
+    """Realised PnL per independent bet for one version.
+
+    Counted in episodes (`edge_study.episode_pnls`), not outcomes: a version
+    that re-emits the same (symbol, side) inside its horizon and gets filled
+    two or three times has made one bet, and scoring each fill as its own
+    sample shrank the z-test's standard error by the square root of the
+    duplication — funding_reversion's 3 101 closed fills (Sep–Oct 2026) were
+    473 bets. That made rollbacks and challenger verdicts fire on a fraction
+    of the evidence they claimed.
+    """
     stmt = (
         select(
-            func.count(Outcome.id),
-            func.avg(Outcome.pnl_usd),
-            func.var_samp(Outcome.pnl_usd),
-            func.sum(Outcome.pnl_usd),
+            Outcome.pnl_usd,
+            Prediction.strategy_id,
+            Prediction.asset_class,
+            Prediction.symbol,
+            Prediction.side,
+            Prediction.generated_at,
+            Prediction.horizon_seconds,
         )
         .join(Prediction, Prediction.id == Outcome.prediction_id)
         .where(Prediction.strategy_id == strategy_id)
@@ -130,8 +143,8 @@ async def _sample(
     )
     if until is not None:
         stmt = stmt.where(Outcome.observed_at < until)
-    n, mean, var, total = (await session.execute(stmt)).one()
-    return Sample(int(n or 0), float(mean or 0), float(var or 0), float(total or 0))
+    rows = [r._asdict() for r in (await session.execute(stmt.order_by(Prediction.generated_at))).all()]
+    return Sample.from_pnls(episode_pnls(rows))
 
 
 def _normalize(params: dict[str, Any] | None) -> str:

@@ -154,3 +154,21 @@ async def test_revoke_breached_certificates(seed_outcomes, cert_cleanup):
     assert f"{sid}/crypto/v1" in revoked
     row = await _fetch(sid, "crypto", 1)
     assert row.status == "revoked" and row.revoked_reason.startswith("auto:")
+
+
+async def test_re_emitted_outcomes_count_as_one_bet(seed_outcomes, cert_cleanup):
+    """Ten fills of the same (symbol, side) whose signals re-emitted inside the
+    first one's 60 s horizon are one bet: they must not satisfy `min_outcomes`
+    ten times over. The dollars still all count."""
+    from matrix_shared.trading_safety import evaluate_eligibility
+
+    sid = f"grant_dup_{uuid.uuid4().hex[:6]}"
+    ac, ver = "crypto", 1
+    cert_cleanup.append((sid, ac, ver))
+    await seed_outcomes(sid, ac, ver, n=10, win_rate=1.0, spacing_s=5)
+
+    v = await evaluate_eligibility(sid, ac, ver, **_LOOSE)
+    assert v.metrics["n_outcomes_raw"] == 10
+    assert v.metrics["n_outcomes"] == 1
+    assert Decimal(v.metrics["total_pnl_usd"]) == Decimal("10")
+    assert not v.eligible and any(r.startswith("n_outcomes=1 ") for r in v.reasons)

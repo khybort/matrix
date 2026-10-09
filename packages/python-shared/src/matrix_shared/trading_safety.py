@@ -238,12 +238,28 @@ async def evaluate_eligibility(
     Drawdown is approximated as max cumulative loss from a running peak,
     using outcome.pnl_usd ordered by observed_at. Good enough for the
     early-Phase paper data; can be tightened later.
+
+    Sample size, win rate and the CI are counted in **episodes**, not
+    outcomes (`edge_study.episode_groups`): fills of the same (strategy,
+    symbol, side) whose signals re-emitted inside the first one's horizon are
+    one bet, and their dollars are summed into it. Counting them separately
+    let one call earn several "independent" wins toward `min_outcomes` and
+    shrank the CI by the square root of the duplication. Total PnL and
+    drawdown stay on the dollar path, which the duplicates really did move.
     """
+    from matrix_shared.edge_study import episode_pnls
+
     async with shared_session_scope() as session:
         stmt = (
             select(
                 Outcome.pnl_usd,
                 Outcome.observed_at,
+                Prediction.strategy_id,
+                Prediction.asset_class,
+                Prediction.symbol,
+                Prediction.side,
+                Prediction.generated_at,
+                Prediction.horizon_seconds,
             )
             .join(Prediction, Prediction.id == Outcome.prediction_id)
             .where(Prediction.strategy_id == strategy_id)
@@ -254,19 +270,23 @@ async def evaluate_eligibility(
         )
         rows = list((await session.execute(stmt)).all())
 
-    n = len(rows)
-    if n == 0:
+    n_raw = len(rows)
+    if n_raw == 0:
         return EligibilityVerdict(
             eligible=False,
             reasons=["no outcomes recorded"],
-            metrics={"n_outcomes": 0, "observation_days": 0},
+            metrics={"n_outcomes": 0, "n_outcomes_raw": 0, "observation_days": 0},
         )
 
     first_ts = rows[0].observed_at
     last_ts = rows[-1].observed_at
     observation_days = max(0, (last_ts - first_ts).days)
 
-    wins = sum(1 for r in rows if r.pnl_usd > 0)
+    bets = [Decimal(str(p)) for p in episode_pnls(
+        sorted((r._asdict() for r in rows), key=lambda r: r["generated_at"])
+    )]
+    n = len(bets)
+    wins = sum(1 for p in bets if p > 0)
     win_rate = Decimal(wins) / Decimal(n)
     total_pnl = sum((Decimal(r.pnl_usd) for r in rows), Decimal("0"))
     avg_pnl = total_pnl / Decimal(n)
@@ -286,9 +306,9 @@ async def evaluate_eligibility(
             worst_dd = dd
     dd_pct = worst_dd / _DRAWDOWN_REFERENCE_USD
 
-    # 95% CI lower bound on mean pnl per outcome (normal approx; n >= 2).
+    # 95% CI lower bound on mean pnl per episode (normal approx; n >= 2).
     if n >= 2:
-        var = sum((Decimal(r.pnl_usd) - avg_pnl) ** 2 for r in rows) / Decimal(n - 1)
+        var = sum((p - avg_pnl) ** 2 for p in bets) / Decimal(n - 1)
         se = (var / Decimal(n)).sqrt() if var > 0 else Decimal("0")
         ci_lower = avg_pnl - Decimal("1.96") * se
     else:
@@ -313,6 +333,7 @@ async def evaluate_eligibility(
         reasons=reasons,
         metrics={
             "n_outcomes": n,
+            "n_outcomes_raw": n_raw,
             "observation_days": observation_days,
             "win_rate": str(win_rate.quantize(Decimal("0.000001"))),
             "avg_pnl_usd": str(avg_pnl.quantize(Decimal("0.000001"))),

@@ -39,9 +39,10 @@ from loguru import logger
 
 from matrix_shared.edge_study import (
     Bar,
-    _index_at,
     _load_bars,
     _load_candidates,
+    entry_index,
+    one_per_episode,
     simulate_bracket,
 )
 from matrix_shared.setup_memory import setup_vector
@@ -199,7 +200,10 @@ def evaluate_samples(
 async def build_samples(days: float, strategy_id: str | None) -> dict[tuple[str, str], tuple[list, list]]:
     """(features, net bps) per strategy, labelled by replaying the triple
     barrier on 1m bars — no fill required."""
-    rows = await _load_candidates(days, strategy_id)
+    # One bet, one sample. Re-emissions of the same (symbol, side) inside its
+    # horizon share one label and nearly one feature vector; left in, they
+    # straddle the train/test split and the out-of-sample lift is in-sample.
+    rows = one_per_episode(await _load_candidates(days, strategy_id))
     if not rows:
         return {}
     since = datetime.now(UTC) - timedelta(days=days + 1)
@@ -225,7 +229,7 @@ async def build_samples(days: float, strategy_id: str | None) -> dict[tuple[str,
         series = bars.get((r["asset_class"], r["symbol"]))
         if not series:
             continue
-        idx = _index_at(series, r["generated_at"])
+        idx = entry_index(series, r["generated_at"])
         if idx <= 0 or idx >= len(series) - 1:
             continue
         horizon_bars = max(1, int((r["horizon_seconds"] or 600) // 60))

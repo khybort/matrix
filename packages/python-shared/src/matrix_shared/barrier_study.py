@@ -29,11 +29,12 @@ from loguru import logger
 
 from matrix_shared.edge_study import (
     Bar,
-    _index_at,
     _load_bars,
     _load_candidates,
+    contiguous,
+    entry_index,
+    sample_episodes,
     simulate_bracket,
-    subsample,
 )
 from matrix_shared.trading import execution_cost_bps
 
@@ -71,6 +72,7 @@ class BarrierRow:
     strategy_id: str
     asset_class: str
     n: int = 0
+    n_raw: int = 0
     tp_in_sigma: list[float] = field(default_factory=list)
     current_net_bps: list[float] = field(default_factory=list)
     by_m: dict[float, list[float]] = field(default_factory=dict)
@@ -89,6 +91,7 @@ class BarrierRow:
             "strategy": self.strategy_id,
             "market": self.asset_class,
             "n": self.n,
+            "n_raw": self.n_raw,
             "tp_sigma": round(mean(self.tp_in_sigma), 2),
             "current_net_bps": round(mean(self.current_net_bps) - cost_bps, 1),
             "best_m": best_m,
@@ -108,10 +111,8 @@ async def run_barrier_study(
     if not rows_in:
         logger.warning("barrier study: no predictions in window")
         return []
-    grouped: dict[tuple[str, str], list[dict]] = {}
-    for r in rows_in:
-        grouped.setdefault((r["strategy_id"], r["asset_class"]), []).append(r)
-    sampled = [r for g in grouped.values() for r in subsample(g, MAX_PER_STRATEGY)]
+    # One bet, one sample (edge_study.one_per_episode); see docs/wiki/edge-study.md.
+    sampled, n_raw = sample_episodes(rows_in, MAX_PER_STRATEGY)
 
     from datetime import UTC, datetime, timedelta
 
@@ -130,7 +131,7 @@ async def run_barrier_study(
         if not series or len(series) < VOL_LOOKBACK_BARS:
             continue
         horizon_bars = max(1, int((t["horizon_seconds"] or 600) // 60))
-        idx = _index_at(series, t["generated_at"])
+        idx = entry_index(series, t["generated_at"])
         if idx <= 0 or idx >= len(series) - 1:
             continue
         sigma_h = horizon_vol(realised_vol(series, idx), horizon_bars)
@@ -138,13 +139,17 @@ async def run_barrier_study(
             continue
         tp = float(t["tp_pct"]) if t["tp_pct"] is not None else 0.01
         sl = float(t["sl_pct"]) if t["sl_pct"] is not None else 0.005
-        key = (t["strategy_id"], t["asset_class"])
-        row = acc.setdefault(key, BarrierRow(t["strategy_id"], t["asset_class"]))
-        row.n += 1
-        row.tp_in_sigma.append(tp / sigma_h)
         cur = simulate_bracket(
             series, idx, side=t["side"], tp_pct=tp, sl_pct=sl, horizon_bars=horizon_bars
         )
+        if cur.reason == "no_data":   # a hole in the window: unscorable, not a zero
+            continue
+        key = (t["strategy_id"], t["asset_class"])
+        row = acc.setdefault(
+            key, BarrierRow(t["strategy_id"], t["asset_class"], n_raw=n_raw.get(key, 0))
+        )
+        row.n += 1
+        row.tp_in_sigma.append(tp / sigma_h)
         row.current_net_bps.append(cur.ret_bps)
         for m in grid:
             r = simulate_bracket(
@@ -195,7 +200,7 @@ DRIFT_DRAWS = int(os.environ.get("MATRIX_HORIZON_DRIFT_DRAWS", "40"))
 def signed_return_bps(bars: list[Bar], idx: int, side: str, horizon_bars: int) -> float | None:
     """Plain signed return over the horizon, no barriers: the alpha itself."""
     j = idx + horizon_bars
-    if idx < 0 or j >= len(bars) or bars[idx].close <= 0:
+    if idx < 0 or j >= len(bars) or bars[idx].close <= 0 or not contiguous(bars, idx, j):
         return None
     raw = (bars[j].close - bars[idx].close) / bars[idx].close
     return (raw if side != "short" else -raw) * _BPS
@@ -215,10 +220,8 @@ async def run_horizon_study(*, days: float = 14.0, strategy_id: str | None = Non
     rows_in = await _load_candidates(days, strategy_id)
     if not rows_in:
         return []
-    grouped: dict[tuple[str, str], list[dict]] = {}
-    for r in rows_in:
-        grouped.setdefault((r["strategy_id"], r["asset_class"]), []).append(r)
-    sampled = [r for g in grouped.values() for r in subsample(g, MAX_PER_STRATEGY)]
+    # One bet, one sample (edge_study.one_per_episode); see docs/wiki/edge-study.md.
+    sampled, n_raw = sample_episodes(rows_in, MAX_PER_STRATEGY)
 
     from datetime import UTC, datetime, timedelta
 
@@ -256,11 +259,11 @@ async def run_horizon_study(*, days: float = 14.0, strategy_id: str | None = Non
         series = bars.get((t["asset_class"], t["symbol"]))
         if not series:
             continue
-        idx = _index_at(series, t["generated_at"])
+        idx = entry_index(series, t["generated_at"])
         if idx <= 0:
             continue
         key = (t["strategy_id"], t["asset_class"])
-        a = acc.setdefault(key, {"n": 0, "cur": int((t["horizon_seconds"] or 600) // 60),
+        a = acc.setdefault(key, {"n": 0, "n_raw": n_raw.get(key, 0), "cur": int((t["horizon_seconds"] or 600) // 60),
                                  "by_h": {h: [] for h in HORIZON_GRID_MIN}})
         a["n"] += 1
         sign = 1.0 if t["side"] != "short" else -1.0
@@ -293,7 +296,7 @@ async def run_horizon_study(*, days: float = 14.0, strategy_id: str | None = Non
         cur_h = a["cur"] if a["cur"] in means else best_h
         decisive = bool(tstats[best_h] >= 2.0 and means[best_h] > means[cur_h])
         out.append({
-            "strategy": sid, "market": ac, "n": a["n"],
+            "strategy": sid, "market": ac, "n": a["n"], "n_raw": a["n_raw"],
             "current_h_min": a["cur"],
             "current_net_bps": round(means[cur_h], 1),
             "best_h_min": best_h, "best_net_bps": round(means[best_h], 1),

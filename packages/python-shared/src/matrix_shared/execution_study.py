@@ -1,7 +1,8 @@
 """Would resting the entry order save more than it costs?
 
-Cost is the binding constraint on this book: the one verified edge is ~+31 bps
-(docs/wiki/edge-study.md) against a ~15 bps taker round trip. Entering passively
+Cost is the binding constraint on this book: no strategy has a verified edge
+(the ~+31 bps once quoted here was withdrawn 2026-10-09 as pseudo-replication,
+docs/wiki/edge-study.md) and the taker round trip is ~15 bps. Entering passively
 turns the entry leg from taker into maker — on Bybit linear perps 1 bp instead
 of 5.5 bps plus ~2 bps of slippage — which is ~6.5 bps of the edge recovered
 without finding any new signal.
@@ -29,11 +30,11 @@ from loguru import logger
 from matrix_shared.edge_study import (
     Bar,
     MAX_PER_STRATEGY,
-    _index_at,
     _load_bars,
     _load_candidates,
+    entry_index,
+    sample_episodes,
     simulate_bracket,
-    subsample,
     welch,
 )
 from matrix_shared.trading import execution_cost_bps
@@ -74,6 +75,7 @@ class ExecRow:
     strategy_id: str
     asset_class: str
     n: int = 0
+    n_raw: int = 0
     taker_net: list[float] = field(default_factory=list)
     maker_net: list[float] = field(default_factory=list)   # post-only, cross if unfilled
     passive_only_net: list[float] = field(default_factory=list)  # skip if unfilled
@@ -86,6 +88,7 @@ class ExecRow:
         diff, se, t = welch(self.maker_net, self.taker_net)
         return {
             "strategy": self.strategy_id, "market": self.asset_class, "n": self.n,
+            "n_raw": self.n_raw,
             "fill_rate": round(self.fills / self.n, 3) if self.n else 0.0,
             "taker_net_bps": round(mean(self.taker_net), 1),
             "postonly_net_bps": round(mean(self.maker_net), 1),
@@ -101,10 +104,8 @@ async def run_execution_study(
     if not rows_in:
         logger.warning("execution study: no predictions in window")
         return []
-    grouped: dict[tuple[str, str], list[dict]] = {}
-    for r in rows_in:
-        grouped.setdefault((r["strategy_id"], r["asset_class"]), []).append(r)
-    sampled = [r for g in grouped.values() for r in subsample(g, MAX_PER_STRATEGY)]
+    # One bet, one sample (edge_study.one_per_episode); see docs/wiki/edge-study.md.
+    sampled, n_raw = sample_episodes(rows_in, MAX_PER_STRATEGY)
 
     from datetime import UTC, datetime, timedelta
 
@@ -122,7 +123,9 @@ async def run_execution_study(
         series = bars.get((t["asset_class"], t["symbol"]))
         if not series:
             continue
-        idx = _index_at(series, t["generated_at"])
+        # The limit rests at the last price the strategy had seen, not at the
+        # close of a bar that was still forming when it decided.
+        idx = entry_index(series, t["generated_at"])
         if idx <= 0 or idx >= len(series) - 2:
             continue
         horizon_bars = max(1, int((t["horizon_seconds"] or 600) // 60))
@@ -137,7 +140,9 @@ async def run_execution_study(
         if base.reason == "no_data":
             continue
         key = (t["strategy_id"], t["asset_class"])
-        row = acc.setdefault(key, ExecRow(t["strategy_id"], t["asset_class"]))
+        row = acc.setdefault(
+            key, ExecRow(t["strategy_id"], t["asset_class"], n_raw=n_raw.get(key, 0))
+        )
         row.n += 1
         row.taker_net.append(base.ret_bps - taker_round)
 

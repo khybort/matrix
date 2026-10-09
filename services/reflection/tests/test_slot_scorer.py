@@ -79,6 +79,36 @@ def test_auto_cut_caps_but_never_grants_a_slot():
     assert _auto_cut_slots(0) == 0
 
 
+def test_re_entered_fills_of_one_bet_score_as_one_loss():
+    """One wrong call held three times read as three consecutive losses. It is
+    one bet with the summed dollars."""
+    from types import SimpleNamespace
+
+    from reflection.slot_scorer import _bets
+
+    t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
+
+    def fill(minute, pnl, symbol="AAAUSDT"):
+        pos = SimpleNamespace(asset_class="crypto", symbol=symbol, side="long", pnl_usd=Decimal(str(pnl)),
+                              notional_usd=Decimal("100"), closed_at=t0 + timedelta(minutes=minute + 60))
+        return (pos, t0 + timedelta(minutes=minute), 3600)
+
+    bets = _bets([fill(0, -1), fill(5, -1), fill(10, -1), fill(2, 3, symbol="BBBUSDT"), fill(90, 1)])
+    # oldest first by close: BBB (closed +62), the AAA episode (+70), the late AAA (+150)
+    assert [round(b.pnl_usd, 6) for b in bets] == [3.0, -3.0, 1.0]
+    assert bets[1].notional_usd == 300.0
+
+
+def test_a_strategy_that_is_not_running_is_never_promoted():
+    """momentum_xs had no active config after 09-21 and still logged
+    "slot promote 2→8" every ~11 min. Not running: hold or fall, never rise."""
+    from reflection.slot_scorer import _cap_promotion
+
+    assert _cap_promotion(2, 8, live=False) == 2
+    assert _cap_promotion(2, 8, live=True) == 8
+    assert _cap_promotion(8, 2, live=False) == 2      # demotion still applies
+
+
 def test_slots_for_score_tiers():
     from reflection.slot_scorer import _slots_for_score
     assert _slots_for_score(0.80, base_share=10) == 20  # 2x
@@ -143,9 +173,12 @@ async def scorer_wallet():
 
 
 async def _seed_closed_position(
-    wallet_id: uuid.UUID, pnl_usd: float, notional: float = 200.0
+    wallet_id: uuid.UUID, pnl_usd: float, notional: float = 200.0, symbol: str | None = None
 ) -> None:
     pred_id = uuid.uuid4()
+    # A distinct symbol per seed makes each position its own bet; the scorer
+    # counts episodes, and same-(symbol, side) signals inside one horizon are one.
+    symbol = symbol or f"TEST_{pred_id.hex[:10]}"
     # Two-session insert: prediction first (FK target), position after.
     now = datetime.now(timezone.utc)
     async with shared_session_scope() as session:
@@ -154,7 +187,7 @@ async def _seed_closed_position(
             strategy_id=STRAT,
             strategy_version=1,
             asset_class=ASSET,
-            symbol="TEST_BTCUSDT",
+            symbol=symbol,
             exchange="bybit",
             side="long",
             confidence=Decimal("0.8"),
@@ -168,7 +201,7 @@ async def _seed_closed_position(
         session.add(PaperPosition(
             wallet_id=wallet_id,
             prediction_id=pred_id,
-            symbol="TEST_BTCUSDT",
+            symbol=symbol,
             exchange="bybit",
             asset_class=ASSET,
             side="long",
@@ -221,8 +254,13 @@ async def test_realized_loser_demoted_to_zero_slots(scorer_wallet):
 
 
 @pytest.mark.asyncio
-async def test_high_performance_increases_slots(scorer_wallet):
+async def test_high_performance_increases_slots(scorer_wallet, monkeypatch):
     """High win rate + positive pnl → slots should increase above initial."""
+    async def running(*a, **k):
+        return True
+
+    # The fixture strategy has no config row; promotion requires a running one.
+    monkeypatch.setattr(_ss, "_is_live", running)
     # Force a low starting point
     async with shared_session_scope() as session:
         cfg = await session.get(StrategySlotConfig, (STRAT, ASSET, scorer_wallet))

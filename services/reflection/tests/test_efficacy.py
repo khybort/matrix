@@ -62,7 +62,8 @@ async def _seed(strategy_id: str, version: int, pnls: list[float], *, observed_a
     async with shared_session_scope() as session:
         for i, _ in enumerate(pnls):
             pid = uuid.uuid4()
-            ts = observed_at - timedelta(seconds=300) + timedelta(seconds=i)
+            # Spaced past the 60 s horizon: efficacy counts episodes, not rows.
+            ts = observed_at - timedelta(seconds=120 * (len(pnls) - i))
             pairs.append(pid)
             session.add(Prediction(
                 id=pid, strategy_id=strategy_id, strategy_version=version, asset_class="crypto",

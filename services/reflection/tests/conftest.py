@@ -68,6 +68,7 @@ async def seed_outcomes():
         n: int = 10,
         win_rate: float = 0.6,
         pnl_per_trade_usd: float = 1.0,
+        spacing_s: int = 120,
     ) -> None:
         now = datetime.now(timezone.utc)
         # Two-session insert: predictions first (FK target), outcomes after.
@@ -76,7 +77,9 @@ async def seed_outcomes():
         async with shared_session_scope() as session:
             for i in range(n):
                 pid = uuid.uuid4()
-                gen_ts = now - timedelta(seconds=n - i)
+                # One horizon apart: outcomes are counted per episode, and
+                # signals inside each other's horizon would be one bet.
+                gen_ts = now - timedelta(seconds=spacing_s * (n - i))
                 is_win = (i / max(n, 1)) < win_rate
                 pairs.append((pid, gen_ts, is_win))
                 session.add(
