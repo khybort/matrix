@@ -222,3 +222,11 @@
 - **2026-10-09 — Yalnız `shadow` satırı olan strateji hiç koşmuyordu.** Dispatcher aktif satırı olmayan stratejiyi atlıyordu,
   shadow satırına hiç bakmadan; yeni bir sinyali "shadow olarak kaydet" demek sessizce hiçbir şey yapmamaktı. Artık shadow-only
   strateji shadow cüzdanında challenger olarak koşar; şampiyonu olmadığı için efficacy onu terfi ettiremez — statü kanıttan gelir.
+- **2026-10-09 — Karar sürücülerinin hepsi bölüm saymalı; "onaylandı" yolu da yeniden puanlamalı.** Ders ve yansıma katmanı
+  satır sayıyordu: `agent_lessons` kovaları ve `_confidence`'in binom z'si, reflection `metrics_window` (mutasyon kapısı),
+  setup memory kNN komşuları (Wilson), `load_pair_edges` (EV/boyut). 27 tarihsel dersin 6'sı ≥0.4 güvenle doğmuştu
+  (0.46–0.59); kendi pencerelerinde bölümle 0.00–0.14, 23'ünün hükmü kalmıyor. Eylül günlük pencerelerinde mutasyon
+  kapısı 152 strateji-günün 18'inde kapanıyor (momentum_xs 09-14: 95 satır = 8 bahis). İkinci tuzak: `_touch_confirmed`
+  yeniden onaylanan dersin `n`'ini güncelliyor ama güvenini doğduğu örnekte bırakıyordu; birim değişince eski güven
+  sonsuza kadar yaşardı. Kural: bir istatistiği tazeleyen her yol (confirm/touch/upsert) türetilmiş skoru da yeniden
+  hesaplar; satır sayan yeni tüketici yazma, `edge_study.episode_summary` kullan.

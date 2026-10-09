@@ -5,6 +5,9 @@
 
 ---
 
+## 2026-10-09 — Dersler, mutasyon kapısı, setup memory, pair edge ve Telegram win rate bölüm sayar
+- `agent_lessons`: kovalar, `_confidence` (binom z) ve koridor emekliliği `edge_study.episode_summary` ile bölüm başına; yeniden onaylanan dersin güveni de taze örnekle yeniden yazılır. `reflection.metrics_window` (`_underperforming`, param_tune yönü) ve LLM'in `recent_outcomes` aracı bölüm başına; öneri snapshot'ı `n_raw` + `unit=episode` taşır. `setup_memory` komşuları ve `allocation.load_pair_edges` (EV sıralaması + `risk_multiplier`) bölüm başına. notify 24h win rate bölüm başına (yalnız gösterim). Satır sayan yeni tüketici yazma; `episode_summary` kullan.
+
 ## 2026-10-09 — Lab fitness, sembol edge'i, Director ve dashboard bölüm (episode) sayar
 - `labs`: `n_evaluations / n_wins / total_score / fitness_score` artık skorlanmış satırlardan `edge_study.one_per_episode` ile yeniden hesaplanır (artımlı sayaç yok); `labs.main --recompute-fitness` aktif+terfi etmiş 51 deneyi yeniden skorladı. Terfi taraması bölüm sayımıyla tekrar kontrol eder, `metrics_window`'a `n/n_raw/n_unscorable/unit` yazar. `ENTRY_FRESHNESS_S` (60 s) artık uygulanıyor. `universe._edge_map` sembol edge'ini bölüm başına hesaplar (paper engine EV sıralaması bunu okur).
 - Director digest + `strategy_pnl` aracı, web `/api/dashboard` `strategyAgg` ve `/api/public/stats`: n ve win rate bölüm başına, `n_raw` (fill) ve `n_unscorable` (orphan flat-close) yanında. Web, Python tanımının TS aynasını kullanır (`apps/web/src/lib/episodes.ts`) — ikisi birlikte değişmeli. `public/stats` artık orphan flat-close'ları saymaz.
