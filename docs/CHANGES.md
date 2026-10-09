@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-10-09 — Edge study: dürüst giriş kuralı; carry'ler gerçekleşmiş epizodlarla `confirmed` olabilir; venue-sabit okuyucular
+- `edge_study.entry_index` / `simulate_bracket`: her kol (tedavi + iki kontrol) `generated_at + MATRIX_EDGE_ENTRY_LATENCY_S` (4 s) anında veya sonrasında başlayan İLK 1m barın **açılışında** girer ve o bardan itibaren skorlanır; sinyal öncesi hiçbir yol skora girmez. Aynı kural barrier/horizon/execution/meta-label çalışmalarında (`entry_price`). 30 günlük önce/sonra: `docs/wiki/edge-study.md` "Correction — pre-signal path". Hiçbir `status` değişmedi.
+- Carry kanıt yolu: `edge_study.carry_edge_rows` + ortak `apply_promotion_bar` — CARRY_SIDES pozisyonlarının KAPANMIŞ paper epizodlarının gerçekleşmiş net bps'i (90 g, `MATRIX_EDGE_CARRY_DAYS`), sıfıra karşı gün-kümeli t (≥20 gün, `MATRIX_EDGE_CARRY_MIN_DAYS`), aynı BHY/DSR/ön-kayıtlı n; satır `kind: carry`, `net_of_costs: true` (`verdict` maliyeti ikinci kez düşmez). `_promotion_confirmed` değişmeden okur. Açık: `paper_trade._kelly_fractions` carry satırında round-trip'i yine düşüyor (muhafazakâr).
+- `regime.py` funding, `labs.evaluate.fresh_symbols`, `backtest.replayers.matrix_agent` ticker/book: `exchange='bybit'` sabit.
+
 ## 2026-10-09 — Borç faizi kaydediliyor; carry kapanışı borcu kayıtlı seriden öder
 - Göç **0041** `margin_borrow_rates` (lokal DB): `venue, coin, ts, hourly_rate, max_borrow, borrowable`. `ingestion.borrow_recorder` (`ingestion-market` içinde) Bybit spot-margin VIP0 + Binance cross-margin VIP0 public tablolarını 10 dk'da bir okur, TÜM coin'leri yazar (değişince veya saatte bir nabız); 180 gün tutar, saatlik silme `ts` indeksiyle. `BORROW_RECORDER_ENABLED=false` kapatır.
 - `paper_trade` carry kapanışı ve açık carry equity işareti (ortak `backtest.carry_books.carry_borrow`): borç her başlamış saat için o saatin kayıtlı oranıyla ×1; serinin kaçırdığı saatler giriş kotası × `MATRIX_CARRY_BORROW_STRESS` (3). `context.borrow_source` = `series|stressed_entry|mixed`.

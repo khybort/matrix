@@ -427,3 +427,35 @@
   yayımlanmayan bir seriyi ihtiyaç doğmadan kaydetmeye başla (`margin_borrow_rates`), muhasebe kaynağı kaydetsin
   (`borrow_source`). (3) Gevşetilen bir filtrenin eski kararını her sinyalde kaydet (`flat_keep`) ki yalnız yeni kuralın
   aldığı epizodlar ayrı yargılanabilsin. Kaynak: `docs/wiki/signal-research-2026-10.md` "Borrow measurement".
+
+- **2026-10-09 — An entry rule must keep the WHOLE scored path after the signal, and the bias sign depends on the strategy.**
+  The edge study's fix for look-ahead (enter at the close of the last bar closed before the signal) moved the entry
+  price back in time but kept scoring from the bar in force at the signal — up to 60 s of pre-signal path inside the
+  window. Momentum/breakout signals were credited the move that fired them (oi_delta −11.9 bps, momentum_xs −9.3 once
+  removed); a mean-reversion grid was *charged* the fall it bought (−7.5 → +3.0 gross, which withdrew a "t≈−5.9 worse
+  than chance" finding). Rules: (1) Define entry as "the first price observable at or after `generated_at` + latency"
+  (open of the first 1m bar starting at/after it) and score from that bar; check BOTH the entry price and the first
+  scored bar against the signal time. (2) Controls use the identical rule. (3) A study fix that changes a shared
+  helper's convention (`entry_index`, `simulate_bracket`) must update every reader in the same save: barrier vol (only
+  bars closed before entry), horizon returns, a post-only limit (the entry bar cannot fill it: its low ≤ its open by
+  construction). (4) Measure before/after on the same episodes and the same random draws, so the delta is the rule only.
+  Source: `fix(edge-study)` 2026-10-09; `docs/wiki/edge-study.md` "Correction — pre-signal path".
+
+- **2026-10-09 — A new side family needs its own evidence path into the SAME status field, or its gates never open.**
+  Carries were excluded from the edge study by a `side IN ('long','short')` filter, so `status` was never `confirmed`
+  for one and every gate keyed on it (`_promotion_confirmed` → the $500/leg book ceiling, Kelly) stayed shut forever —
+  silently, because "unproven" is a legal state. When a decision reads a status, list every population that can reach
+  that decision and confirm each one has a path to every status value. Carry evidence is realised (closed paper
+  episodes, never a bracket replay), its null is zero, its t is clustered by day (same-day carries share a funding
+  regime: with per-day correlation an i.i.d. t rejected a true zero in >15 % of synthetic runs, the clustered t <10 %),
+  and it goes through the same BHY/deflated-Sharpe/pre-registered-n bar. A row already net of costs must say so
+  (`net_of_costs`) or every consumer that subtracts a round trip charges it twice. Every new statistical gate ships with
+  a zero-edge synthetic test that it does not confirm noise (`tests/test_carry_evidence.py`).
+
+- **2026-10-09 — Pin every "latest row per symbol" reader to its venue, not only the one that broke.**
+  After `agent.features` was pinned to `exchange='bybit'` (688894b), three more symbol-only readers remained:
+  labs freshness (`max(snapshot_ts)` — a fresh binance/spot row made a stale bybit feed look live), `regime.py` BTC
+  funding (bybit-spot rows carry funding 0), and the matrix_agent replayer (ticker, OI and book). When a table gains a
+  writer under an existing key, grep every reader of that table (`market_ticker_snapshots`, `market_orderbook_snapshots`)
+  for symbol-only filters and fix them in one pass, each with a test that inserts a newer foreign-venue row.
+

@@ -1,7 +1,7 @@
 ---
 title: Edge study — do the entries carry signal?
 updated: 2026-10-09
-sources: [packages/python-shared/src/matrix_shared/edge_study.py, "make edge-report DAYS=14 DRAWS=30", "edge study read-only rerun 2026-10-09 12:32 UTC, 30 d, per strategy, registry writes disabled (before = rows + no gap guard, after = episodes + gap guard)", "db: predictions ⋈ paper_positions delay analysis 2026-09-20", "db: momentum_xs signal→wallet gap decomposition 2026-10-09 (155 closed positions of 2026-09-21 ⋈ predictions ⋈ 1m bars)"]
+sources: [packages/python-shared/src/matrix_shared/edge_study.py, "make edge-report DAYS=14 DRAWS=30", "entry-rule before/after, read-only, 30 d to 2026-10-09 16:46 UTC, episodes, 20 draws, seed 7 (lower-level functions; registry untouched)", "carry evidence read-only 2026-10-09 (carry_edge_rows over 90 d of paper positions, in-memory registry)", "edge study read-only rerun 2026-10-09 12:32 UTC, 30 d, per strategy, registry writes disabled (before = rows + no gap guard, after = episodes + gap guard)", "db: predictions ⋈ paper_positions delay analysis 2026-09-20", "db: momentum_xs signal→wallet gap decomposition 2026-10-09 (155 closed positions of 2026-09-21 ⋈ predictions ⋈ 1m bars)"]
 status: current
 ---
 
@@ -33,11 +33,105 @@ is still inside its horizon. A strategy that re-emits the same call every tick
 is one bet the wallet can hold once, not hundreds of samples. The report keeps
 the raw count as `n_raw` beside the episode count `n`.
 
-**No look-ahead in the entry (since 2026-10-09).** Bar `ts` is the bar's start,
-so the bar "in force" at `generated_at` closes up to a minute later. The
-treatment now enters at the close of the last bar that had closed when the
-signal was generated (`entry_index`). Measured effect on momentum_xs was small
-(≈2 bps), but it was a free advantage only the treatment arm had.
+**Entry rule: no part of the scored path precedes the signal (since
+2026-10-09, second fix).** Bar `ts` is the bar's start. Every arm — treatment,
+random-time control, random-side control — enters at the **open of the first
+1m bar starting at or after `generated_at` + 4 s** (`ENTRY_LATENCY`, the
+paper engine's measured fill latency; `MATRIX_EDGE_ENTRY_LATENCY_S`) and is
+scored from that bar on (`simulate_bracket`, `entry_index`). A signal whose
+next bar starts more than `MAX_ENTRY_AGE` (3 min) later sits before a hole and
+is unscorable. The barrier, horizon, execution and meta-label studies use the
+same rule (`entry_price`; vol for the barrier study from bars closed before
+the entry bar; a post-only limit rests at the entry bar's open and can only
+fill from the next bar).
+
+History: the first rule entered at the close of the bar in force (a price the
+strategy could not have seen). Its replacement entered at the close of the
+last bar closed *before* the signal and scored from the bar in force — up to
+60 s of pre-signal path inside the scored window. See the correction below.
+
+## Correction — pre-signal path in the entry bar (2026-10-09)
+
+The correctness review found that the second rule credited the minute in which
+a signal fired to the strategy: for a momentum or breakout signal, the very
+move that triggered it. The bias is not one-signed — a mean-reversion entry
+fires *on* an adverse move, so it was charged that move. Measured on the same
+30 days, same episodes and same random draws (seed 7, 20 draws), old rule vs
+new, gross bps; `vs time` / `vs side` = lead over the null (t):
+
+| strategy / market | n old/new | gross old → new | Δ | vs time old → new | vs side old → new |
+|---|---|---|---|---|---|
+| grid / crypto | 1460/1465 | −7.5 → **+3.0** | **+10.6** | −7.6 (−4.97) → +2.9 (+1.93) | −7.8 (−5.10) → +3.1 (+2.02) |
+| funding_reversion / crypto | 1220/1224 | +4.2 → +3.5 | −0.7 | +2.8 (+1.04) → +1.7 (+0.66) | −1.0 (−0.36) → −0.6 (−0.24) |
+| dca / crypto | 1066/1078 | +0.2 → +1.1 | +0.9 | +0.5 (+0.26) → +1.0 (+0.51) | −0.9 (−0.45) → −0.5 (−0.23) |
+| matrix_agent / crypto | 659/659 | +5.0 → +4.9 | −0.1 | +3.4 (+0.79) → +2.8 (+0.66) | +2.0 (+0.47) → +4.2 (+0.97) |
+| oi_delta / crypto | 384/398 | +5.0 → **−6.9** | **−11.9** | +4.3 (+0.55) → −6.2 (−0.85) | +1.9 (+0.24) → −10.8 (−1.48) |
+| momentum_xs / crypto | 277/287 | −18.4 → **−27.6** | **−9.3** | −17.4 (−1.54) → −32.1 (−2.92) | −24.8 (−2.19) → −28.8 (−2.62) |
+| bist_volume_breakout / bist | 202/218 | −13.2 → −10.0 | +3.2 | −10.0 (−1.68) → −7.8 (−1.29) | −15.4 (−2.56) → −9.9 (−1.61) |
+| oi_breakout / crypto | 188/195 | −7.3 → −6.5 | +0.8 | −9.3 (−0.67) → −9.5 (−0.72) | −15.7 (−1.13) → −6.7 (−0.50) |
+| bist_gap_fade / bist | 109/119 | +15.2 → +7.0 | −8.3 | +15.0 (+1.59) → +8.2 (+0.91) | +17.6 (+1.89) → +7.9 (+0.89) |
+| matrix_agent / us | 86/85 | −1.5 → −4.9 | −3.4 | −1.3 (−0.32) → −4.4 (−1.03) | +0.6 (+0.15) → −3.5 (−0.84) |
+| bist_intraday_reversion / bist | 56/57 | +25.0 → +18.1 | −6.9 | +33.3 (+1.74) → +21.3 (+1.17) | +34.4 (+1.83) → +21.1 (+1.18) |
+| bist_news_event / bist | 11/16 | +2.9 → +2.8 | −0.0 | +20.9 (+1.86) → +2.8 (+0.33) | +9.1 (+2.49) → +6.1 (+1.90) |
+
+(`matrix_agent / crypto` is 659, not the 1 054 in the table below, because
+exploration probes left the study in ad03b11.)
+
+Reading:
+- The breakout/momentum family was **flattered** by the pre-signal minute:
+  oi_delta −11.9, momentum_xs −9.3, bist_gap_fade −8.3, bist_intraday_reversion
+  −6.9 bps. momentum_xs is now significantly *worse* than random entry
+  (t=−2.92) — no case for capital.
+- grid was **charged** its trigger move (it buys into a fall): −7.5 → +3.0
+  gross, and the "reliably worse than chance, t≈−5.9" finding below is
+  **withdrawn** — it was the entry rule. grid now leads both nulls at t≈2 but
+  sits at +3 bps gross against a 15 bps round trip: still not `pays`, and not
+  BHY-significant at m≈14.
+- No row changes status: nothing beats a null after correction, every `status`
+  is still `unproven`. The paper wallet was never sized on these numbers
+  (nothing was `confirmed`), so there is no realised-PnL consequence to undo.
+
+## Carry evidence — realised episodes, not simulation (since 2026-10-09)
+
+Carries (`CARRY_SIDES`: delta_neutral, inverse_carry, xexch_carry) were never
+measured: `_load_candidates` reads only long/short. A carry could therefore
+never reach `confirmed`, so `paper_trade._promotion_confirmed` was always False
+for it, the book-priced carry's $500/leg ceiling never lifted and Kelly never
+applied. A bracket replay is the wrong model for a carry (its PnL is funding,
+four fees, two book walks and borrow), so carries get their own evidence path
+feeding the **same** `status` field:
+
+- `carry_edge_rows`: one row per carry (strategy, market) from its **closed
+  paper positions** over `MATRIX_EDGE_CARRY_DAYS` (90 d; the band's `since`
+  when the strategy has a shadow band). Shadow-wallet fills count — a carry's
+  paper book is its evidence. Positions are grouped into episodes
+  (`shadow_tracker.decompose` → `episode_groups`); the sample is each
+  episode's realised net bps (`pnl_usd` is already net of funding, fees, book
+  and borrow; `funding_bps`/`borrow_bps`/`book_bps` decompose it). Open
+  episodes are `n_open`, not evidence.
+- The null is **zero**. `t` is clustered by the UTC day the episode opened
+  (same-day carries share one funding regime); with fewer than 20 day clusters
+  (`MATRIX_EDGE_CARRY_MIN_DAYS`) `t`=0, p=1 — neither `pays` nor `harmful` can
+  be read off a handful of regimes (`t_day` keeps the raw value).
+- The row then goes through `apply_promotion_bar` with the directional rows:
+  BHY over the whole family (carry pairs now count in `_family_size`), deflated
+  Sharpe on the per-episode nets, the pre-registered `required_n` (floor 200)
+  and `promotion.status`. `net_of_costs: true` tells `verdict` not to charge
+  the round trip a second time.
+- Zero-edge check (`tests/test_carry_evidence.py`): 200 synthetic zero-edge
+  carries, 300 episodes over 60 days with a shared day shock — **0 confirmed,
+  0 `pays`** at m=13; ≤ 5 % confirm even at m=1. With per-day correlation an
+  i.i.d. t rejects a true zero in >15 % of runs; the day-clustered t stays
+  under 10 %. A +80 bps carry on the same noise confirms.
+- Live, 2026-10-09: cash_and_carry 57 episodes / 9 days −3.1 bps,
+  inverse_carry 22 / 13 days +11.9, xexch_funding_arb 13 / 6 days −20.3
+  (t_day −3.4), neg_funding_carry 0 closed / 3 open — all `unproven`, all
+  short of 20 day clusters. Nothing is sized on them yet.
+
+Known gap: `paper_trade._kelly_fractions` subtracts `execution_cost_bps × 2`
+from the edge before Kelly. For a carry row (already net) that double-counts
+~15 bps — conservative, and only once a carry is `confirmed`. The fix belongs
+in paper_trade (pass `cost_bps=0` when `row["net_of_costs"]`).
 
 ## Correction — the momentum_xs edge was pseudo-replication (2026-10-09)
 
@@ -100,6 +194,9 @@ horizon**. A 300 bps TP is out of reach for a 60–90 min hold (median MFE
 
 ## Findings — 30 days to 2026-10-09, episodes, gap guard on
 
+*Measured with the pre-signal entry rule; see the correction above for the
+same window under the honest rule.*
+
 Read-only rerun 2026-10-09 12:32 UTC (each strategy alone, registry writes
 disabled). `n` = independent episodes simulated, `n_raw` = signal rows,
 `unsc` = signals with no clean bars (stale entry or a hole inside the window;
@@ -132,9 +229,10 @@ episodes (132 unscorable). The whole "edge" was the jump across the hole.
 Reading:
 - **Nothing beats a null after correction** (none BHY-significant positive,
   every DSR ≤ 0.50); every `status` is `unproven`.
-- **grid is reliably worse than chance**: −8.7 bps against both nulls with
-  t≈−5.9 on 1 461 episodes, gross level below zero before any cost. Rows hid
-  it (−0.0); the dense re-emission diluted the bad episodes with near-copies.
+- ~~**grid is reliably worse than chance**: −8.7 bps against both nulls with
+  t≈−5.9 on 1 461 episodes.~~ **Withdrawn 2026-10-09**: the entry rule charged
+  grid the fall that triggered each buy; with the honest entry it is +3.0
+  gross, +2.9 vs time (t=1.93). See "Correction — pre-signal path".
 - funding_reversion's 13 804 rows were 1 217 bets (11×); its t fell 3.47 →
   1.34 and its realised net is −31.8 bps a fill.
 - The BIST positives (gap_fade +22, intraday_reversion +30) sit on 56–109
@@ -189,7 +287,7 @@ measured reason to hold capital.
   `bist_news_event`, the latter on n=33, which is too thin to allocate against.
   See [[methods]].
 - **Remaining caveats.** Controls are drawn from the same period, so market
-  drift appears in both arms. The simulator enters at a 1m bar close and does
+  drift appears in both arms. The simulator enters at a 1m bar open and does
   not model slippage beyond the flat cost assumption.
 
 ## How it is used
