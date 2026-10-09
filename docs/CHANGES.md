@@ -106,6 +106,9 @@
 - 2026-09-16 08:16'da postgres kısa süre "recovery mode"a girdi; `backtest` worker'ı bu geçici hatada öldü. `watchfiles.run_process` yalnız dosya değişiminde restart ettiği için container "Up" göründü ama içinde işçi yoktu: 3 gün boyunca hiç pozisyon açılmadı/kapanmadı (son kapanış 09-16 08:17, 8 pozisyon donmuş kaldı). Aynı desen daha önce reflection'da da görülmüştü.
 - `matrix_shared/dev_watchfiles.py` yeniden yazıldı: hot reload + **crash supervisor** (çocuk kendi kendine çıkarsa 2→60 s kapaklı backoff ile yeniden başlatılır, her restart loglanır; `MATRIX_WATCH_SUPERVISE=0` ile kapatılır). Regresyon testi: sürekli çöken çocuk ≥3 kez yeniden başlatılır.
 
+## 2026-09-15 — LLM failover: subscription CB açıkken Cursor/OpenRouter'a düş
+- Claude subscription 9 ardışık hatada 900s breaker açıyordu; plan `sub → openrouter → rules` idi ama `OPENROUTER_API_KEY` boş olduğu için zincir **boşalıyordu** — agent 15 dk LLM'siz, analiz duruyordu. Cursor Docker volume login'i (`cursor_available=true`) plan dışında kalmıştı. Default plan artık `subscription → cursor → openrouter → rules`; breaker açıkken `cursor → openrouter`. Deterministik kural yolu hâlâ son durak. `test_openrouter_llm.py`. OpenRouter primary için `.env`'de key şart (`make llm-openrouter`).
+
 ## 2026-09-14 — Agent LLM çağrı sayısı: batch 4 → 12, HOLD cooldown 5 → 10 dk
 - US açılınca agent 10 dk'da 43 CLI çağrısı yapıyordu (~260/saat). Her çağrının maliyeti içerikten bağımsız ~20k token harness overhead'i olduğu için batch büyütüldü (`MATRIX_AGENT_BATCH_CHUNK`, market başına tek çağrı) ve HOLD sonrası bekleme 600 s (`MATRIX_AGENT_HOLD_COOLDOWN_S`). Hedef ≤ 60 çağrı/saat.
 

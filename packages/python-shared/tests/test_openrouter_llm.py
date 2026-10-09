@@ -17,10 +17,13 @@ pytestmark = pytest.mark.asyncio
 
 def _clear(monkeypatch):
     for k in ("MATRIX_LLM_BACKEND", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK",
-              "CLAUDE_CODE_USE_VERTEX", "OPENROUTER_API_KEY", "CURSOR_API_KEY"):
+              "CLAUDE_CODE_USE_VERTEX", "OPENROUTER_API_KEY", "CURSOR_API_KEY",
+              "CLAUDE_CONFIG_DIR"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/matrix-no-claude-creds")
     monkeypatch.setattr(OR, "_cooldown_until", 0.0)
     monkeypatch.setattr("matrix_shared.subscription_llm._breaker_cooldown_until", 0.0)
+    monkeypatch.setattr("matrix_shared.cursor_llm._cli_logged_in_sync", lambda: False)
 
 
 def test_plan_puts_openrouter_last_by_default_and_first_when_primary(monkeypatch):
@@ -32,6 +35,24 @@ def test_plan_puts_openrouter_last_by_default_and_first_when_primary(monkeypatch
     assert _plan_backends() == ["subscription", "openrouter"]
     monkeypatch.setenv("MATRIX_LLM_BACKEND", "openrouter")
     assert _plan_backends() == ["openrouter", "subscription"]
+
+
+def test_plan_inserts_cursor_when_subscription_breaker_open(monkeypatch):
+    """Don't sit idle for 900s when Claude quota trips — Cursor (already
+    logged in on this node) and OpenRouter are next, then rules."""
+    _clear(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setattr("matrix_shared.cursor_llm._cli_logged_in_sync", lambda: True)
+    monkeypatch.setattr("matrix_shared.subscription_llm._breaker_cooldown_until", 1e18)
+    assert _plan_backends() == ["cursor", "openrouter"]
+
+
+def test_plan_does_not_tail_cursor_while_subscription_is_in_plan(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    monkeypatch.setattr("matrix_shared.cursor_llm._cli_logged_in_sync", lambda: True)
+    assert _plan_backends() == ["subscription"]
 
 
 def test_openrouter_cooldown_removes_it_from_plan(monkeypatch):
@@ -169,4 +190,5 @@ def test_subscription_ready_via_credentials_file(monkeypatch, tmp_path):
     assert S._subscription_ready() is False and S.subscription_enabled() is False
     (tmp_path / ".credentials.json").write_text('{"claudeAiOauth": {"accessToken": "x"}}')
     assert S._subscription_ready() is True and S.subscription_enabled() is True
+    monkeypatch.setattr("matrix_shared.cursor_llm._cli_logged_in_sync", lambda: False)
     assert _plan_backends() == ["subscription"]

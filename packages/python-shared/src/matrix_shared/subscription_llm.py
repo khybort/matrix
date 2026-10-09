@@ -219,24 +219,32 @@ def _plan_backends() -> list[str]:
     MATRIX_LLM_BACKEND=openrouter.
     """
     orr = ["openrouter"] if _openrouter_ready() else []
+    cur = ["cursor"] if _cursor_ready() else []
     if _openrouter_primary():
         sub = ["subscription"] if _subscription_ready() and not breaker_is_open() else []
-        return orr + sub
+        return orr + sub + [b for b in cur if b not in orr]
     if _cursor_primary():
         return (["cursor"] if _cursor_ready() else []) + orr
     now = time.monotonic()
     if not _bedrock_primary():
         sub = ["subscription"] if _subscription_ready() and not breaker_is_open() else []
-        return sub + orr
+        # Cursor CLI in this stack reports "available" but often isn't
+        # authenticated (`agent login` required). Don't append it after a
+        # live subscription (that would add ~2s of failed CLI on every
+        # Claude error). Only substitute when the subscription is already
+        # skipped (circuit breaker open): cursor → openrouter → rules.
+        if sub:
+            return sub + orr
+        return cur + orr
     sub = ["subscription"] if _subscription_ready() else []
     if _bedrock_demoted:
         # On subscription now; periodically probe Bedrock to restore it.
-        return ((["bedrock"] + sub) if now >= _bedrock_next_try else sub) + orr
+        return ((["bedrock"] + sub) if now >= _bedrock_next_try else sub) + cur + orr
     # Within the grace window: keep trying Bedrock (respect probe backoff); do
     # NOT use the subscription yet — sustained failure must persist GRACE_S first.
     if now >= _bedrock_next_try:
-        return ["bedrock"] + orr
-    return orr
+        return ["bedrock"] + cur + orr
+    return cur + orr
 
 
 def _record_bedrock(ok: bool) -> None:
