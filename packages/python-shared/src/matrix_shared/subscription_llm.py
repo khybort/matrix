@@ -28,9 +28,9 @@ from matrix_shared import usage_ledger
 # CLAUDE_CODE_OAUTH_TOKEN). For Bedrock, set e.g.
 #   MATRIX_MODEL_SONNET=us.anthropic.claude-sonnet-4-6-20250929-v1:0
 # in .env; for Vertex, the equivalent vertex-style ID.
-MODEL_HAIKU = os.environ.get("MATRIX_MODEL_HAIKU", "claude-haiku-4-5-20251001")
-MODEL_SONNET = os.environ.get("MATRIX_MODEL_SONNET", "claude-sonnet-4-6")
-MODEL_OPUS = os.environ.get("MATRIX_MODEL_OPUS", "claude-opus-4-7")
+MODEL_HAIKU = os.environ.get("MATRIX_MODEL_HAIKU") or "claude-haiku-4-5-20251001"
+MODEL_SONNET = os.environ.get("MATRIX_MODEL_SONNET") or "claude-sonnet-4-6"
+MODEL_OPUS = os.environ.get("MATRIX_MODEL_OPUS") or "claude-opus-4-7"
 
 def _resolve_default_model() -> str:
     """Project-wide default tier for callers that don't pin a model.
