@@ -25,7 +25,7 @@ from loguru import logger
 
 from matrix_shared import shared_session_scope
 from matrix_shared.markets import MarketAdapter, all_markets
-from matrix_shared.markets.crypto import crypto_universe_async
+from matrix_shared.markets.crypto import carry_watchlist_async, crypto_universe_async
 from matrix_shared.models import StrategyConfig
 from sqlalchemy import select
 
@@ -188,6 +188,10 @@ async def _tick() -> int:
     # crypto strategy so they analyze the same set ingestion streams + the agent
     # trades. Other markets resolve their own universe internally.
     crypto_symbols = await crypto_universe_async()
+    # Carry coins stream via ingestion's watchlist but are not traded directionally:
+    # only the carry module sees them, so no directional strategy picks a coin
+    # chosen for its funding.
+    carry_symbols = crypto_symbols + [s for s in await carry_watchlist_async() if s not in crypto_symbols]
     drafts: list[PredictionDraft] = []
     for market in all_markets():
         if not market.is_session_open():
@@ -195,6 +199,8 @@ async def _tick() -> int:
             continue
         market_symbols = crypto_symbols if market.name == "crypto" else None
         for strat in _instantiate_for_market(market, market_symbols, configs):
+            if market.name == "crypto" and strat.id == "neg_funding_carry":
+                strat.symbols = carry_symbols
             try:
                 ds = await strat.generate()
                 if getattr(strat, "matrix_is_shadow", False):
