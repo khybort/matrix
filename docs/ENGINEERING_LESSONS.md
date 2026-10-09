@@ -494,3 +494,21 @@
 - **2026-10-09 — A 1m bar cannot order a resting limit's fill against its own high and low.** The entry-rule change
   started scoring the maker fill bar itself (`execution_study`), so a TP printed before the touch was credited (TP wins
   ties). After a passive fill, score from the next bar at the limit price (`maker_fill_result`).
+- **2026-10-09 — An accounting fix needs an evidence cutoff, not just a code fix.** The per-settlement funding fix
+  (7d7b854) corrected new closes, but `edge_study` kept reading 90 days of carry closes and only the strategy with a
+  shadow band had a start date: inverse_carry's 70 placeholder-flip exits stayed its evidence. When a fix changes how
+  PnL is booked, add the go-live instant as a cutoff on every evidence reader (`MATRIX_EDGE_CARRY_EVIDENCE_SINCE`),
+  matched on when the row was booked (closed_at), and find the instant from the data, not the commit time.
+- **2026-10-09 — "Too thin to fill" is not "no book".** `carry_books.close_cost_bps` fell back to the open-time estimate
+  whenever `walk_bps` returned None, so the squeeze — depth gone on exactly the coin being bought back — was priced at
+  the calm-day cost, and so was the risk-gate mark. A missing input and an input that says "worse than measurable" need
+  different fallbacks; the second one must be conservative (walk what exists, penalise the rest, never below the
+  estimate).
+- **2026-10-09 — Mark an alert sent only after delivery, and keep the mark off /tmp.** notify set `review_sent` (and the
+  verdict signature) when it built the alert, before `push`; with Telegram unreachable (2026-09-30: nine days) a
+  once-only alert is lost for good. State in a container's /tmp also dies with a recreate. Alert dedupe state goes to
+  the DB (`notify_alert_state`) and is advanced by the delivery result; an unreadable state skips the tick rather
+  than reading as "nothing sent".
+- **2026-10-09 — Zero is a value, missing is an anomaly.** shadow_tracker treated a "0" borrow quote / all-zero recorded
+  series like a missing charge and fired `broken`. Anomaly checks must separate "the field is absent / the fallback
+  did not run" from "the recorded input was zero".

@@ -206,7 +206,11 @@ Verdicts, most severe first: **broken** (no episode opened for 72 h while the
 watchlist had ≥ 10 settlements at ≤ −0.08 %; or a closed episode with zero
 funding over ≥ 9 h, borrow not charged, or no book cost), **collecting**
 (< 20 closed), **below_band** (mean ≤ +30: costs ate the edge, do not promote),
-**on_track**. An unknown opportunity count never flags staleness.
+**on_track**. An unknown opportunity count never flags staleness. "Borrow not
+charged" = the quote or charge field is missing, or nothing was charged on a
+positive quote (the stressed fallback was not applied); a zero charge on a
+zero entry quote, or on a `series` close whose recorded hourly mean is zero,
+is the venue's price and is not broken (2026-10-09).
 
 Two pre-registered A/B splits ride on the same closed episodes (added 2026-10-09):
 `by_borrow_source` (n, mean net per `context.borrow_source`: series / mixed /
@@ -222,8 +226,11 @@ mean net ≤ 0 → `MATRIX_NFC_BORROW_MODEL=flat`; (c) `decay_keep=false` (naive
 mean net ≤ 0 → `MATRIX_NFC_EXPECTED_MODEL=decay`. An empty arm never holds; an arm
 under 10 is flagged thin. Band fields: `revisit_series_episodes` (30) and the env
 names. When series episodes reach 30, notify sends **`review_due` once** per strategy
-(`review_sent` in the state file; a container recreate that wipes `/tmp` would send
-it once more). It names the rules that hold and the env line; nothing applies it —
+(`review_sent`). Every shadow alert — verdict change, persisting `broken`,
+`review_due` — is marked sent only after Telegram accepts it; an undelivered one
+fires again on the next shadow tick (15 min). State is the `shadow` row of
+`notify_alert_state` (local DB, migration 0042), so a container recreate keeps it;
+an unreadable state skips the tick instead of re-firing everything. It names the rules that hold and the env line; nothing applies it —
 an entry gate is the main session's decision. The digest line gains
 `borrow src 30/0/0 series/mixed/stressed, review at 30/30 series` once an episode has
 closed. Example (synthetic rows):

@@ -35,7 +35,13 @@ from notify.bot import (
     push,
 )
 from notify.health import HealthFlags, collect_health, detect_health_alerts
-from notify.shadow import SHADOW_EVERY_S, detect_shadow_alerts, load_state, save_state
+from notify.shadow import (
+    SHADOW_EVERY_S,
+    deliver_shadow_alerts,
+    detect_shadow_alerts,
+    load_state,
+    save_state,
+)
 from notify.state import (
     get_active_strategies,
     get_default_wallet,
@@ -87,7 +93,7 @@ async def _poll_loop(
 ) -> None:
     snap = PollSnapshot()
     health_flags = HealthFlags()
-    shadow_state = load_state()
+    shadow_state: dict | None = None  # loaded from the DB on the first shadow tick
     shadow_due = 0.0
     # Seed once before going into the loop so the first tick has a baseline.
     try:
@@ -123,7 +129,11 @@ async def _poll_loop(
         except Exception as e:
             logger.exception(f"health probe failed: {e}")
 
-        # Shadow-book verdicts against their pre-registered bands.
+        # Shadow-book verdicts against their pre-registered bands. Each is
+        # marked sent only once delivered; an undelivered one fires again on
+        # the next shadow tick.
+        shadow_alerts = []
+        shadow_ticked = False
         if time.time() >= shadow_due:
             shadow_due = time.time() + SHADOW_EVERY_S
             try:
@@ -131,12 +141,14 @@ async def _poll_loop(
 
                 from matrix_shared.shadow_tracker import collect as collect_shadow
 
-                reports = await collect_shadow()
-                shadow_alerts, shadow_state = detect_shadow_alerts(
-                    shadow_state, reports, datetime.now(timezone.utc)
-                )
-                save_state(shadow_state)
-                alerts.extend(shadow_alerts)
+                if shadow_state is None:
+                    shadow_state = await load_state()
+                if shadow_state is not None:  # unreadable state: evaluating would re-fire every loud verdict
+                    reports = await collect_shadow()
+                    shadow_alerts, shadow_state = detect_shadow_alerts(
+                        shadow_state, reports, datetime.now(timezone.utc)
+                    )
+                    shadow_ticked = True
             except Exception as e:
                 logger.exception(f"shadow tracker failed: {e}")
 
@@ -152,6 +164,16 @@ async def _poll_loop(
                 logger.info(f"[dry-run] {level}: {text}")
             else:
                 await push(app, level, text)
+
+        if shadow_ticked:
+            async def _send(level: str, text: str) -> bool:
+                if dry_run or app is None:
+                    logger.info(f"[dry-run] {level}: {text}")
+                    return True
+                return await push(app, level, text) > 0
+
+            await deliver_shadow_alerts(shadow_state, shadow_alerts, _send)
+            await save_state(shadow_state)
 
         # A contested bot token is invisible from inside: sending still works,
         # only receiving is stolen. Say so on the channel that does work, at

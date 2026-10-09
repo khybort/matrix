@@ -24,7 +24,9 @@ funding = pnl + book + borrow. Verdicts, most severe first:
   broken      no episode opened for `stale_hours` while the watchlist had at
               least `min_qualifying` qualifying settlements, or a closed
               episode with a decomposition anomaly (zero funding over a hold
-              that crossed a settlement, borrow not charged, book not charged)
+              that crossed a settlement, borrow not charged — a missing quote or
+              charge, or nothing charged on a non-zero quote; a zero quote or an
+              all-zero recorded series is genuine — book not charged)
   collecting  fewer than `min_episodes` closed episodes
   below_band  mean net ≤ `floor_bps`
   on_track    otherwise
@@ -158,6 +160,23 @@ def _utc(ts: datetime) -> datetime:
     return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
 
 
+def _borrow_charged(r: dict, charged: float | None) -> bool:
+    """Was borrow charged as the recorded quotes say it should be? A missing
+    quote or charge field means the close never ran the borrow path. A zero
+    charge is genuine only when the quotes were zero: the entry quote itself
+    (every fallback hour is quote x stress = 0), or every hour priced from the
+    recorded series at a mean of zero. A positive quote that charged nothing
+    means the fallback was not applied."""
+    quote = _f(r.get("borrow_rate_hourly"))
+    if charged is None or quote is None or charged < 0:
+        return False
+    if charged > 0:
+        return True
+    if quote == 0:
+        return True
+    return r.get("borrow_source") == "series" and _f(r.get("borrow_series_mean_hourly")) == 0
+
+
 def decompose(rows: list[dict], components: Iterable[str] = ("funding", "borrow", "book")) -> list[Episode]:
     """Group filled rows into episodes and split each closed one into funding,
     borrow and book cost (USD; costs positive). Rows carry the episode fields
@@ -181,7 +200,7 @@ def decompose(rows: list[dict], components: Iterable[str] = ("funding", "borrow"
         borrow_ok = book_ok = True
         for r in g:
             charged = _f(r.get("borrow_charged_usd"))
-            if charged is None or charged <= 0 or not _f(r.get("borrow_rate_hourly")):
+            if not _borrow_charged(r, charged):
                 borrow_ok = False
             borrow += charged or 0.0
             bk = _f(r.get("book_close_bps"))

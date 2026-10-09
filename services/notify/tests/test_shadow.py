@@ -9,7 +9,8 @@ import pytest
 from matrix_shared import shadow_tracker as st
 
 from notify.health import ALERT_INFO, ALERT_WARNING
-from notify.shadow import detect_shadow_alerts, load_state, save_state
+from notify import shadow as ns
+from notify.shadow import deliver_shadow_alerts, detect_shadow_alerts, load_state, save_state
 
 T0 = datetime(2026, 10, 10, 1, 0, tzinfo=UTC)
 BAND = {**st.DEFAULT_BANDS[("neg_funding_carry", "crypto")], "since": "2026-10-09T13:30:00+00:00"}
@@ -46,6 +47,14 @@ def evaluate(rows, *, now=T0 + timedelta(days=1), qualifying=0, band=BAND):
                        strategy_id="neg_funding_carry", asset_class="crypto")
 
 
+def sent(state, reports, now, **kw):
+    """detect_shadow_alerts on a channel that delivers everything."""
+    alerts, state = detect_shadow_alerts(state, reports, now, **kw)
+    for a in alerts:
+        ns.mark_delivered(state, a)
+    return alerts, state
+
+
 # ------------------------------------------------------------- decomposition
 
 def test_decompose_splits_funding_borrow_book():
@@ -76,10 +85,32 @@ def test_zero_funding_on_a_long_hold_is_an_anomaly():
     assert st.decompose([short])[0].anomalies == []  # crossed no settlement: zero is right
 
 
-@pytest.mark.parametrize("kw", [{"borrow_usd": None}, {"borrow_usd": "0"}, {"borrow_rate": None}])
+@pytest.mark.parametrize("kw", [
+    {"borrow_usd": None}, {"borrow_usd": "0"}, {"borrow_rate": None},
+    {"borrow_usd": None, "borrow_rate": "0"},  # zero quote, but the close never ran the borrow path
+    {"borrow_usd": "0", "source": "stressed_entry"},  # positive quote, fallback x stress not applied
+    {"borrow_usd": "0", "source": "mixed", "series_mean": "0"},  # gap hours owed the fallback
+    {"borrow_usd": "0", "source": "series", "series_mean": "0.00001"},
+])
 def test_borrow_not_charged(kw):
     (ep,) = st.decompose([row("KAIAUSDT", T0, **kw)])
     assert "borrow_not_charged" in ep.anomalies
+
+
+@pytest.mark.parametrize("kw", [
+    {"borrow_usd": "0", "borrow_rate": "0"},  # the coin borrowed free at entry: quote x stress = 0
+    {"borrow_usd": "0", "borrow_rate": "0E-8", "source": "stressed_entry"},
+    {"borrow_usd": "0", "source": "series", "series_mean": "0"},  # every hour recorded at zero
+    {"borrow_usd": "0.0", "source": "series", "series_mean": "0E-10"},
+])
+def test_genuinely_zero_borrow_is_not_broken(kw):
+    """A zero charge on a zero recorded quote (entry quote or the whole hourly
+    series) is the venue's price, not a missed charge: it must not fire `broken`."""
+    (ep,) = st.decompose([row("KAIAUSDT", T0, **kw)])
+    assert ep.anomalies == []
+    assert ep.borrow_usd == 0.0 and ep.bps(ep.funding_usd) == pytest.approx(150.0 + 50.0)
+    rep = evaluate([row("KAIAUSDT", T0, **kw)])
+    assert rep["verdict"] != st.BROKEN and rep["reasons"] == []
 
 
 def test_flat_cost_close_is_book_not_charged_and_undecomposable():
@@ -158,44 +189,119 @@ def test_format_line():
 def test_alert_on_change_and_rate_limited_broken():
     now = T0
     collecting = evaluate([row("A", T0, net_bps=None)])
-    alerts, state = detect_shadow_alerts({}, [collecting], now)
+    alerts, state = sent({}, [collecting], now)
     assert alerts == []  # a quiet first sighting
-    alerts, state = detect_shadow_alerts(state, [collecting], now)
+    alerts, state = sent(state, [collecting], now)
     assert alerts == []
 
     broken = evaluate([row("A", T0, borrow_usd=None)])
-    alerts, state = detect_shadow_alerts(state, [broken], now)
+    alerts, state = sent(state, [broken], now)
     assert len(alerts) == 1 and alerts[0][0] == ALERT_WARNING
     assert "collecting → broken" in alerts[0][1]
-    alerts, state = detect_shadow_alerts(state, [broken], now + timedelta(hours=2))
+    alerts, state = sent(state, [broken], now + timedelta(hours=2))
     assert alerts == []  # deduped
-    alerts, state = detect_shadow_alerts(state, [broken], now + timedelta(hours=25))
+    alerts, state = sent(state, [broken], now + timedelta(hours=25))
     assert len(alerts) == 1  # persisting broken re-alerts daily
 
     on = evaluate(closed_set(25, 150.0))
-    alerts, state = detect_shadow_alerts(state, [on], now + timedelta(hours=26))
+    alerts, state = sent(state, [on], now + timedelta(hours=26))
     assert alerts[0][0] == ALERT_INFO and "broken → on_track" in alerts[0][1]
 
 
 def test_first_sighting_of_a_loud_verdict_alerts():
-    alerts, _ = detect_shadow_alerts({}, [evaluate(closed_set(25, 10.0))], T0)
+    alerts, _ = sent({}, [evaluate(closed_set(25, 10.0))], T0)
     assert len(alerts) == 1 and "below_band" in alerts[0][1] and "do not promote" in alerts[0][1]
 
 
 def test_new_broken_reason_is_news():
     a = evaluate([row("A", T0, borrow_usd=None)])
     b = evaluate([row("A", T0, borrow_usd=None, book_bps=None)])
-    _, state = detect_shadow_alerts({}, [a], T0)
-    alerts, _ = detect_shadow_alerts(state, [b], T0 + timedelta(minutes=15))
+    _, state = sent({}, [a], T0)
+    alerts, _ = sent(state, [b], T0 + timedelta(minutes=15))
     assert len(alerts) == 1
 
 
-def test_state_roundtrip(tmp_path):
-    p = tmp_path / "s.json"
-    _, state = detect_shadow_alerts({}, [evaluate(closed_set(25, 10.0))], T0)
-    save_state(state, p)
-    assert load_state(p) == state
-    assert load_state(tmp_path / "missing.json") == {}
+def test_undelivered_alert_is_not_marked_sent():
+    """Telegram unreachable: the verdict change and the once-only review_due
+    stay pending and fire again on the next tick; once delivered, never again."""
+    rows = (series_set(20, 120.0, ratio=0.9)
+            + series_set(10, -40.0, ratio=1.4, flat_keep="false", decay_keep="false", prefix="F"))
+    broken = evaluate(rows + [row("A", T0, borrow_usd=None)])
+    assert broken["verdict"] == st.BROKEN and broken["revisit"]["due"]
+    _, state = sent({}, [evaluate([row("A", T0, net_bps=None)])], T0)  # quiet: collecting
+
+    async def down(level, text):
+        return False
+
+    async def up(level, text):
+        return True
+
+    import asyncio
+
+    for k in range(3):  # three ticks with Telegram down
+        alerts, state = detect_shadow_alerts(state, [broken], T0 + timedelta(minutes=15 * (k + 1)))
+        assert len(alerts) == 2 and any("review_due" in a.text for a in alerts)
+        assert asyncio.run(deliver_shadow_alerts(state, alerts, down)) == 0
+        key = "neg_funding_carry/crypto"
+        assert state[key]["verdict"] == "collecting" and not state[key]["review_sent"]
+
+    alerts, state = detect_shadow_alerts(state, [broken], T0 + timedelta(hours=1))
+    assert asyncio.run(deliver_shadow_alerts(state, alerts, up)) == 2
+    assert state[key]["verdict"] == st.BROKEN and state[key]["review_sent"]
+    alerts, state = detect_shadow_alerts(state, [broken], T0 + timedelta(hours=2))
+    assert alerts == []
+
+    # One of two delivered: only that one is marked.
+    fresh = {}
+    alerts, fresh = detect_shadow_alerts(fresh, [broken], T0)
+    calls = iter([True, False])
+
+    async def flaky(level, text):
+        return next(calls)
+
+    asyncio.run(deliver_shadow_alerts(fresh, alerts, flaky))
+    assert fresh[key]["verdict"] == st.BROKEN and not fresh[key]["review_sent"]
+    alerts, _ = detect_shadow_alerts(fresh, [broken], T0 + timedelta(minutes=15))
+    assert [("review_due" in a.text) for a in alerts] == [True]
+
+
+@pytest.mark.asyncio
+async def test_state_survives_in_the_db():
+    """The state is in notify_alert_state (local DB), not /tmp: a container
+    recreate keeps `review_sent` and the last verdict."""
+    import uuid
+
+    from matrix_shared import local_session_scope
+    from sqlalchemy import text
+
+    key = f"test_shadow_{uuid.uuid4().hex}"
+    _, state = sent({}, [evaluate(closed_set(25, 10.0))], T0)
+    try:
+        assert await load_state(key) == {}
+        assert await save_state(state, key)
+        assert await load_state(key) == state
+        state["x/y"] = {"sig": "broken", "verdict": "broken", "alerted_at": 1.0, "review_sent": True}
+        assert await save_state(state, key)
+        assert (await load_state(key))["x/y"]["review_sent"] is True
+    finally:
+        async with local_session_scope() as s:
+            await s.execute(text("DELETE FROM notify_alert_state WHERE key = :k"), {"k": key})
+
+
+@pytest.mark.asyncio
+async def test_unreadable_state_is_none_not_empty(monkeypatch):
+    """A DB error must not read as "nothing sent yet": that would re-fire
+    every loud verdict and every review_due."""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def down():
+        raise OSError("db down")
+        yield
+
+    monkeypatch.setattr(ns, "local_session_scope", down)
+    assert await load_state("whatever") is None
+    assert await save_state({}, "whatever") is False
 
 
 # --------------------------------------------- borrow source / entry-rule arms
@@ -269,11 +375,11 @@ def test_review_due_fires_exactly_once():
     rows = (series_set(20, 120.0, ratio=0.9)
             + series_set(10, -40.0, ratio=1.4, flat_keep="false", decay_keep="true", prefix="F"))
     early = evaluate(rows[:29])
-    alerts, state = detect_shadow_alerts({}, [early], T0)
+    alerts, state = sent({}, [early], T0)
     assert not any("review_due" in a[1] for a in alerts)
 
     rep = evaluate(rows)
-    alerts, state = detect_shadow_alerts(state, [rep], T0 + timedelta(minutes=15))
+    alerts, state = sent(state, [rep], T0 + timedelta(minutes=15))
     reviews = [a for a in alerts if "review_due" in a[1]]
     assert len(reviews) == 1 and reviews[0][0] == ALERT_WARNING
     text = reviews[0][1]
@@ -285,13 +391,13 @@ def test_review_due_fires_exactly_once():
 
     for k in range(1, 4):  # later ticks, more episodes, a restart from the saved state: never again
         more = evaluate(rows + series_set(k, 50.0, prefix=f"N{k}_"))
-        alerts, state = detect_shadow_alerts(state, [more], T0 + timedelta(hours=k))
+        alerts, state = sent(state, [more], T0 + timedelta(hours=k))
         assert not any("review_due" in a[1] for a in alerts)
 
 
 def test_review_due_with_no_rule_holding_says_keep():
     rep = evaluate(series_set(30, 100.0))
-    alerts, _ = detect_shadow_alerts({}, [rep], T0)
+    alerts, _ = sent({}, [rep], T0)
     (text,) = [a[1] for a in alerts if "review_due" in a[1]]
     assert "no revisit rule holds: keep the current env." in text
 
