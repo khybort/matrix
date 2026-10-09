@@ -1,7 +1,7 @@
 ---
 title: Incidents
-updated: 2026-09-19
-sources: [docs/CHANGES.md, git log, "~/.orbstack/log/vmgr.log", "pmset -g log"]
+updated: 2026-10-09
+sources: [docs/CHANGES.md, git log, "~/.orbstack/log/vmgr.log", "pmset -g log", "log show (powerd)", "docker logs", predictions/outcomes tables]
 status: current
 ---
 
@@ -220,3 +220,78 @@ would have over-reacted. Corrected in [[operations]].
 **The lesson:** `pg_size_pretty` is GiB, `pg_database_size` is bytes, and a
 delta computed across the two is wrong by 7%% per power of 1024. State the unit
 in the note, and compute deltas from raw bytes on both ends.
+
+## 2026-09-29 → 10-09 — Ten days without a trade, three causes stacked
+
+All times UTC, measured 2026-10-09 from `predictions`/`outcomes`/`paper_positions`,
+`docker logs`, `~/.orbstack/log/vmgr.1.log`, `log show` (powerd), `pmset -g log`.
+
+**Symptom:** predictions/day fell from 700–1 000 (weekdays Sep 21–25) to
+100–280 (Oct 1–6), then zero on Oct 7–8; on Oct 9 every container showed
+"Up 5 minutes". The last paper position opened **2026-09-29**; nothing filled
+again until 10-09. No alert reached the operator at any point.
+
+**Three separate causes, in order:**
+
+1. **Sep 20 → 29: the learning loop shrank the book (by design, but too far).**
+   `grid` retired 09-20, `momentum_xs` 09-21 22:34 (no emissions after 22:27),
+   every challenger 09-27…09-29 (dca v5, oi_breakout v3, matrix_agent v8, the
+   four `bist_*` v2, funding_reversion v7, matrix_agent/us v2). Shadow
+   predictions went 342 (09-25) → 113 (09-29) → 0 (10-01). In the champion
+   wallet nearly every slot row is 0 (measured 10-09), so `backpressure.room()`
+   caps each strategy at `BACKLOG_MIN = 3` open predictions and the paper
+   engine's EV floor skipped the rest ("skipped N below 1.00x round-trip cost;
+   opened 0"). Fills: 19 (09-25), 12, 15, 4, 5 (09-29), then none. The dips on
+   09-26/27 and 10-03/04 are weekends (BIST and US closed), not decay.
+2. **Sep 30 07:27 → Oct 6 14:21 (6.3 days): the VM lost internet; the host did not.**
+   New outbound connections from every container failed from ~07:27 (Binance
+   poll `HTTP error` 07:28, Telegram `Timed out` 07:42); the Bybit WebSocket,
+   already established, kept streaming until 12:31 and then could never
+   reconnect ("timed out during opening handshake" every 40 s for six days).
+   News feeds, yfinance and the LLM (circuit breaker open) failed the same way.
+   The host itself resolved DNS normally on 10-06, so it was OrbStack's network
+   path, not Wi-Fi. OrbStack logged **nothing** at the moment it broke — its
+   last `TCP forward` error was 06:28, then silence, and later only
+   `DNS query failed name=api.telegram.org`. Root cause inside OrbStack is
+   unknown; a VM restart (the power loss) cleared it. Meanwhile strategies kept
+   emitting on frozen prices — dca 72/day, BIST 144/day, matrix_agent on its
+   rule fallback — which is why the count decayed instead of hitting zero.
+   notify detected it within minutes and produced **783 alerts (145 URGENT)**,
+   every one `pushed … to 0/1 chats`: the alert channel shared the VM's dead
+   network. The stall watchdog restarted nothing — every service kept logging
+   warnings, which is all it measured.
+3. **Oct 6 14:21 → Oct 9 12:01 (2.9 days): the laptop ran its battery flat.**
+   On battery from at least 09:05 (100 %), draining ~19 %/h under the stack's
+   load; macOS posted the low-battery warning at 13:45 (10 %) and 2 % at
+   14:11; the last container log line is 14:21. Postgres confirmed it on
+   restart: "database system was not properly shut down; automatic recovery"
+   (2–4 s, clean). AC came back and the Mac booted at **09:01 on 10-09**, then
+   sat at the login window for three hours (no automatic login): LaunchAgents and
+   OrbStack start only at login, which happened at 12:00; containers at 12:01.
+
+**What changed (2026-10-09):**
+- `scripts/stall_watchdog.sh` (launchd, every 5 min) now alerts on Telegram
+  **from the host**, which kept its network through cause 2: on battery
+  (re-alert 30 min, every 5 min under 25 %), watchdog gap / reboot (post-hoc
+  "Matrix was down Xh"), Docker unreachable (starts OrbStack if it is not
+  running), containers without egress while the host has it, BTCUSDT ticker
+  older than 30 min, host disk under 30 GiB. Failed sends queue and retry.
+  Verified end to end: test message and a real on-battery alert delivered.
+  `MATRIX_WATCHDOG_HEAL_EGRESS=1` opts into `orb restart docker` after 30 min
+  of dead egress; off by default because the fix is plausible, not proven.
+- notify: counts alerts that reached nobody and says so on the first delivery
+  that works; one log line per failure instead of a traceback; new `no_fills`
+  detector (no paper position opened for 24 h) — the condition that held for
+  ten days while every freshness signal was green; ticker probe pinned to
+  `exchange='bybit'`.
+
+**Not fixed here (operator / other tracks):** keep the laptop on AC — at the
+time of writing (10-09 11:59) it had been unplugged again; nothing local can
+alert once the host is dead, only before. Strategies emit on stale prices
+instead of standing down. Slots at 0 + EV floor mean the system can be fully up
+and still never trade — that is a learning-loop question, not uptime.
+
+**The lesson:** an alert path that shares the failure domain of what it
+watches is not an alert path. Three layers of liveness checks existed and all
+of them worked; none of them could speak, because they all sat behind one NAT.
+

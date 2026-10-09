@@ -57,6 +57,23 @@
   config'i değişmiş `postgres` de recreate edildi (15:55, tüm servislerde 20 s "database system is shutting down").
   Tek servis için `up -d --no-deps <svc>` kullan; DB'ye dokunacaksan bilinçli yap.
 
+- **2026-10-09 — Alarm kanalı, izlediği şeyle aynı arıza alanında olamaz.** 2026-09-30 07:27 UTC'de OrbStack VM'inin dışa
+  bağlantısı sessizce öldü (host interneti sağlamdı; OrbStack hiçbir hata loglamadı). notify durumu dakikalar içinde gördü ve
+  6.3 gün boyunca **783 alarm (145 URGENT) üretti, hiçbirini teslim edemedi** — Telegram'a da aynı ölü VM ağından gidiyordu.
+  Stall watchdog hiçbir şeyi yeniden başlatmadı, çünkü servisler uyarı loglamaya devam etti; yalnız log tazeliğini ölçüyordu.
+  Kural: sağlık sinyali *çıktıdan* (veri/fill yaşı) ölçülür, alarm ise izlenen sistemin dışından (host `stall_watchdog.sh`,
+  curl ile Telegram) gider; container egress'i host egress'iyle karşılaştır. Teslim edilemeyen alarm sayılır ve kanal
+  dönünce bir kez söylenir.
+- **2026-10-09 — Laptop host = pil + login.** 10-06'da makine pilde ~19 %/saat boşaldı ve kapandı (Postgres "not properly
+  shut down"); 10-09'da boot sonrası 3 saat login ekranında bekledi — LaunchAgent'lar ve OrbStack yalnız login'de başlar.
+  `pmset -g batt` "Battery Power" = geri sayım; watchdog bunu alarmlar. Otomatik login kapalıyken güç kaybından sonra
+  hiçbir şey kendiliğinden dönmez. Kesinti teşhisi: `sysctl kern.boottime`, `last`, `log show --predicate 'process ==
+  "powerd"'` (Capacity/Source satırları), `~/.orbstack/log/vmgr*.log` (vmgr saatleri yerel, scon/agent UTC).
+- **2026-10-09 — B-tree silmeyle küçülmez; kirli kapanış istatistiği sıfırlar.** Retention `market_trades` heap'ini 49 GB'tan
+  5.2 GB'a indirdi, dört indeks 54 GiB kaldı (boş sayfa yeniden kullanılır, OS'e dönmez) → `REINDEX INDEX CONCURRENTLY`.
+  Güç kaybından sonra `pg_stat_user_tables.last_autovacuum` NULL ve `n_live_tup` saçma görünür: istatistikler sıfırlanmıştır,
+  "autovacuum hiç çalışmadı" kanıtı değildir; boyut için `pg_class.reltuples` / `pg_relation_size` kullan.
+
 ## Git ve migration
 - **Sadece kendi hunk'larını stage et.** Ağaçta başka bir node'un uncommitted WIP'i durabilir (US-market adapter, 0038).
   `git add -A` yasak; ortak dosyalarda HEAD + kendi patch'in (`git hash-object` + `update-index`). CHANGES.md'ye

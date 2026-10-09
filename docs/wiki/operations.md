@@ -1,7 +1,7 @@
 ---
 title: Operations
-updated: 2026-09-19
-sources: [Makefile, docs/OPS_HARDENING.md, scripts/]
+updated: 2026-10-09
+sources: [Makefile, docs/OPS_HARDENING.md, scripts/, scripts/stall_watchdog.sh]
 status: current
 ---
 
@@ -37,8 +37,40 @@ memory, launchd) are in the global wiki's machine page.
   `MATRIX_AGENT_BATCH_CHUNK`, `MATRIX_LLM_DAILY_BUDGET_USD`,
   `MATRIX_LLM_CALL_TIMEOUT_S`, `MATRIX_SLOT_MIN_N`, `MATRIX_CHALLENGER_MODE`,
   `MATRIX_CERT_*`, `MATRIX_WATCH_SUPERVISE`.
-- **Unconfigured as of 2026-09-19**: `TELEGRAM_BOT_TOKEN` (notify runs dry-run,
-  alerts only reach the logs) and `OPENROUTER_API_KEY`.
+- **Telegram**: configured since 2026-09-20 (rotated that day, see
+  [[incidents]]); delivery verified 2026-10-09 from both paths — notify
+  (`pushed … to 1/1 chats`) and the host watchdog (`make watchdog-test`).
+  `OPENROUTER_API_KEY` is still unset.
+
+## Host watchdog — the alert path that survives the VM
+
+`make watchdog-install` loads two LaunchAgents: `com.matrix.caffeinate`
+(`caffeinate -s`) and `com.matrix.watchdog`, which runs
+`~/Library/Application Support/matrix/stall_watchdog.sh` every 5 minutes (a
+copy — launchd cannot execute or read anything under `~/Documents`, so the two
+Telegram keys are copied to `watchdog.env` there, mode 0600;
+`scripts/rotate_telegram_token.sh` refreshes it). Re-run the install after
+editing the script. Log: `~/Library/Logs/matrix-watchdog.log`; state:
+`…/matrix/state/`. `make watchdog-status`, `make watchdog-test`.
+
+It exists because notify lives inside the VM and dies with it: 2026-09-30 →
+10-06 notify produced 783 alerts and delivered none ([[incidents]]). What the
+host watchdog checks, alerting edge-triggered and queueing sends that fail:
+
+| check | fires when | action |
+|---|---|---|
+| power | host on battery | alert every 30 min, every 5 min under 25 % |
+| gap | watchdog did not run for 15 min+ | one post-hoc "down Xh" message, says if the host rebooted |
+| docker | `docker info` fails for 30 s | starts OrbStack if not running, else alert |
+| egress | 2 probes in a row: containers cannot reach Bybit/Telegram/Binance, host can | alert; `orb restart docker` only with `MATRIX_WATCHDOG_HEAL_EGRESS=1` |
+| data | newest bybit BTCUSDT ticker > 30 min | alert (notify alerts at 5 min when it can) |
+| disk | host free < 30 GiB | alert |
+| stall | a loop service's last log line exceeds its budget | `docker restart <svc>` |
+
+What no local check can do: report a host that is already off. The gap message
+arrives only after it comes back, and after a power loss nothing runs until
+someone logs in (automatic login is off; FileVault is off, so it can be enabled). Keep the machine on AC; the battery alert is
+the only warning there will be.
 
 ## Storage
 
@@ -101,3 +133,18 @@ retention reports.
 
 `make retention-drain` forces a full catch-up; `make db-compact TABLE=…` runs
 VACUUM FULL to return space to the OS and **locks the table** while it does.
+
+**Measured 2026-10-09 — the drain finished, the indexes did not shrink.**
+`market_trades` is down to 18.3M rows (`reltuples`) and a **5.2 GB heap**
+(from ~49 GB; vacuum truncated the emptied tail), oldest row 2026-09-30 00:16
+— inside the policy window once the outage gap is counted. But its four
+B-tree indexes are still **54 GiB** (exchange_id 29, pkey 13, symbol_ts 8.3,
+ts 3.5): a B-tree only returns pages through REINDEX, so they are ten times
+the size of the table they index, every autovacuum pass walks all of them,
+and the feature path reads them through 128 MB of `shared_buffers`. Database
+84.5 GiB (90.8e9 bytes, from 116 GiB on 09-20); VM volume 190 GiB free of 591;
+host 198 GiB free. Runway is no longer a concern. The stats were reset by the
+unclean shutdown, so `last_autovacuum` reads NULL — not evidence that it never
+ran. Recommendation: `REINDEX INDEX CONCURRENTLY` each of the four, smallest
+first (no write lock; needs a deliberate operator run — the session's
+permission policy refused it as a shared-resource change).

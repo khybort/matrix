@@ -79,47 +79,37 @@ how much the answer would change.
   author's work that has not reached git, so there is no HEAD to commit it
   against. Land it the moment their floor lands — until then it exists only in
   the working tree and would be lost by a hard reset.
-- **`shared_buffers` is 128 MB against a 49 GB table.** That is the Postgres
-  default and nobody has revisited it. Measured 2026-09-20: a 60.4% buffer
-  cache hit rate across 880M block reads, which means most of the trading
-  path's reads go to disk. Raising it to a few GB is very likely the single
-  largest infrastructure lever left, and it costs a database restart — brief,
-  non-destructive, and everything reconnects, but disruptive enough that it
-  should be a deliberate act rather than a side effect of a working session.
-  *Test:* set it, watch `cache_hit_pct` and the feature-path query times.
-- **`autovacuum_work_mem` is 64 MB, which forces repeated index passes.** It
-  holds about 11M dead tuple ids at 6 bytes each; `market_trades` carried 26.5M
-  dead on 2026-09-20, so one vacuum has to scan all four indexes three times
-  over — and one of those indexes is now 3.5 GiB. Raising it to a few hundred
-  MB would make it a single pass. Unlike `shared_buffers` this needs only
-  `ALTER SYSTEM` plus `pg_reload_conf()`, no restart, but it is still a global
-  change and the current pass would not pick it up. *Test:* set it, then
-  compare `index_vacuum_count` at the end of the next pass.
+- **`shared_buffers` is 128 MB against 54 GiB of index.** Still the Postgres
+  default (re-checked 2026-10-09). Measured 2026-09-20: a 60.4% buffer cache
+  hit rate across 880M block reads; 2026-10-09 read 88.3%, but over a few
+  minutes since the crash-recovery restart reset the counters, so not
+  comparable. The heap is now only 5.2 GB, which makes this cheaper to fix than
+  it was: a few GB would hold the hot heap and the upper levels of every index.
+  It costs a database restart — brief and non-destructive, but a deliberate
+  operator act, not a session side effect. Do the REINDEX below first; it
+  shrinks what the cache has to hold by ~50 GiB. *Test:* set it, watch the hit
+  rate over a day and the feature-path query times.
+- **~~Will autovacuum keep pace / how long is the disk runway?~~ Answered
+  2026-10-09:** the backlog drained. `market_trades` is 18.3M rows in a
+  **5.2 GB heap** (from ~49 GB; vacuum truncated the emptied tail), oldest row
+  2026-09-30, the database 84.5 GiB (from 116 GiB on 09-20), the VM volume
+  190 GiB free of 591, the host 198 GiB free. Runway is not a concern. At this
+  size one vacuum pass fits in the 64 MB `maintenance_work_mem` (11.18M dead
+  tuple ids; ~8M dead at the time of measuring), so the three-pass problem is
+  gone without touching `autovacuum_work_mem`, and the throttle question with
+  it. (`last_autovacuum` reads NULL only because the 10-06 power loss reset the
+  statistics.)
 
-  The other half of the same picture is the throttle: the worker's wait event
-  sits at `Timeout/VacuumDelay`, i.e. it is sleeping on
-  `autovacuum_vacuum_cost_delay = 2 ms` against `vacuum_cost_limit = 200`.
-  Raising the limit for this table would multiply its throughput. It was
-  deliberately **not** done on 2026-09-20: an unthrottled maintenance job on
-  this table is exactly what degraded the feature path earlier the same day
-  ([[incidents]]), and the arithmetic says no rescue is needed — ~120 GB free
-  against 8.7 GiB/day of lag-driven growth is 14 days, and once the pass lands
-  the deletions free roughly sixteen times what ingestion consumes, so the
-  file should stop extending on its own. Measured while it ran: the worker
-  reads ~6.7 MB/s of index under the throttle and `num_dead_tuples` sat at
-  11,184,524, exactly the 64 MB work_mem capacity — which is the three-pass
-  prediction confirmed from the other side. The indexes measure **54 GiB**, not
-  the 30 first guessed here: `ix_market_trades_exchange_id` alone is 29 GiB,
-  `market_trades_pkey` 13, `ix_market_trades_symbol_ts` 8.3, and the new
-  `ix_market_trades_ts` 3.5. That puts a pass near 2.3 hours and the whole
-  vacuum near 7, during which the file gains about 1.5 GiB against ~120 GiB
-  free. Revisit only if a pass fails to complete or the runway drops under a
-  week.
-
-  Worth noticing separately: 54 GiB of index against a table meant to hold
-  seven days of data, and more than half of it is a unique index that exists
-  only to deduplicate inserts. Both shrink in proportion as the backlog
-  drains — check again once it has.
+  What did **not** resolve: the four indexes are still **54 GiB**
+  (exchange_id 29, pkey 13, symbol_ts 8.3, ts 3.5). The earlier note here
+  expected them to shrink as the backlog drained; B-trees do not — emptied
+  pages are reused, never returned. So every vacuum pass walks 54 GiB of index
+  for a 5 GB table (a pass sat in "vacuuming indexes" for 9+ min on 10-09), and
+  the feature path's index reads compete for 128 MB of cache. *Fix:*
+  `REINDEX INDEX CONCURRENTLY` on each, smallest first (`ix_market_trades_ts`
+  3.5 GiB → a few hundred MB expected); no write lock, cancels the running
+  autovacuum, which is fine. Not done: the session's permission policy refused
+  it as a shared-resource change, so it waits for the operator.
 - **A time-only index changes plans elsewhere.** `ix_market_trades_ts` (0039)
   made `WHERE symbol = $1 ORDER BY trade_ts DESC LIMIT n` switch from the
   composite index to a backward scan of the time index with a symbol filter.
@@ -128,7 +118,13 @@ how much the answer would change.
   `autovacuum_analyze_scale_factor = 0.02` (0040) keeps the statistics fresh
   so it stays fixed. Worth re-checking after the backlog drains, because the
   distribution will shift again.
-- **Operator-blocked**: only `TELEGRAM_BOT_TOKEN` remains — without it every
-  alert is invisible, which is what let the three-day outage pass unnoticed.
-  The wallet refund was applied 2026-09-19 and lid sleep was disabled
-  2026-09-20, so the system can finally accumulate an uninterrupted sample.
+- **Operator-blocked** (2026-10-09): Telegram is configured and verified;
+  what remains is physical. (1) **Keep the laptop on AC.** It ran flat on 10-06
+  and cost 2.9 days; at 11:59 on 10-09 it was unplugged again. The host
+  watchdog now alerts while on battery, but nothing local can speak once the
+  host is off. (2) After a power loss the Mac waits at the login window and nothing —
+  LaunchAgents, OrbStack, containers — starts until someone logs in (10-09:
+  3 hours). FileVault is off, so enabling automatic login (System Settings →
+  Users & Groups) closes this; a physical-security trade only the operator
+  can make.
+  (3) The `REINDEX CONCURRENTLY` and `shared_buffers` items above.
