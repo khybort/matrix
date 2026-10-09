@@ -541,3 +541,13 @@
   `test_targets` adds every project that declares a touched one as a uv path dependency (shared → all; graph → agent,
   synthesis, labs). Cost: a shared change runs ~15 suites; the backtest suite can still flake against the live engine
   (it is not stopped from inside dev_agent) — that errs toward rejecting.
+- **2026-10-09 — A near miss is settled forward, with the rule in one shared module and its history backfilled by the live job.**
+  Round 5's D.3 (+136 / +115 bps, train t 0.77) is forward-tested as r5f: `Spec(forward_n=60)` in the harness (no train split,
+  `open_forward` decides once when the first 60 have closed; `forward_status` counts only). Three things made it honest and cheap:
+  (1) the rule lives once in `matrix_shared.iv_term` and is checked to the bit against the research cache before anything ships
+  (TERM, pct and all 118 entries identical) — the recorder, the shadow module and the evaluation builder all call it; a re-implementation
+  per consumer would drift; (2) a feature ranked against its trailing 365 days needs that history on day one, so the recorder backfills
+  the last 400 days from the same historical endpoint (newest first) and refills outage holes — the evaluation then reads a complete
+  series even if the shadow book missed a day; (3) state the power in the pre-registration: at round 5's per-episode SD (718 bps) a true
+  +125 bps gives E[t] ≈ 1.35 at n = 60, so a fail there is weak evidence and must not be "fixed" by re-running a bigger n under the same id.
+  Harness: a new `Spec` field enters `to_dict()` only when non-default, otherwise every committed spec block stops matching.

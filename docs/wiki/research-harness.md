@@ -102,6 +102,17 @@ Building blocks:
 - `research.episodes.collapse_signals`: the live book's signals, collapsed through
   `edge_study.one_per_episode`, so the engine and research share one episode definition.
 
+## Forward tests (added 2026-10-09, first use r5f)
+A rule that was already seen in history (and so cannot get an honest holdout) is re-tested on data that did
+not exist when it was registered: `Spec(forward_n=60, train=<in-sample window, cited only>,
+holdout=<forward window>)`. `evaluate()` is refused; `study.forward_status(cell, builder)` returns only how many
+of the first `forward_n` episodes (by signal time) have closed; `study.open_forward(cell, builder)` is refused
+until all of them have, then writes `holdout_open`, decides on exactly those `forward_n` (same t gate) and
+`finalise()` gives `survives` (also q ≤ `q_max` at that moment) or `rejected_forward`. An episode still open
+holds its place even if the builder cannot price it yet. The ledger refuses a train row, a second open and an
+early final for such a test. `forward_n` appears in the spec block only when > 0, so earlier committed specs
+still match. Example: `services/backtest/research/signal_2026_10_r5f/forward.py`.
+
 ## Guards (each has a test in `test_research_harness.py`)
 | guard | raises |
 |---|---|

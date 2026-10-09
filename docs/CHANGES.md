@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-10-09 — r5f ileri testi: Deribit IV term kaydedici (0043), `iv_inversion` shadow modülü, harness forward modu
+- `matrix_shared.research`: `Spec(forward_n=N)` = ileri test (train yok; `forward_status` yalnız sayar, `open_forward` ilk N epizot kapanınca bir kez karar verir; ledger forward testte train satırını, ikinci açılışı, karardan önce final'i reddeder). Klasik spec'lerin hash'i değişmedi (`forward_n` yalnız >0 iken spec bloğunda).
+- `matrix_shared.iv_term`: tur 5 D.3 kuralının tek tanımı (TERM, 365 g persentil, pencere başına tek epizot); kaydedici, modül ve r5f builder aynı kodu koşar. Tur 5'in 118 girişini birebir üretir.
+- Göç **0043** `deribit_iv_daily` (lokal): `ingestion.iv_term_recorder` (ingestion-market, 15 dk) her gün 00:02 UTC'den sonra [D−4h, D) opsiyon işlemlerinden satır yazar, son 400 günü backfill eder, boşlukları doldurur (`IV_TERM_RECORDER_ENABLED`).
+- `strategy_configs` (shared): `iv_inversion` crypto v1 **shadow**, params'ta `shadow_band` (+166…+201, floor 0, n 60; karar r5f harness'ında n=60'ta). `DEFAULT_BANDS`'e de eklendi. Ön-kayıt d283c9a, ledger m = 172.
+
 ## 2026-10-09 — İnce kitapta carry kapanışı cezalı fiyatlanır (risk kapısı markı); eski fonlama muhasebesi kanıt değil; shadow alarmları teslimde işaretlenir
 - `backtest.carry_books.close_cost_bps` (ve açık carry equity markı `mark_cost_bps`): kitap VAR ama bacağı dolduramayacak kadar ince ise (`walk_bps` None — sıkışma durumu) artık açılış tahminine düşmez; görünen derinlik yürünür, kalan kısım en kötü seviye + `MATRIX_CARRY_THIN_BOOK_PENALTY_BPS` (50) ile, tahminin altına inmeden ödenir; `book_close.close_source=thin_book`. Günlük zarar devre kesicisinin okuduğu mark bu durumda daha düşük (daha erken tetikler). Kitap hiç yoksa davranış aynı (`entry_estimate`).
 - `edge_study._load_carry_fills`: 2026-10-09 13:39:14 UTC'den (per-settlement fonlama 7d7b854 ile canlıya girdi) önce kapanmış carry'ler kanıt değil (`MATRIX_EDGE_CARRY_EVIDENCE_SINCE`); stratejinin daha geç band `since`'i önceliklidir. inverse_carry'nin 70 placeholder-flip kapanışı kanıttan çıktı.

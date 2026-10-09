@@ -86,6 +86,23 @@ DEFAULT_BANDS: dict[tuple[str, str], dict[str, Any]] = {
         "revisit_borrow_model_env": "MATRIX_NFC_BORROW_MODEL",
         "revisit_expected_model_env": "MATRIX_NFC_EXPECTED_MODEL",
     },
+    # Forward test r5f (2026-10-09, signal-research-2026-10.md, "Forward test r5f"):
+    # round 5's D.3 medians +166 / +201 bps per episode (train / holdout), ~25
+    # episodes a year, gaps up to 220 days. The tracker only reports: the
+    # decision is the harness's, once, at n = 60 (r5f.D.3), never earlier.
+    ("iv_inversion", "crypto"): {
+        "since": "2026-10-10T00:00:00+00:00",  # first forward decision day
+        "expected_bps_low": 166.0,
+        "expected_bps_high": 201.0,
+        "floor_bps": 0.0,
+        "min_episodes": 60,
+        "stale_hours": 5760,  # 240 d without an episode > the longest gap in 5.5 years
+        "min_qualifying": 0,
+        "components": [],
+        "expected_per_week": 0.5,
+        "evaluation": "harness r5f.D.3 at n=60 (services/backtest/research/signal_2026_10_r5f), not earlier",
+        "source": "docs/wiki/signal-research-2026-10.md#forward-test-r5f",
+    },
 }
 
 # A carry that crossed no settlement books no funding legitimately; 9 h covers

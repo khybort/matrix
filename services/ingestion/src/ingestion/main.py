@@ -89,6 +89,12 @@ async def run(market_names: list[str], cfg: _IngestCfg) -> None:
         from ingestion.borrow_recorder import run as run_borrow_recorder
         tasks.append(asyncio.create_task(run_borrow_recorder(), name="borrow-recorder"))
 
+    # Deribit option-IV term features, daily, for the r5f forward test and the
+    # iv_inversion shadow module (public REST). Gated by IV_TERM_RECORDER_ENABLED.
+    if "crypto" in market_names:
+        from ingestion.iv_term_recorder import run as run_iv_term_recorder
+        tasks.append(asyncio.create_task(run_iv_term_recorder(), name="iv-term-recorder"))
+
     if not tasks:
         logger.warning("no markets to ingest; exiting")
         return

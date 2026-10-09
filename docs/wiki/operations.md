@@ -187,6 +187,17 @@ FROM margin_borrow_rates WHERE coin IN ('KAIA', 'RLC') ORDER BY venue, coin, ts 
 ```
 Log: `borrow recorder: wrote N of M coin quotes` every poll.
 
+### Option-IV term recorder (r5f)
+`services/ingestion/src/ingestion/iv_term_recorder.py`, a task in `ingestion-market` (crypto only), every 15 min
+(`IV_TERM_RECORDER_INTERVAL_S`): writes one `deribit_iv_daily` row (local DB, migration 0043) per (BTC|ETH, day D) from
+the Deribit option trades in [D−4h, D) (`history.deribit.com`, ≥ 0.35 s between calls), via `matrix_shared.iv_term`.
+Today's row lands ~2 min after 00:00 UTC; any day in the last 400 without a row is fetched (newest first), so a fresh
+node backfills the 365-day percentile history in ~30 min and outages are refilled. `term` NULL = a bucket had < 5 ATM
+trades (missing by the rule). Read by the `iv_inversion` shadow module and the r5f evaluation
+(`services/backtest/research/signal_2026_10_r5f/forward.py status`). Logs: `iv term recorder: BTC <day> TERM …` daily,
+`iv_inversion: BTC <day>: TERM … pct … -> no_signal|wait|enter|missed` in `strategy` once per change.
+`IV_TERM_RECORDER_ENABLED=false` turns it off.
+
 ## Shadow tracker — is the only bet working?
 
 `matrix_shared/shadow_tracker.py` compares every shadow strategy that carries a
