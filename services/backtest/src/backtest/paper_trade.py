@@ -1365,16 +1365,26 @@ async def _close_position(pos: PaperPosition, pred: Prediction, reason: str, now
             # (docs/TRADING.md: never model cheaper than the venue charges).
             # Charge a round-trip on each leg = 2× round_trip_cost.
             pnl_usd -= pos.notional_usd * round_trip_cost_pct(pos.asset_class, pos.symbol) * 2
-        # A short-spot carry pays to borrow the coin: the hourly rate quoted at
-        # entry x the stress multiple, per started hour. Squeezed coins borrow
-        # dearer than the calm-day quote (adversarial check 2026-10-09).
+        # A short-spot carry pays to borrow the coin, per started hour: at the
+        # rate the venue quoted for that hour (recorded series, margin_borrow_rates),
+        # else the entry quote x the stress multiple (squeezed coins borrow
+        # dearer than the calm-day quote; adversarial check 2026-10-09).
         borrow_h = ctx.get("borrow_rate_hourly")
         if borrow_h:
             opened_b = pos.opened_at if pos.opened_at.tzinfo else pos.opened_at.replace(tzinfo=UTC)
             stress = float((book_open or {}).get("borrow_stress", carry_books.BORROW_STRESS))
-            charge = carry_books.borrow_charge(
-                pos.notional_usd, Decimal(str(borrow_h)), stress, (now - opened_b).total_seconds()
-            )
+            venue_b = ctx.get("borrow_venue") or ctx.get("spot_venue")
+            coin_b = str(ctx.get("spot_symbol") or pos.symbol).removesuffix("USDT")
+            if venue_b:
+                charge, borrow_info = await carry_books.borrow_series_charge(
+                    pos.notional_usd, str(venue_b), coin_b, opened_b, now, Decimal(str(borrow_h)), stress
+                )
+                context_patch.update(borrow_info)
+            else:
+                charge = carry_books.borrow_charge(
+                    pos.notional_usd, Decimal(str(borrow_h)), stress, (now - opened_b).total_seconds()
+                )
+                context_patch["borrow_source"] = "stressed_entry"
             pnl_usd -= charge
             context_patch["borrow_charged_usd"] = str(charge)
         # For scoring: express PnL as % of notional (analogous to pnl_pct

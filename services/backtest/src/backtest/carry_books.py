@@ -14,8 +14,10 @@ books instead:
   `confirmed`; the impact of the two opening fills is recorded.
 - close: the two closing fills are walked on the books at close (falling back
   to the estimate taken at open when a book is gone), plus four taker fees.
-- borrow: the hourly rate quoted at entry x BORROW_STRESS, per started hour,
-  as margin desks charge it.
+- borrow: per started hour, as margin desks charge it, at the rate the venue
+  quoted for that hour in `margin_borrow_rates` (ingestion.borrow_recorder);
+  an hour the series does not cover falls back to the entry quote x
+  BORROW_STRESS. `borrow_source` says which: series / stressed_entry / mixed.
 
 Book maths duplicates strategy.modules.crypto.neg_funding_carry on purpose:
 the two services ship as separate images and share no package but
@@ -212,3 +214,72 @@ def borrow_charge(notional: Decimal, hourly: Decimal, stress: float, held_s: flo
     """Borrow at the quoted hourly rate x stress, per started hour."""
     hours = math.ceil(max(0.0, held_s) / 3600.0 - 1e-9)
     return notional * hourly * Decimal(str(stress)) * hours
+
+
+# A recorded quote stays valid this long after its row: the recorder writes a
+# heartbeat row every hour and polls every 10 min (ingestion.borrow_recorder).
+SERIES_MAX_AGE = timedelta(minutes=75)
+
+
+def series_rates(rows: list[tuple[datetime, Decimal]], opened: datetime, now: datetime) -> list[Decimal | None]:
+    """Rate for each started hour of the hold from the recorded step series
+    (`rows` ts ascending): the quote in force at the hour's start, else the
+    first quote recorded inside that hour; None for an hour the series misses."""
+    hours = math.ceil(max(0.0, (now - opened).total_seconds()) / 3600.0 - 1e-9)
+    out: list[Decimal | None] = []
+    j = -1  # index of the latest row at or before the hour start
+    for i in range(hours):
+        start = opened + timedelta(hours=i)
+        end = min(start + timedelta(hours=1), now)
+        while j + 1 < len(rows) and rows[j + 1][0] <= start:
+            j += 1
+        if j >= 0 and start - rows[j][0] <= SERIES_MAX_AGE:
+            out.append(rows[j][1])
+        elif j + 1 < len(rows) and rows[j + 1][0] <= end:
+            out.append(rows[j + 1][1])
+        else:
+            out.append(None)
+    return out
+
+
+def borrow_from_series(
+    notional: Decimal, rates: list[Decimal | None], entry_hourly: Decimal, stress: float
+) -> tuple[Decimal, dict]:
+    """Charge each started hour at its recorded rate (x1: a measured quote
+    needs no stress); hours without one at the entry quote x stress."""
+    fallback = entry_hourly * Decimal(str(stress))
+    charge = sum((notional * (r if r is not None else fallback) for r in rates), Decimal("0"))
+    n_series = sum(1 for r in rates if r is not None)
+    source = "series" if rates and n_series == len(rates) else ("stressed_entry" if n_series == 0 else "mixed")
+    return charge, {
+        "borrow_source": source,
+        "borrow_hours_series": n_series,
+        "borrow_hours_fallback": len(rates) - n_series,
+        "borrow_series_mean_hourly": str(sum(r for r in rates if r is not None) / n_series) if n_series else None,
+    }
+
+
+async def borrow_series_charge(
+    notional: Decimal, venue: str, coin: str, opened: datetime, now: datetime,
+    entry_hourly: Decimal, stress: float,
+) -> tuple[Decimal, dict]:
+    """Borrow for a carry's hold from `margin_borrow_rates`, falling back per
+    hour to the entry quote x stress. A missing table charges the fallback."""
+    rows: list[tuple[datetime, Decimal]] = []
+    try:
+        async with local_session_scope() as session:
+            rows = [
+                (r[0], Decimal(r[1]))
+                for r in (
+                    await session.execute(
+                        text(
+                            "SELECT ts, hourly_rate FROM margin_borrow_rates WHERE venue = :v AND coin = :c "
+                            "AND ts >= :lo AND ts <= :hi ORDER BY ts"
+                        ),
+                        {"v": venue, "c": coin, "lo": opened - SERIES_MAX_AGE, "hi": now},
+                    )
+                ).all()
+            ]
+    except Exception as e:  # noqa: BLE001 — no series is the stressed fallback, not a failed close
+        logger.warning(f"carry_books: borrow series {venue}/{coin} unavailable: {e}")
+    return borrow_from_series(notional, series_rates(rows, opened, now), entry_hourly, stress)

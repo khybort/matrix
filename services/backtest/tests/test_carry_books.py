@@ -1,6 +1,6 @@
 """Book-priced spot-hedged carries (backtest.carry_books): sized and charged on
-both legs' books, borrow at the entry quote x stress per started hour, and no
-position at all without a spot book.
+both legs' books, borrow per started hour from the recorded rate series (entry
+quote x stress where it has gaps), and no position at all without a spot book.
 
 Engine tests run on the synthetic TEST_ASSET wallet (tests.isolated_market).
 """
@@ -90,6 +90,32 @@ def test_borrow_per_started_hour_at_stress():
     assert CB.borrow_charge(n, h, 3.0, 60) == n * h * 3  # first hour is charged in full
     assert CB.borrow_charge(n, h, 3.0, 3600) == n * h * 3
     assert CB.borrow_charge(n, h, 3.0, 48 * 3600 + 1) == n * h * 3 * 49
+
+
+def test_series_rates_step_function_and_gaps():
+    t0 = datetime(2026, 10, 9, 12, 4, tzinfo=timezone.utc)
+    r = lambda m, v: (t0 + timedelta(minutes=m), Decimal(v))  # noqa: E731
+    rows = [r(-4, "1"), r(50, "2"), r(170, "3")]  # hours start at 0, 60, 120, 180, 240 min
+    got = CB.series_rates(rows, t0, t0 + timedelta(minutes=241))
+    # h0: in force at start; h1: row 50 (10 min old); h2: row 50 is 70 min old (<= 75)
+    # h3: row 170 in force; h4: row 170 is 70 min old
+    assert got == [Decimal("1"), Decimal("2"), Decimal("2"), Decimal("3"), Decimal("3")]
+    got = CB.series_rates([r(30, "5")], t0, t0 + timedelta(minutes=200))
+    # h0: nothing at the start, first row inside the hour; h1 row 30 is 30 min old;
+    # h2 (start 120): 90 min old and nothing inside -> gap; h3 (180..200): gap
+    assert got == [Decimal("5"), Decimal("5"), None, None]
+    assert CB.series_rates([], t0, t0 + timedelta(minutes=1)) == [None]
+
+
+def test_borrow_from_series_charges_series_x1_and_stressed_gaps():
+    n, entry = Decimal("100"), Decimal("0.0001")
+    charge, info = CB.borrow_from_series(n, [Decimal("0.0002"), Decimal("0.0004")], entry, 3.0)
+    assert charge == n * Decimal("0.0006") and info["borrow_source"] == "series"
+    charge, info = CB.borrow_from_series(n, [Decimal("0.0002"), None], entry, 3.0)
+    assert charge == n * (Decimal("0.0002") + entry * 3) and info["borrow_source"] == "mixed"
+    assert (info["borrow_hours_series"], info["borrow_hours_fallback"]) == (1, 1)
+    charge, info = CB.borrow_from_series(n, [None, None], entry, 3.0)
+    assert charge == n * entry * 3 * 2 and info["borrow_source"] == "stressed_entry"
 
 
 def test_book_priced_carry_holds_to_horizon():
@@ -220,3 +246,51 @@ async def test_close_charges_books_fees_and_stressed_borrow(book_wallet, monkeyp
     assert out.pnl_usd == pytest.approx(-(notional * cost_bps / 10000) - borrow, abs=Decimal("0.0001"))
     assert pred.context["book_close"]["close_source"] == "book"
     assert Decimal(pred.context["borrow_charged_usd"]) == borrow
+    assert pred.context["borrow_source"] == "stressed_entry"  # no recorded series for the test coin
+
+
+@pytest.mark.asyncio
+async def test_close_charges_recorded_borrow_series(book_wallet, monkeypatch):
+    """With a recorded series covering the hold, borrow is the series x1, not
+    the entry quote x stress."""
+    from sqlalchemy import text
+    wallet_id, sid = book_wallet
+    coin = f"TESTBR{uuid.uuid4().hex[:6].upper()}"
+    _legs(monkeypatch, DEEP, DEEP)
+    book_open = {"perp_buy_bps": 1.0, "spot_sell_bps": 1.0, "perp_sell_est_bps": 1.0,
+                 "spot_buy_est_bps": 1.0, "borrow_stress": 3.0, "notional_usd": 200.0}
+    ctx = {**CTX, "borrow_venue": "binance", "spot_venue": "binance", "spot_symbol": f"{coin}USDT",
+           "book_open": book_open}
+    now = datetime.now(timezone.utc)
+    opened = now - timedelta(hours=2.5)
+    async with local_session_scope() as session:
+        await session.execute(text(
+            "INSERT INTO margin_borrow_rates (venue, coin, ts, hourly_rate) VALUES "
+            "('binance', :c, :a, 0.00001), ('binance', :c, :b, 0.00005)"),
+            {"c": coin, "a": opened - timedelta(minutes=5), "b": opened + timedelta(minutes=70)})
+    try:
+        pid = await _pred(sid, ctx=ctx, hours_ago=2.5)
+        notional = Decimal("200")
+        async with shared_session_scope() as session:
+            session.add(PaperPosition(
+                id=uuid.uuid4(), prediction_id=pid, symbol=SYM, exchange="bybit", asset_class=ASSET,
+                side="inverse_carry", notional_usd=notional, opened_at=opened,
+                opened_price=Decimal("100"), status="open", wallet_id=wallet_id,
+            ))
+        from backtest.paper_trade import _close_position
+        async with shared_session_scope() as session:
+            pos = (await session.execute(
+                select(PaperPosition).where(PaperPosition.prediction_id == pid))).scalar_one()
+            pred = await session.get(Prediction, pid)
+        assert await _close_position(pos, pred, "hit_horizon", now)
+        async with shared_session_scope() as session:
+            pred = await session.get(Prediction, pid)
+        # hour starts +0, +1h: the -5 min row is in force (5 / 65 min old) -> 1e-5 each;
+        # +2h: the +70 min row -> 5e-5. Entry quote x3 would have been 3 x 2e-5 x 3.
+        assert Decimal(pred.context["borrow_charged_usd"]) == notional * Decimal("0.00007")
+        assert pred.context["borrow_source"] == "series"
+        assert pred.context["borrow_hours_series"] == 3
+    finally:
+        async with local_session_scope() as session:
+            await session.execute(text("DELETE FROM margin_borrow_rates WHERE venue = 'binance' AND coin = :c"),
+                                  {"c": coin})
