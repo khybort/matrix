@@ -1,0 +1,99 @@
+Pre-registration — signal research 2026-10, round 4: dated-futures basis carry ("H13")
+Written 2026-10-09 16:53 UTC (date -u), before any return was computed and before any price, delivery price, lending rate
+series or order book for this round was fetched. Only endpoint availability was probed (listed under DATA).
+Earlier rounds: ../signal_2026_10/PREREG.txt, ../signal_2026_10_r2/, ../signal_2026_10_r3/, ../signal_2026_10_r3b/.
+
+QUESTION. Every funding carry except H1 failed because the yield is a floating rate (funding) that reverses in squeezes.
+Long spot + short a DATED future held to expiry locks its yield at entry: the future converges to the index at delivery.
+Return = entry basis - fees - spread - settlement tracking error, on capital = spot + futures margin. Does it beat a
+risk-free stablecoin rate out of sample, after costs, at a size worth trading?
+
+------------------------------------------------------------------------------------------------------------------------
+DATA (public only; fetched after this file is committed)
+ Binance  data.binance.vision archive (S3, not the rate-limited API): 1h klines and 1h mark-price klines of every dated
+          contract — USD-M BTCUSDT_yymmdd, ETHUSDT_yymmdd (2021-03 .. 2027-03 expiries); COIN-M BTCUSD_, ETHUSD_ and the alts
+          ADAUSD, BCHUSD, BNBUSD, DOTUSD, LINKUSD, LTCUSD, SOLUSD, XRPUSD (all expiries the archive lists); spot 1h klines
+          <COIN>USDT; spot 1m klines on each expiry day (for the settlement window).
+          API (few calls, >= 1 s apart): /fapi/v1/... and /dapi/v1/... delivery prices per pair; today's depth of the live
+          quarterlies (limit <= 100).
+ Deribit  public/get_tradingview_chart_data (1h) for every BTC and ETH QUARTERLY future (last Friday of Mar/Jun/Sep/Dec,
+          08:00 UTC; served for expired instruments), public/get_delivery_prices (btc_usd, eth_usd; daily 08:00 index TWAP),
+          today's public/get_order_book.
+ Bybit, OKX: expired dated contracts' candles are NOT served (Bybit v5 kline returns an empty list for delivered symbols;
+          OKX returns code 50047 "already settled"). Bybit's trade archive has dated BTC/ETH contracts but reducing it is out
+          of scope. These two venues enter only as TODAY's books and today's basis on their live quarterlies (capacity and
+          cross-venue check), not as backtest cells. Decided from endpoint availability, before any return.
+ Risk-free benchmark: OKX public /api/v5/finance/savings/lending-rate-history ccy=USDT (hourly realised Simple Earn
+          lending rate, served from ~2021-12). Per tranche: mean of the series over the hold. Before the series starts:
+          the mean of its first 30 days. Sensitivity (not a decision): flat 5 %/yr.
+ Underlyings: BTC, ETH (all three venues' structures where listed), ALT = the 8 COIN-M alts above pooled as one group.
+ Survivorship: none of consequence (no BTC/ETH contract is missing; COIN-M alts listed in the archive are all used).
+
+STRUCTURES (both are "long spot + short dated future, equal USD exposure")
+ LIN  Binance USD-M (USDT-margined) quarterly. Spot bought with USDT on Binance spot; the short future on isolated margin
+      N/L, L in {1, 2, 3}. Capital = N + N/L. Liquidation possible (rule below).
+ INV  coin-margined (Binance COIN-M, Deribit). The spot coin bought (Binance spot, USDT) IS the collateral; short contracts
+      worth C = N * F0/S0 USD, which locks the USD value at N*F0/S0 (fully hedged incl. the basis profit). Capital = N.
+      Effective leverage stays 1x: account equity in coin = C/P_t, cannot be liquidated (reported, checked on data).
+      USDT ~ USD assumed (Deribit/COIN-M settle on USD indices); the USDT/USD drift is not modelled.
+
+TRANCHE RULE (per cell; one decision per group per day)
+ Decision each day at 08:00 UTC on the 1h bars ending 08:00. Candidates: the group's live quarterly / bi-quarterly
+ contracts (Binance: current and next quarter; Deribit: every quarterly) with 14 <= days-to-expiry <= 200.
+ For each candidate: net annualised basis at decision
+     b_net = ((F/S - 1) - cost_rt) * 365 / DTE,  cost_rt = 4 taker fees + the four walks at the primary size (below).
+ If the best candidate has b_net >= Y, open ONE tranche of notional N in it, executed at the close of the 1h bars ending
+ 09:00 (one full bar after the decision). ALT: the rule runs per alt coin (one tranche per coin per day).
+ Y in {5, 8, 12} %/yr.
+ Exit:
+   HOLD   to delivery. Future settles at the venue's published delivery price D; spot is sold as a TWAP over the
+          venue's averaging window before delivery (Binance 60 min, Deribit 30 min), proxied by the mean of Binance spot 1m
+          closes in that window. Tracking error = TWAP_spot - D (enters P&L).
+   EARLY  checked daily at 08:00 UTC: exit at the 09:00 closes when the remaining gross annualised basis
+          ((F/S - 1) * 365 / DTE) <= Z = 2 %/yr and DTE > 1; else HOLD. Re-entry follows the entry rule (new tranche).
+ => cells: LIN {BTC, ETH} x Y(3) x exit(2) x L {1, 2, 3} = 36; INV {Binance BTC, Binance ETH, Binance ALT, Deribit BTC,
+    Deribit ETH} x Y(3) x exit(2) = 30. m for this round = 66.
+
+P&L per tranche (USD on spot notional N)
+ spot leg   N * (S_exit / S0 - 1)   [S_exit = settlement TWAP or the 09:00 close on EARLY]
+ future leg LIN: N * (F0 - F_exit)/F0 with F_exit = D or the 09:00 close. INV: C*(1/F_exit - 1/F0) coin, valued at S_exit.
+ fees       taker per leg on traded notional: Binance spot 10.0 bps, Binance USD-M / COIN-M futures 5.0 bps, Deribit 5.0 bps;
+            delivery charged as a taker leg (5.0 bps; conservative). 4 legs per tranche.
+ spread     each of the four fills walked against mid on TODAY's full books (same method as rounds 1-3b) at the tranche size;
+            on HOLD the closing future fill is the delivery (no walk) and the spot TWAP sale is walked at size/30 per slice
+            (approximated by the walk at size/30).
+ no funding, no borrow. Capital cost enters only through the benchmark below.
+ Sizes: $500, $5k, $50k per leg. PRIMARY (decision) size: $5k. Others reported.
+ Liquidation (LIN, L in {1,2,3}, no top-up): liquidated at the first hour whose MARK-price high >= F0 * (1 + 1/L - 0.01)
+   (maintenance margin 1 %). Then the future margin N/L is lost entirely, spot is sold at that hour's close (taker + walk),
+   the tranche ends.
+ Return on capital r = PnL / capital; annualised a = r * 365 / hold_days; EXCESS e = a - rf (rf averaged over the hold).
+
+STATISTICS
+ Per cell: n tranches, mean e, median, money-weighted APR (sum PnL / sum capital*days * 365) minus capital-weighted rf,
+ t clustered by ENTRY ISO WEEK (primary; Student t, G-1 df, one-sided p).
+ SPLIT BY ENTRY TIME: TRAIN 2021-01-01 .. 2024-06-30, HOLDOUT 2024-07-01 .. 2026-10-09. Only tranches whose exit (delivery
+ or early) happens by 2026-10-09 are evaluated; HOLD tranches in contracts delivering later are excluded and counted.
+ Train pass: mean e > 0 and week-clustered t >= 2. Holdout evaluated once, only for train passers, rule frozen.
+ Holdout success requires ALL of:
+   (1) mean e > 0 and week-clustered t >= 2;
+   (2) Benjamini-Yekutieli q <= 0.05 over the programme, m = 38 + 29 + 18 + 6 + 66 = 157 (H1's holdout p as reported,
+       every other prior hypothesis p = 1);
+   (3) for LIN cells: liquidation is included in (1) (no separate rule).
+ Reported (not decision rules): t clustered by contract (expiry) — tranches on one contract share their settlement and
+ basis regime; mean e at $500 and $50k; e vs flat 5 %; holdout by quarter; share of days the rule is in market;
+ entry basis distribution; settlement tracking error distribution.
+
+RISK (descriptive, every tranche)
+ - max adverse mark-to-market of the short future within the hold, % of N (mark-price high vs F0);
+ - LIN: share liquidated at 1x / 2x / 3x without top-ups; top-up a real account would need to never be liquidated
+   = max over hours of (N * (M_t/F0 - 1) + 0.01 * N * M_t/F0 - N/L)^+, p50 / p90 / max;
+ - INV: verify on data that coin equity never reaches maintenance (expected: never).
+ - qualitative venue / counterparty notes (custody on the exchange for the whole hold; Deribit/Binance specific).
+
+IMPLEMENTATION RULE. No production code in this round. If a cell survives, the write-up describes the strategy module
+(entry / roll / exit, sizing, paper accounting for dated expiry, convergence and margin) and what the paper engine lacks;
+the main session routes it. If nothing survives, the negatives are written up.
+
+------------------------------------------------------------------------------------------------------------------------
+LOG
