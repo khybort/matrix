@@ -398,6 +398,19 @@ BLEND_MODE = __import__("os").environ.get("MATRIX_LLM_BLEND_MODE", "blend").stri
 _SOLO_DAMPEN = Decimal("0.6")
 
 
+def _ask_llm() -> bool:
+    """Whether a decision should pay for an LLM call at all.
+
+    `rule_only` used to be only a blend arm: the call was still made and its
+    answer thrown away. Measured 2026-10-09 (docs/wiki/llm-value-audit.md):
+    on 251 crypto episodes the LLM's side was no better than the rule's own
+    lean at the same entry (-2.4 bps, t=-0.4) and the trades it took were no
+    better than the ones it declined in the same hours (-2.1, t=-0.19), so
+    rule_only now skips the call and the agent costs no LLM budget.
+    """
+    return BLEND_MODE != "rule_only" and llm_enabled()
+
+
 def blend_decisions(rule: Decision, llm: "LLMDecision | None", f: SymbolFeatures) -> Decision:
     """Combine the rule model and the LLM instead of letting the LLM override.
 
@@ -503,7 +516,7 @@ async def decide(
     else:
         rule = rule_decide(f, asset_class=asset_class)
 
-    if llm_enabled():
+    if _ask_llm():
         try:
             hits = await lessons_relevant_to(f, strategy_id, asset_class=asset_class)
         except Exception:  # noqa: BLE001
@@ -644,7 +657,7 @@ async def decide_batch(
     ]
 
     llm_map: dict[str, LLMDecision] = {}
-    if llm_enabled():
+    if _ask_llm():
         async def _hits(f: SymbolFeatures, ac: str):
             try:
                 return await lessons_relevant_to(f, strategy_id, asset_class=ac)
@@ -662,7 +675,7 @@ async def decide_batch(
     bases: list[Decision] = []
     for (f, cfg, asset_class, symbol_edge), rule in zip(items, rules):
         llm = llm_map.get(f.symbol)
-        if llm is None and llm_enabled():
+        if llm is None and _ask_llm():
             logger.debug(f"llm batch missed {f.symbol}, falling back to rule")
         base = blend_decisions(rule, llm, f)
         epsilon = float(cfg.explore_epsilon) if cfg else EXPLORE_EPSILON_DEFAULT

@@ -18,6 +18,7 @@ Validation / clamping is centralized in `graph.parsing.parse_extraction`.
 
 from __future__ import annotations
 
+import os
 import re
 
 from loguru import logger
@@ -198,7 +199,14 @@ async def extract_entities(
     """Top-level entry. Tries the agent tool loop, then single-shot LLM, then
     a keyword heuristic. Returns (entities, relations, source) where source is
     'agent' | 'llm' | 'heuristic'.
+
+    GRAPH_EXTRACT_MODE=heuristic skips both LLM paths. Measured 2026-10-09
+    (docs/wiki/llm-value-audit.md): ~5 900 extraction calls a weekday, and no
+    traded decision earned more with graph coverage than without it, so the
+    LLM budget goes to whatever does earn.
     """
+    if os.environ.get("GRAPH_EXTRACT_MODE", "llm").strip().lower() == "heuristic":
+        return heuristic_extract(title, body), [], "heuristic"
     try:
         agent_result = await _run_agent_path(title, body)
     except Exception as e:

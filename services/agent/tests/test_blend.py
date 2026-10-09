@@ -72,3 +72,30 @@ def test_prompt_carries_graph_rule_and_lessons():
     assert "Knowledge graph" in text and "BlackRock" in text
     assert "Quant model verdict: LONG" in text
     assert "AVOID long on BTCUSDT" in text and "Realised edge" in text
+
+
+def test_rule_only_mode_skips_the_llm_call(monkeypatch):
+    """rule_only must not pay for a call whose answer it discards."""
+    import asyncio
+
+    from agent.features import SymbolFeatures
+
+    monkeypatch.setattr(D, "BLEND_MODE", "rule_only")
+    monkeypatch.setattr(D, "llm_enabled", lambda: True)
+    assert D._ask_llm() is False
+
+    async def _boom(*a, **k):
+        raise AssertionError("LLM called in rule_only mode")
+
+    async def _same(d, *a, **k):
+        return d
+
+    monkeypatch.setattr(D, "call_llm_decisions_batch", _boom)
+    monkeypatch.setattr(D, "_apply_lessons", _same)
+    monkeypatch.setattr(D, "_apply_setup_memory", _same)
+    f = SymbolFeatures(symbol="BTCUSDT", last_price=Decimal("100"))
+    out = asyncio.run(D.decide_batch([(f, None, "crypto", None)], explore_rand=lambda: 1.0))
+    assert len(out) == 1 and out[0].method == "rule"
+
+    monkeypatch.setattr(D, "BLEND_MODE", "blend")
+    assert D._ask_llm() is True

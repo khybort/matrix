@@ -122,3 +122,18 @@ def test_parse_extraction_deduplicates_entities():
     entities, _ = parse_extraction(parsed)
     assert len(entities) == 1
     assert isinstance(entities[0], Entity)
+
+
+def test_heuristic_mode_never_calls_an_llm(monkeypatch):
+    import asyncio
+
+    from graph import extract as X
+
+    async def _boom(*a, **k):
+        raise AssertionError("LLM path used in heuristic mode")
+
+    monkeypatch.setenv("GRAPH_EXTRACT_MODE", "heuristic")
+    monkeypatch.setattr(X, "_run_agent_path", _boom)
+    monkeypatch.setattr(X, "_llm_extract_chunked", _boom)
+    ents, rels, src = asyncio.run(X.extract_entities("Bitcoin ETF inflows surge", "BTC rallies"))
+    assert src == "heuristic" and rels == []
