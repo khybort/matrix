@@ -84,6 +84,31 @@ def test_close_cost_uses_books_then_entry_estimate():
     assert fallback["spot_buy_bps"] == pytest.approx(5.0)
 
 
+def test_thin_book_close_is_penalised_never_the_calm_estimate():
+    """A book that is there but cannot fill the leg is the squeeze case: the
+    open-time estimate (5 bps) is the calm-day price. The visible depth is
+    walked and the rest charged at the worst level + the penalty, and the
+    leg is never below the estimate."""
+    book_open = {"perp_buy_bps": 1.0, "spot_sell_bps": 5.0, "perp_sell_est_bps": 1.0, "spot_buy_est_bps": 5.0}
+    thin = ladder(100.0, 3.0, 50, n=4)  # $200 visible at 3/5/7/9 bps, the leg is $500
+    assert CB.walk_bps(thin.asks, thin.mid, 500) is None
+    c = CB.close_cost_bps(book_open, DEEP, thin, 500)
+    assert c["close_source"] == "thin_book"
+    expect = (200 * 6.0 + 300 * (9.0 + CB.THIN_BOOK_PENALTY_BPS)) / 500
+    assert c["spot_buy_bps"] == pytest.approx(expect, rel=1e-3)
+    assert c["spot_buy_bps"] > book_open["spot_buy_est_bps"]
+    assert c["total_bps"] == pytest.approx(31.0 + 1 + 5 + 1 + expect, rel=1e-4)
+    # the penalised walk never undercuts a dearer estimate
+    dear = {**book_open, "spot_buy_est_bps": 120.0}
+    assert CB.close_cost_bps(dear, DEEP, thin, 500)["spot_buy_bps"] == pytest.approx(120.0)
+    # thin perp leg too; the mark is never cheaper than the close
+    for perp, spot in [(thin, thin), (DEEP, thin), (thin, None)]:
+        close = CB.close_cost_bps(book_open, perp, spot, 500)
+        assert close["close_source"] == "thin_book"
+        assert CB.mark_cost_bps(book_open, perp, spot, 500) >= close["total_bps"] - 1e-9
+    assert CB.thin_walk_bps(thin.asks, thin.mid, 150) == pytest.approx(CB.walk_bps(thin.asks, thin.mid, 150))
+
+
 def test_borrow_per_started_hour_at_stress():
     n, h = Decimal("500"), Decimal("0.00002")
     assert CB.borrow_charge(n, h, 3.0, 0) == 0
@@ -247,6 +272,43 @@ async def test_close_charges_books_fees_and_stressed_borrow(book_wallet, monkeyp
     assert pred.context["book_close"]["close_source"] == "book"
     assert Decimal(pred.context["borrow_charged_usd"]) == borrow
     assert pred.context["borrow_source"] == "stressed_entry"  # no recorded series for the test coin
+
+
+@pytest.mark.asyncio
+async def test_thin_book_close_records_thin_book_and_charges_the_penalty(book_wallet, monkeypatch):
+    wallet_id, sid = book_wallet
+    thin = ladder(100.0, 3.0, 50, n=4)  # $200 visible, the leg is $500
+    _legs(monkeypatch, DEEP, thin)
+    book_open = {"perp_buy_bps": 1.0, "spot_sell_bps": 5.0, "perp_sell_est_bps": 1.0,
+                 "spot_buy_est_bps": 5.0, "borrow_stress": 3.0, "notional_usd": 500.0}
+    pid = await _pred(sid, ctx={**CTX, "book_open": book_open}, hours_ago=0.5)
+    notional = Decimal("500")
+    async with shared_session_scope() as session:
+        session.add(PaperPosition(
+            id=uuid.uuid4(), prediction_id=pid, symbol=SYM, exchange="bybit", asset_class=ASSET,
+            side="inverse_carry", notional_usd=notional,
+            opened_at=datetime.now(timezone.utc) - timedelta(hours=0.5),
+            opened_price=Decimal("100"), status="open", wallet_id=wallet_id,
+        ))
+    from backtest import paper_trade as PT
+    async with shared_session_scope() as session:
+        pos = (await session.execute(
+            select(PaperPosition).where(PaperPosition.prediction_id == pid))).scalar_one()
+        pred = await session.get(Prediction, pid)
+    now = datetime.now(timezone.utc)
+    mark = await PT._carry_mark_usd(pos, pred.context, now)
+    assert await PT._close_position(pos, pred, "hit_horizon", now)
+    async with shared_session_scope() as session:
+        out = (await session.execute(select(Outcome).where(Outcome.prediction_id == pid))).scalar_one()
+        pred = await session.get(Prediction, pid)
+    bc = pred.context["book_close"]
+    assert bc["close_source"] == "thin_book"
+    spot_buy = (200 * 6.0 + 300 * (9.0 + CB.THIN_BOOK_PENALTY_BPS)) / 500
+    assert bc["spot_buy_bps"] == pytest.approx(spot_buy, rel=1e-3)
+    borrow = notional * Decimal("0.00002") * 3  # one started hour, entry x stress
+    cost = Decimal(str(31.0 + 1 + 5 + 1 + spot_buy))
+    assert out.pnl_usd == pytest.approx(-(notional * cost / 10000) - borrow, abs=Decimal("0.001"))
+    assert mark <= out.pnl_usd + Decimal("0.000001")
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,9 @@ books instead:
   mid, and at UNCONFIRMED_MAX_LEG_USD until the strategy's promotion status is
   `confirmed`; the impact of the two opening fills is recorded.
 - close: the two closing fills are walked on the books at close (falling back
-  to the estimate taken at open when a book is gone), plus four taker fees.
+  to the estimate taken at open when a book is gone; a book too thin to fill
+  is walked and the remainder charged at its worst level + a penalty, never
+  below the estimate: `close_source = thin_book`), plus four taker fees.
 - borrow: per started hour, as margin desks charge it, at the rate the venue
   quoted for that hour in `margin_borrow_rates` (ingestion.borrow_recorder);
   an hour the series does not cover falls back to the entry quote x
@@ -46,6 +48,12 @@ MIN_LEG_USD = float(os.environ.get("MATRIX_CARRY_MIN_LEG_USD", "50"))
 PERP_TAKER_BPS = float(os.environ.get("MATRIX_CARRY_PERP_TAKER_BPS", "5.5"))
 SPOT_TAKER_BPS = float(os.environ.get("MATRIX_CARRY_SPOT_TAKER_BPS", "10"))
 BOOK_MAX_AGE_S = 30.0
+# A closing leg the book now present cannot fill (`walk_bps` None) is the
+# squeeze case: depth vanished on exactly the coin whose short is being bought
+# back. The open-time estimate is the calm-day price, so it is never used for
+# it: the visible depth is walked and the rest is charged at the worst visible
+# level plus this penalty, never below the estimate.
+THIN_BOOK_PENALTY_BPS = float(os.environ.get("MATRIX_CARRY_THIN_BOOK_PENALTY_BPS", "50"))
 
 Levels = list[tuple[float, float]]  # (price, qty), best first
 
@@ -78,6 +86,25 @@ def walk_bps(levels: Levels, mid: float, usd: float) -> float | None:
         if rem <= 1e-9:
             return cost / usd * 1e4
     return None
+
+
+def thin_walk_bps(levels: Levels, mid: float, usd: float, penalty_bps: float | None = None) -> float:
+    """Average distance from mid (bps) of a taker fill of `usd` on a book too
+    thin to fill it: the visible levels as walked, the remainder at the worst
+    visible level's distance + `penalty_bps` (THIN_BOOK_PENALTY_BPS)."""
+    penalty = THIN_BOOK_PENALTY_BPS if penalty_bps is None else penalty_bps
+    if usd <= 0 or mid <= 0:
+        return 0.0
+    rem, cost, worst = usd, 0.0, 0.0
+    for p, q in levels:
+        take = min(rem, p * q)
+        d = abs(p - mid) / mid
+        cost += take * d
+        worst = max(worst, d)
+        rem -= take
+        if rem <= 1e-9:
+            return cost / usd * 1e4
+    return (cost + rem * (worst + penalty / 1e4)) / usd * 1e4
 
 
 def max_usd_within(levels: Levels, mid: float, max_bps: float) -> float:
@@ -247,18 +274,35 @@ def size_and_price_open(
     return usd, patch
 
 
+def _close_leg(levels: Levels | None, mid: float, usd: float, est: float) -> tuple[float, str]:
+    """(bps, source) of one closing fill: the walk on the book now; the
+    open-time estimate when there is no book; on a book too thin to fill it,
+    the penalised walk, never below the estimate."""
+    if levels is None:
+        return est, "entry_estimate"
+    w = walk_bps(levels, mid, usd)
+    if w is not None:
+        return w, "book"
+    return max(est, thin_walk_bps(levels, mid, usd)), "thin_book"
+
+
 def close_cost_bps(book_open: dict, perp: Book | None, spot: Book | None, usd: float) -> dict:
     """Four taker fees + the two recorded opening walks + the two closing walks
-    (on the books now, else the estimate taken at open)."""
-    perp_sell = walk_bps(perp.bids, perp.mid, usd) if perp is not None else None
-    spot_buy = walk_bps(spot.asks, spot.mid, usd) if spot is not None else None
+    (on the books now; the estimate taken at open when a book is gone; a
+    penalised walk, >= the estimate, when a book is too thin to fill)."""
+    perp_sell, perp_src = _close_leg(perp.bids if perp else None, perp.mid if perp else 0.0, usd,
+                                     float(book_open["perp_sell_est_bps"]))
+    spot_buy, spot_src = _close_leg(spot.asks if spot else None, spot.mid if spot else 0.0, usd,
+                                    float(book_open["spot_buy_est_bps"]))
+    srcs = {perp_src, spot_src}
     out = {
         "fees_bps": fees_bps(),
         "perp_buy_bps": float(book_open["perp_buy_bps"]),
         "spot_sell_bps": float(book_open["spot_sell_bps"]),
-        "perp_sell_bps": perp_sell if perp_sell is not None else float(book_open["perp_sell_est_bps"]),
-        "spot_buy_bps": spot_buy if spot_buy is not None else float(book_open["spot_buy_est_bps"]),
-        "close_source": "book" if perp_sell is not None and spot_buy is not None else "entry_estimate",
+        "perp_sell_bps": perp_sell,
+        "spot_buy_bps": spot_buy,
+        # most conservative leg names the close
+        "close_source": next(x for x in ("thin_book", "entry_estimate", "book") if x in srcs),
     }
     out["total_bps"] = round(sum(v for k, v in out.items() if k.endswith("_bps")), 3)
     return out

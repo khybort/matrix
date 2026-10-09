@@ -57,7 +57,10 @@ bugs corrupt every downstream conclusion.
   zero accrual: 51 of 51 closed `funding_flip`, mean −27 bps, 0 % wins — the
   four-leg fee and nothing else. A flip now needs five minutes of adverse
   readings, and directional crypto trades pay funding only for settlements
-  they actually cross. Carry outcomes before 2026-10-09 are not evidence.
+  they actually cross. Carry outcomes before 2026-10-09 are not evidence:
+  the edge study drops carry closes before 2026-10-09 13:39:14 UTC, when the
+  fix went live with 7d7b854 (`MATRIX_EDGE_CARRY_EVIDENCE_SINCE`; the last
+  pre-fix close was 13:14:40, the next one came after).
 - **Carry family** (7d7b854 onward): `delta_neutral`, `inverse_carry` and
   `xexch_carry` are booked as one family, with one carry per underlying per
   wallet. A carry that names a spot leg is gated, sized and costed on both
@@ -68,7 +71,11 @@ bugs corrupt every downstream conclusion.
   where the series misses (32dcadb; `context.borrow_source`). An open carry
   is marked at settled funding minus the full round trip and accrued borrow,
   so the daily-loss circuit sees what closing would realise (69f37c8). Closes
-  never wait on REST.
+  never wait on REST. A closing leg whose book is present but cannot fill the
+  size (the squeeze case) is no longer priced at the calm open-time estimate:
+  the visible depth is walked and the rest charged at the worst level +
+  `MATRIX_CARRY_THIN_BOOK_PENALTY_BPS` (50), never below the estimate,
+  `book_close.close_source = thin_book`; the equity mark uses the same price.
 - **Kelly** sizes only a `confirmed` strategy, on the 95 % lower bound of its
   edge; a carry row is already net of cost, and since 3af1eee the round trip
   is not charged twice.
