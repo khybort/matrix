@@ -802,3 +802,25 @@ Every round-5 cell has q = 1. H1 is still the only test with q ≤ 0.05, at q = 
 
 **Verdict: rejected.** No module is designed. What follows for the main session is nothing to build. Options
 data does not belong in the live feature set until a forward test of D.3 is pre-registered and passes.
+
+### Forward test r5f (pre-registered 2026-10-09)
+D.3 is now being settled on data that did not exist when it was registered: `r5f.D.3`, n fixed at **60 episodes**,
+pre-registered through the harness's forward mode (`services/backtest/research/signal_2026_10_r5f/PREREG.md`, committed
+alone in d283c9a; register row in the ledger, **m = 172**).
+- Rule: exactly round 5's D.3 (`matrix_shared.iv_term`, which reproduces round 5's TERM, percentile and all 118 D.3
+  entries bit for bit): TERM from the Deribit option trades in [D−4h, D), pct against the asset's trailing 365 days
+  (≥ 120 values), fire at ≥ 0.90, one episode per signal window, entry at the close of the bar ending D + 1h, 72 h hold,
+  no TP/SL, BTC and ETH pooled. Forward window: decision days from 2026-10-10.
+- Success: net > 0 with week-clustered t ≥ 2 over the first 60 episodes, **and** BHY q ≤ 0.05 at the ledger's cumulative m
+  at evaluation time. Evaluated once, by `forward.py decide`, when `forward.py status` says all 60 have closed (about 2–3
+  years at ~21 a year; never decided if not reached by 2031-01-01). Nothing is evaluated earlier.
+- Power is low and is written into the pre-registration: at round 5's per-episode SD (718 bps) a true +125 bps gives
+  E[t] ≈ 1.35 at n = 60; +200 bps gives ≈ 2.2. A pass is strong evidence; a fail does not exclude a smaller edge.
+- Live pieces: `ingestion.iv_term_recorder` writes `deribit_iv_daily` (migration 0043) each day after 00:00 UTC and
+  backfilled the last 400 days ([[operations]]); the shadow module `iv_inversion` (strategy_configs crypto v1,
+  status `shadow`) emits the long on the shadow wallet from 01:00 UTC on a window's first day. Its band in
+  `params.shadow_band` (+166…+201 bps from round 5's medians, floor 0, `min_episodes` 60) keeps the shadow tracker at
+  `collecting` until 60; the tracker reports, the harness decides.
+- Verified live 2026-10-09 18:02 UTC: the backfill wrote 802 rows (2025-10-04..2026-10-09) and its 800 days that overlap
+  round 5's cache equal round 5's TERM exactly. Decision 2026-10-09: BTC TERM −3.11 at pct 0.341, ETH −9.47 at 0.119 →
+  no signal. `forward.py status`: 0 of 60 closed. Tracker: `shadow iv_inversion/crypto: COLLECTING — 0/60`.
