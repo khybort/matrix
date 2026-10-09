@@ -484,3 +484,13 @@
   üreten her labs tick'i 17:05'ten itibaren `NameError` attı, hiçbir test o DB yolunu koşmadığı için 41/41 geçti.
   Kural: `make test-all` artık ilk suite olarak `names` koşar (pyflakes: undefined name / redefinition). Bir
   dosyayı bölen her değişiklikten sonra o gate kırmızıysa commit yok.
+
+- **2026-10-09 — Evidence keyed by `strategy_id` pools a champion with its shadow challenger.** An active config and a
+  `shadow` config of one strategy trade under the same `strategy_id` with different params (inverse_carry v1 active +
+  v2 shadow, 52 + 18 closed carries). `edge_study.carry_edge_rows` pooled both wallets, so a winning challenger could
+  confirm the champion's book (uncapped legs, Kelly), and `episode_groups` merged the two arms' fills on one symbol
+  into a single episode. Every per-strategy evidence path must pick an arm (`is_shadow`): the champion's book when it
+  has one, the shadow book only for a strategy that runs nowhere else.
+- **2026-10-09 — A 1m bar cannot order a resting limit's fill against its own high and low.** The entry-rule change
+  started scoring the maker fill bar itself (`execution_study`), so a TP printed before the touch was credited (TP wins
+  ties). After a passive fill, score from the next bar at the limit price (`maker_fill_result`).

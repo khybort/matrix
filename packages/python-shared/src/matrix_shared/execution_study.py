@@ -83,6 +83,21 @@ def post_only_entry(bars: list[Bar], idx: int, side: str, wait_bars: int = WAIT_
     return Entry(False, last + 1, False)
 
 
+def maker_fill_result(
+    bars: list[Bar], idx: int, e: Entry, *, side: str, tp_pct: float, sl_pct: float, horizon_bars: int
+):
+    """The bracket after a resting limit placed at the open of `bars[idx]`
+    filled on `bars[e.idx]`, at the limit price. Scored from the bar AFTER the
+    fill: a 1m bar cannot order the fill against its own high and low, and
+    scoring the fill bar credited a take-profit printed before the order was
+    even touched (TP wins ties). The remaining horizon is shorter by the bars
+    spent waiting."""
+    start = e.idx + 1
+    left = max(1, horizon_bars - (start - idx))
+    return simulate_bracket(bars, start, side=side, tp_pct=tp_pct, sl_pct=sl_pct,
+                            horizon_bars=left, entry_px=entry_price(bars[idx]))
+
+
 @dataclass
 class ExecRow:
     strategy_id: str
@@ -161,11 +176,8 @@ async def run_execution_study(
         e = post_only_entry(series, idx, t["side"], wait_bars)
         if e.filled:
             row.fills += 1
-            # The bracket starts from the fill bar; the remaining horizon is
-            # shorter by the bars spent waiting.
-            left = max(1, horizon_bars - (e.idx - idx))
-            r = simulate_bracket(series, e.idx, side=t["side"], tp_pct=tp, sl_pct=sl,
-                                 horizon_bars=left, entry_px=entry_price(series[idx]))
+            r = maker_fill_result(series, idx, e, side=t["side"], tp_pct=tp, sl_pct=sl,
+                                  horizon_bars=horizon_bars)
             net = r.ret_bps - maker_round if r.reason != "no_data" else 0.0
             row.maker_net.append(net)
             row.passive_only_net.append(net)

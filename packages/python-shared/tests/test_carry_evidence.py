@@ -155,3 +155,23 @@ async def test_the_study_scores_carries_from_realised_episodes_never_bars(monkey
     (row,) = await E.run_edge_study(days=14, strategy_id="neg_funding_carry", family=13)
     assert row["kind"] == "carry" and row["family"] == 13
     assert row["status"] == "confirmed"
+
+
+def test_champion_and_shadow_challenger_are_not_pooled():
+    """inverse_carry runs an active v1 and a shadow v2 under one strategy_id.
+    A winning challenger must not confirm the champion's (losing) book, and
+    the two arms' fills on one symbol must not merge into one episode."""
+    champion = _fills(-20.0, seed=5, sid="inverse_carry")
+    challenger = [{**r, "is_shadow": True} for r in _fills(400.0, seed=6, sid="inverse_carry")]
+    for r in champion:
+        r["is_shadow"] = False
+    rows, returns = E.carry_edge_rows(champion + challenger)
+    (row,) = rows
+    assert row["n"] == 300 and row["edge_bps"] < 50   # pooled: one merged episode per symbol, ~+190
+    assert row["arm"] == "champion"
+    E.apply_promotion_bar(rows, returns, family=13, registry=Registry())
+    assert row["status"] != "confirmed"
+
+    # Shadow only (neg_funding_carry trades nowhere else): judged on the shadow book.
+    (only,), _ = E.carry_edge_rows(challenger)
+    assert only["arm"] == "shadow" and only["n"] == 300

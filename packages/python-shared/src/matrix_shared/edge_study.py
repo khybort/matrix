@@ -541,7 +541,8 @@ _CARRY_FILLS_SQL = (
     "       pp.notional_usd, pp.opened_at, pp.closed_at, pp.pnl_usd, "
     "       p.context->>'borrow_rate_hourly' AS borrow_rate_hourly, "
     "       p.context->>'borrow_charged_usd' AS borrow_charged_usd, "
-    "       p.context->'book_close'->>'total_bps' AS book_close_bps "
+    "       p.context->'book_close'->>'total_bps' AS book_close_bps, "
+    "       coalesce(p.context->>'is_shadow','false') = 'true' AS is_shadow "
     "FROM paper_positions pp JOIN predictions p ON p.id = pp.prediction_id "
     "WHERE p.side = ANY(:carry) "
     "  AND p.generated_at >= now() - make_interval(secs => :secs) "
@@ -602,6 +603,16 @@ def carry_edge_rows(fills: list[dict]) -> tuple[list[dict], dict[tuple[str, str]
     rows: list[dict] = []
     returns: dict[tuple[str, str], list[float]] = {}
     for (sid, ac), rs in by_key.items():
+        # One arm per row. A strategy with an active config and a `shadow`
+        # challenger trades both under one strategy_id with different params
+        # (inverse_carry v1 + v2, 2026-10-09); pooling them let the challenger's
+        # episodes confirm the champion, and `episode_groups` merged the two
+        # arms' fills on one symbol into a single episode. The champion's book
+        # is the evidence when it has one; a strategy that only runs in the
+        # shadow wallet (neg_funding_carry) is judged on that.
+        champion = [r for r in rs if not r.get("is_shadow")]
+        arm = "champion" if champion else "shadow"
+        rs = champion or rs
         eps = decompose(rs, components=())
         closed = [e for e in eps if e.closed and e.notional_usd]
         net = [float(e.net_bps) for e in closed]
@@ -625,6 +636,7 @@ def carry_edge_rows(fills: list[dict]) -> tuple[list[dict], dict[tuple[str, str]
             "strategy": sid,
             "market": ac,
             "kind": "carry",
+            "arm": arm,
             "net_of_costs": True,
             "n": n,
             "n_raw": len(rs),

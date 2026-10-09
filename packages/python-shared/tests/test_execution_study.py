@@ -63,3 +63,25 @@ def test_row_separates_crossing_from_skipping_when_unfilled():
     # skipping the unfilled ones dilutes a losing arm toward zero
     assert row["passive_only_bps"] > row["postonly_net_bps"]
     assert abs(row["passive_only_bps"] - 0.6 * row["postonly_net_bps"]) < 3.0
+
+
+def test_maker_fill_bar_range_is_not_scored():
+    """A buy limit at 100 touched on a bar that also printed 101.5: the bar
+    cannot say whether 101.5 came before or after the fill, and TP wins ties,
+    so scoring the fill bar booked a take-profit the order never earned."""
+    from matrix_shared.edge_study import simulate_bracket
+    from matrix_shared.execution_study import maker_fill_result
+
+    bars = [
+        Bar(T0, 100.0, 100.0, 100.0, open=100.0),
+        Bar(T0 + timedelta(minutes=1), 101.5, 99.9, 100.1, open=100.4),   # TP printed, then the touch
+        Bar(T0 + timedelta(minutes=2), 100.3, 99.95, 100.2, open=100.1),
+        Bar(T0 + timedelta(minutes=3), 100.4, 100.0, 100.3, open=100.2),
+    ]
+    e = post_only_entry(bars, 0, "long", wait_bars=1)
+    assert e.filled and e.idx == 1
+    scored_on_fill_bar = simulate_bracket(bars, e.idx, side="long", tp_pct=0.01, sl_pct=0.01,
+                                          horizon_bars=4, entry_px=100.0)
+    assert scored_on_fill_bar.reason == "hit_tp"      # the old, optimistic answer
+    r = maker_fill_result(bars, 0, e, side="long", tp_pct=0.01, sl_pct=0.01, horizon_bars=4)
+    assert r.reason == "hit_horizon" and abs(r.ret_bps - 30.0) < 1e-6
