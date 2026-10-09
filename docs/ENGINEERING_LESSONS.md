@@ -459,3 +459,10 @@
   writer under an existing key, grep every reader of that table (`market_ticker_snapshots`, `market_orderbook_snapshots`)
   for symbol-only filters and fix them in one pass, each with a test that inserts a newer foreign-venue row.
 
+
+- **2026-10-09 — When a service file imports a new name from `matrix_shared`, save the shared file first.**
+  Hot reload restarts a service the moment its own file is saved, and the shared package only when its file is saved.
+  Saving `notify/shadow.py` (importing the new `format_review`) a minute before `shadow_tracker.py` left notify in an
+  `ImportError` crash loop until the shared save landed. Order a cross-package change shared-first (or stage both in a
+  scratch copy, test against it with a mounted src, then copy shared before the service). After the save, grep
+  `docker compose logs --since 3m` for `Traceback`.

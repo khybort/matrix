@@ -207,6 +207,35 @@ funding over ≥ 9 h, borrow not charged, or no book cost), **collecting**
 (< 20 closed), **below_band** (mean ≤ +30: costs ate the edge, do not promote),
 **on_track**. An unknown opportunity count never flags staleness.
 
+Two pre-registered A/B splits ride on the same closed episodes (added 2026-10-09):
+`by_borrow_source` (n, mean net per `context.borrow_source`: series / mixed /
+stressed_entry, `unknown` for closes before the recorder; re-emissions that
+disagree count as mixed) and `arms` (`entry_filter.flat_keep` and `decay_keep`
+true/false, read from the bet's first signal: n, mean, median, day-clustered t).
+`revisit` evaluates the three revisit rules of signal-research-2026-10.md
+("Borrow measurement", "Live path and funding decay") **over `series` episodes
+only** — stressed_entry and mixed closes charged an assumed borrow and cannot judge
+it: (a) p90 of hold-mean series borrow / entry quote > 1.0 →
+`MATRIX_NFC_BORROW_HOLD_STRESS=<p90, rounded up to 0.01>`; (b) `flat_keep=false`
+mean net ≤ 0 → `MATRIX_NFC_BORROW_MODEL=flat`; (c) `decay_keep=false` (naive-kept)
+mean net ≤ 0 → `MATRIX_NFC_EXPECTED_MODEL=decay`. An empty arm never holds; an arm
+under 10 is flagged thin. Band fields: `revisit_series_episodes` (30) and the env
+names. When series episodes reach 30, notify sends **`review_due` once** per strategy
+(`review_sent` in the state file; a container recreate that wipes `/tmp` would send
+it once more). It names the rules that hold and the env line; nothing applies it —
+an entry gate is the main session's decision. The digest line gains
+`borrow src 30/0/0 series/mixed/stressed, review at 30/30 series` once an episode has
+closed. Example (synthetic rows):
+
+```
+🔁 review_due neg_funding_carry/crypto: 30 closed episodes with borrow_source=series (≥ 30)
+  borrow source: series n 30 mean +65.3
+  (hold_stress) p90 > 1.0: HOLDS — p90 series-mean/entry-quote 1.40 (median 0.90, n 30)
+  (borrow_model) mean ≤ 0: HOLDS — flat_keep=false series episodes: n 10, mean -42.0, median -40.0 bps, t_day -11.2
+  (expected_model) mean ≤ 0: does not hold — decay_keep=false series episodes: n 0, mean n/a, median n/a bps, t_day n/a
+  implied env change (main session decides; nothing applied): MATRIX_NFC_BORROW_HOLD_STRESS=1.40 MATRIX_NFC_BORROW_MODEL=flat
+```
+
 Surfaces: one line per strategy in the Director brief
 (`shadow neg_funding_carry/crypto: COLLECTING — 0/20 closed ep, 1 open · band
 +100…+300, floor +30 · last open 1h ago · 2 qualifying settlements/72h`), and a
