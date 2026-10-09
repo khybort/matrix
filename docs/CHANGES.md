@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-10-09 — Alarmlar host'tan da gider; notify teslim edilemeyeni sayar ve fill'siz günü alarmlar
+- `scripts/stall_watchdog.sh` (launchd, 5 dk) artık yalnız sessiz servisi restart etmiyor: pilde çalışma, watchdog boşluğu/reboot, Docker erişilemez (OrbStack kapalıysa başlatır), container egress ölü/host sağlam, BTCUSDT ticker > 30 dk, host disk < 30 GiB için Telegram'a **host'tan** (curl) yazar. Sebep: 2026-09-30→10-06 VM egress'i öldü, notify 783 alarm üretip hiçbirini teslim edemedi; 10-06'da pil bitti, kimse duymadı. `make watchdog-install` iki Telegram anahtarını `~/Library/Application Support/matrix/watchdog.env`'e (0600) kopyalar; `make watchdog-test`. `MATRIX_WATCHDOG_HEAL_EGRESS=1` → 30 dk ölü egress'te `orb restart docker` (vars. kapalı).
+- notify: teslim edilemeyen alarmlar sayılır, kanal dönünce tek mesajla bildirilir; `no_fills` dedektörü (24 saat hiç paper pozisyon açılmadı, `MATRIX_HEALTH_FILL_STALE_S`); ticker probu `exchange='bybit'`'e pinli.
+
 ## 2026-10-09 — Strateji servisi bahis başına bir prediction yazar; funding settlement'ta işlenir
 - `strategy.persist`: aynı (strateji, market, sembol, yön, şampiyon|shadow) için önceki prediction'ın ufku dolmadan gelen draft yazılmaz (tüm modüller etkilenir; 30 günde oi_delta satırlarının %75'i, momentum_xs'in %83'ü tekrardı). Edge study'nin `one_per_episode`'u ile aynı birim.
 - Paper engine (çalışma ağacında, carry WIP'iyle birlikte): carry ve yönlü kripto funding'i kesişilen settlement'larda, o anki oranla (`backtest.carry_funding`); funding flip 5 dk süreklilik ister. Bu tarihten önceki carry outcome'ları kanıt değil.

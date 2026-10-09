@@ -42,6 +42,13 @@ p.write_text(s)
 print("wrote .env (gitignored)")
 PY
 
+# The host watchdog (launchd) keeps its own 0600 copy; launchd cannot read .env.
+wd_env="$HOME/Library/Application Support/matrix/watchdog.env"
+if [ -f "$wd_env" ]; then
+  (umask 077; grep -E '^(TELEGRAM_BOT_TOKEN|TELEGRAM_ALLOWED_CHAT_IDS|MATRIX_WATCHDOG_HEAL_EGRESS)=' .env > "$wd_env")
+  echo "refreshed host watchdog copy"
+fi
+
 docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.limits.yml \
   up -d --no-deps --force-recreate notify >/dev/null 2>&1 || docker compose up -d --no-deps --force-recreate notify >/dev/null 2>&1
 echo "notify recreated; watching 90s for getUpdates conflicts..."

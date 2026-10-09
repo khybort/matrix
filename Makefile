@@ -630,6 +630,8 @@ watchdog-install: ## Install launchd stall-watchdog + caffeinate (prevents suspe
 	@mkdir -p "$(LAUNCH_AGENTS)" "$(HOME)/Library/Logs" "$(WATCHDOG_DIR)"
 	@cp scripts/stall_watchdog.sh "$(WATCHDOG_SCRIPT)"
 	@chmod +x "$(WATCHDOG_SCRIPT)"
+	@# launchd cannot read .env under ~/Documents (TCC): copy only the alert keys, 0600.
+	@(umask 077; grep -E '^(TELEGRAM_BOT_TOKEN|TELEGRAM_ALLOWED_CHAT_IDS|MATRIX_WATCHDOG_HEAL_EGRESS)=' .env > "$(WATCHDOG_DIR)/watchdog.env" || true)
 	@for name in $(WATCHDOG_PLISTS); do \
 		sed -e "s|__SCRIPT__|$(WATCHDOG_SCRIPT)|g" -e "s|__HOME__|$(HOME)|g" \
 			"infra/launchd/$$name.plist" > "$(LAUNCH_AGENTS)/$$name.plist"; \
@@ -646,7 +648,7 @@ watchdog-uninstall: ## Remove launchd stall-watchdog + caffeinate
 		rm -f "$(LAUNCH_AGENTS)/$$name.plist"; \
 		echo "removed $$name"; \
 	done
-	@rm -f "$(WATCHDOG_SCRIPT)"
+	@rm -f "$(WATCHDOG_SCRIPT)" "$(WATCHDOG_DIR)/watchdog.env"
 
 .PHONY: watchdog-status
 watchdog-status: ## Show watchdog state + recent actions
@@ -657,6 +659,10 @@ watchdog-status: ## Show watchdog state + recent actions
 .PHONY: watchdog-run
 watchdog-run: ## Run the stall watchdog once now (restarts hung services)
 	@./scripts/stall_watchdog.sh
+
+.PHONY: watchdog-test
+watchdog-test: ## Send one Telegram message through the host-side alert path
+	@"$(WATCHDOG_SCRIPT)" --test-alert
 
 ##@ Cleanup
 
