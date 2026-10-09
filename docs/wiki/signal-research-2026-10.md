@@ -246,3 +246,110 @@ How to read it:
   borrow, not the funding, was the gap. Judging needs the promotion bar's
   registered n, not a month of results. Replay scripts: session scratchpad
   `shb/` (`fetch_books.py`, `replay.py`), not committed.
+
+## Round 2 (ticks) — 2026-10-09: 29 cells, nothing survives
+Goal: a signal whose **gross** edge per episode is ≥ 45 bps (3× a taker
+round trip), on data round 1 could not see: every print with its aggressor
+side. Scripts, pre-registration and its timestamped log:
+`services/backtest/research/signal_2026_10_r2/` (`PREREG.txt` committed in
+cdb5b8b before any return was computed).
+
+**Data.**
+- **Tick panel**: Bybit public trade archive for 40 crypto perps, the top 40
+  by Bybit turnover in April 2026, listed before March. 2026-04-24..10-08,
+  6 720 symbol-days, ~120 GB gz streamed and reduced to 1-minute bars
+  (aggressor USD per side, USD in prints ≥ $10k/50k/250k/1M, spread proxy).
+- **Binance** USD-M 1m klines for the same 40 (H10).
+- **Kline tests**: round 1's year of 1h klines, premium, funding and OI, plus
+  Bybit 5m klines around 30 367 extreme settlements (H9).
+
+**Rules.** Tick tests: train May–Jul, holdout Aug–Oct 8. Kline tests use
+round 1's split. Entry one full bar after the signal bar. Cost = 2 × 5.5 bps
+taker + measured spread:
+- *tick tests*: the per-minute spread proxy (last buy print vs last sell
+  print, ≤ 10 s old), which overstates the touch;
+- *kline tests*: a turnover map fitted on 7 137 tick symbol-days, log s =
+  4.53 − 0.213 log turnover (4.9 bps at $1M/day, 2.6 at $20M).
+
+Funding is charged at every settlement crossed. One episode per (cell,
+symbol) at a time. t is day-clustered. Pass: train net > 0 with t ≥ 2, then
+holdout net > 0 with t ≥ 2. To be implemented, a cell also needed holdout
+p < 0.05/k and net ≥ +15.
+
+| cell | rule (short) | train gross | train net (t_day) | n | holdout net (t_day) | n | verdict |
+|---|---|---|---|---|---|---|---|
+| H8a-flow follow 60m / 240m | 15-min aggressor imbalance ≥ 0.35 at ≥ 4× normal volume | −3.0 / −11.5 | −17.8 (−6.8) / −26.2 (−5.7) | 2 812 / 2 269 | −13.0 / −9.7 | 2 678 / 2 055 | rejected |
+| H8a-flow fade 60m / 240m | same, opposite side | +3.0 / +11.5 | −11.7 (−4.5) / −3.1 (−0.7) | 2 812 / 2 269 | −19.0 / −22.0 | | rejected |
+| H8a-large follow 60m / 240m | 15-min net large-print USD ≥ 5σ (7 d) | −3.3 / −1.9 | −17.8 (−5.0) / −16.2 (−3.1) | 3 012 / 2 461 | −17.7 / −17.4 | 2 471 / 1 922 | rejected |
+| H8a-large fade 60m / 240m | same, opposite side | +3.3 / +1.9 | −11.3 (−3.1) / −12.4 (−2.4) | | −13.0 / −12.9 | | rejected |
+| H8b-1m fade 30/60/240m | 1-min move ≥ max(1 %, 6σ), ≥ 70 % same-side aggressor, ≥ 8× volume | +25 / +27 / +28 | +8.2 (1.6) / +9.5 (1.2) / +11.4 (1.0) | 821 / 796 / 735 | −23.3 / −10.3 / −8.5 | 450 / 435 / 400 | rejected |
+| **H8b-5m fade 30m** | 5-min move ≥ max(2 %, 5σ), ≥ 65 % same-side, ≥ 5× volume | +43.2 | **+25.8 (2.54)** | 441 | **+9.4 (0.64)** | 443 | train pass, **holdout fail** |
+| **H8b-5m fade 60m** | same | +49.2 | **+32.0 (2.57)** | 436 | **+18.1 (1.05)** | 430 | train pass, **holdout fail** |
+| **H8b-5m fade 240m** | same | +65.8 | **+49.0 (2.85)** | 416 | **−2.0 (−0.09)** | 398 | train pass, **holdout fail** |
+| H10 15m / 60m | Binance − Bybit 5-min return gap ≥ 30 bps, trade Bybit toward Binance | +7.3 / +1.2 | −10.5 (−3.9) / −16.1 (−2.5) | 1 496 / 1 165 | −20.8 / −10.3 | 2 060 / 1 511 | rejected |
+| H9-pre ≥ 0.10 % / ≥ 0.30 % | 30 min into settlement, against the payer of the predicted rate | +3.8 / +4.0 | −10.1 (−4.8) / −9.8 (−2.2) | 19 098 / 6 015 | −15.0 / −7.3 | 6 484 / 2 450 | rejected |
+| H9-post ≥ 0.10 %, 30m / 240m | after settlement, reversal (long if rate > 0) | +6.7 / +47.2 | −7.1 (−2.4) / −8.9 (−1.0) | 16 123 / 10 478 | −3.2 / −4.1 | | rejected |
+| H9-post ≥ 0.30 %, 30m / 240m | same | +13.7 / +104.6 | −0.0 (0.0) / +6.5 (0.4) | 5 468 / 3 533 | +4.3 / +12.2 | 2 204 / 1 473 | rejected |
+| H11 build-up 4h / 24h | 4h OI ≥ +15 % and \|move\| ≥ 3 %, follow | −36 / −68 | −19.6 (−0.7) / +6.2 (0.1) | 758 / 597 | −102 / +92 (0.6) | 358 / 280 | rejected |
+| H11 flush 4h / 24h | 4h OI ≤ −15 % and \|move\| ≥ 3 %, fade | +200 / +88 | +203 (1.84) / +141 (1.78) | 386 / 324 | +144 (1.93) / +172 (0.95) | 125 / 111 | rejected (near miss) |
+| H11c flush 4h, 2024-10..2025-09 | frozen rule, earlier unseen year (addendum) | +73.2 | **+61.1 (0.94)**, median +11.6 | 364 | — | | **fails confirmation** |
+| H12 new-listing short 7d / 14d | short at listing + 25 h | −1 751 / −4 733 | −1 987 (−0.8) / −5 290 (−0.9) | 81 / 81 | −694 / −202 | 24 / 24 | rejected |
+
+Holdouts of train failures were computed afterwards, for the record only.
+**m = 29.** The three train passers have BY q = 0.20 over the 28 train
+p-values. Nothing is implemented.
+
+### Claims
+- **Order flow does not predict at 1–4 h on liquid perps; it costs.** Every
+  imbalance and large-print cell is ≤ ±12 bps gross. Following and fading are
+  near mirror images, so the cost (~15 bps) decides the sign. The informative
+  part of aggressor flow is spent within minutes, which is the maker study's
+  adverse selection seen from the other side ([[maker-execution]]).
+- **Cascade bounces are real but not stable.** Fading a 5-minute same-side
+  burst made +43…+66 bps gross in train. That cleared 3× cost, but almost all
+  of it came in early June: the top 10 days were 94–100 % of train PnL, and
+  long-after-dump beat short-after-pump. In the holdout it made +17…+37 gross
+  and 18–19 bps of cost (spreads are wider at these moments than on an
+  average day). Net was +9 / +18 / −2 at t ≤ 1.05. The 1-minute version
+  never cleared cost.
+- **The post-settlement rebound is paid back in funding.** After a settlement
+  ≥ 0.30 %, going long against the payers earns +105 bps gross over 4 h
+  (holdout +122). The rate persists, though, and pays −84 / −96 bps over the
+  same hold. That is round 1's H2 result at intraday scale: price drift and
+  funding offset each other.
+- **Pre-settlement positioning is not exploitable**: +4 bps gross.
+- **Cross-venue lead-lag is a seconds effect.** A 30 bps Binance–Bybit gap
+  closes for +1…+10 bps on Bybit after a minute's delay, which does not pay
+  the cost.
+- **OI flush + fade is the closest miss, and it fails out of sample.**
+  It was positive in train (+203) and holdout (+144), both at t < 2. On a
+  fresh earlier year it gave +61, t = 0.94, median +12, with the top 5 % of
+  episodes carrying ~100 % of the PnL. Its median falls from +118 to +43 to
+  +12 across the three periods.
+- **New-listing shorts are positive in the median and ruinous in the mean**
+  (median +1 248 bps at 7 d; one coin, COAI, went up 20× in a week). With no
+  stop or cap, the tail decides the result.
+
+### Survivorship and other limits
+- Every source lists perps trading on 2026-10-09. The panel was chosen by
+  April turnover among today's coins. Delisted coins are absent, which hurts
+  H8b (crashed coins bounce less) and H12 most. H11c is worse: only 130 of
+  the 200 symbols existed in 2024-10..2025-09.
+- The spread proxy comes from prints, not quotes, and overstates the touch.
+  The kline spread map uses a typical day's spread, but events happen at wide
+  moments, so H9/H11/H12 costs are understated by a few bps. That would not
+  rescue any cell.
+- No historical liquidation feed exists (Binance `liquidationSnapshot`
+  returns 404), so H8b is a proxy based on aggressor bursts.
+- Data kept in the session scratchpad (`r2/`): minute bars (346 MB
+  compressed), the episode tables, the 5m windows and the spread map. Raw
+  ticks were deleted (14.0 GB freed, plus ~120 GB streamed and dropped
+  during reduction).
+
+### What would reopen it
+H8b-5m and H11-flush are both tail bets on forced flows. Each could only be
+reopened with a **new pre-registered test on new data**: for H8b, the live
+`market_trades` stream from 2026-10-09 onward; for H11, a quarter of forward
+OI. Re-cutting these periods would just be more searching. The ≥ 45 bps-gross
+search came up empty on tick data. The only surviving edge is still round 1's
+hedged negative-funding carry.

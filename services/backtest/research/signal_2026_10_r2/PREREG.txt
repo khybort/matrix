@@ -101,3 +101,39 @@ H12  new-listing short (K1 + instruments launchTime). Every crypto USDT perp lau
 
 ------------------------------------------------------------------------------------------------
 LOG (append-only)
+2026-10-09 ~13:52 UTC (no return computed yet). The reducer stores large-print aggressor USD per
+ bucket, not print counts, so the H8a-large bucket rule "<= 300 prints/day" cannot be evaluated.
+ Replaced by: the smallest bucket whose share of the symbol's train aggressor USD is <= 15 %.
+ H9 data: 30 367 candidate settlements (|F| or |F^| >= 0.10 %) in the universe; corr(F^, F) = 0.77
+ over all 455 875 universe settlements (prediction quality only, no price used).
+2026-10-09 ~14:07 UTC (counts only, no return computed). Data complete: 6 720 / 6 720 panel symbol-days,
+ 10 184 5m windows, 40 / 40 Binance symbols. Spread map (7 137 symbol-days, 86 symbols):
+ log s = 4.534 - 0.2127 log turnover (s = 4.9 bps at $1M/day, 2.6 at $20M, 1.1 at $1B; resid sd 0.71).
+ Train trigger counts (non-overlapping episodes): H8a-flow 2812/2269 (60/240), H8a-large 3012/2461,
+ H8b-1m 821/796/735, H8b-5m 441/436/416, H10 1496/1165, H9-pre 19098/6015, H9-post-10 16123/10478,
+ H9-post-30 5468/3533, H11-build 758/597, H11-flush 386/324, H12 81/81.
+ No threshold changed (all cells >= 81 episodes; H9 above 5000 is kept: more n, same rule).
+2026-10-09 ~14:08 UTC TRAIN VERDICT (before any holdout return). Train passers (net > 0, t_day >= 2):
+ H8b-5m-30 (+25.8, t 2.54, n 441), H8b-5m-60 (+32.0, t 2.57, n 436), H8b-5m-240 (+49.0, t 2.85, n 416).
+ All other 25 cells fail (best near-misses H11-flush-4h +203 t_day 1.84; H11-flush-24h +141 t 1.78).
+ Noted before holdout: H8b-5m train PnL is concentrated in June (top 10 days ~ 94-100 % of PnL).
+ Holdout k = 3. Implement bar: holdout net >= +15, t_day >= 2.13 (one-sided p < 0.05/3).
+2026-10-09 ~14:08:30 UTC HOLDOUT (k = 3, rule frozen): H8b-5m-30 +9.4 (t_day 0.64, n 443); H8b-5m-60 +18.1
+ (t 1.05, n 430); H8b-5m-240 -2.0 (t -0.09, n 398). NOTHING SURVIVES. Nothing is implemented.
+ Holdout of the 25 train failures is computed afterwards for the record only; decisions above are frozen.
+
+ADDENDUM 2026-10-09 14:09 UTC — H11c, confirmation on an EARLIER, unseen period (m = 29).
+ H11-flush-4h failed the train gate (t_day 1.84) but was positive in both halves (+203 / +144 bps,
+ t_day 1.84 / 1.93) and is the only cell with gross far above 45 bps. That is a post-hoc selection
+ from 28 cells, so it gets one fresh test, on data never looked at:
+ Data: Bybit public 1h klines, 1h OI and funding, 2024-10-01 .. 2025-09-30, for the same 200 OI symbols
+ as round 1 (top 200 by turnover on 2026-10-09: survivorship is WORSE than in the main test).
+ Rule frozen exactly as H11-flush-4h (dOI4 <= -15 %, |r4| >= 3 %, listed >= 30 d, trailing-7d turnover
+ >= $2M/day, fade, entry at the close of the bar ending T+1h, hold 4h, fees 11 bps + mapped spread,
+ funding charged, one episode per symbol at a time). Only this one cell is evaluated.
+ PASS: net > 0 and t_day >= 2. If it passes AND net >= +15 bps, it is implemented as a SHADOW-only
+ strategy (paper, shadow wallet; the promotion machinery judges it). Otherwise nothing is implemented.
+ (Log times corrected 14:11 UTC from result-file mtimes; they had been typed by estimate.)
+2026-10-09 14:24 UTC H11c RESULT (2024-10-01..2025-09-30, 130 of the 200 symbols have data then):
+ H11-flush-4h +61.1 bps net (gross +73.2, median +11.6), t_day 0.94, t_wk 0.88, n 364 -> FAILS.
+ Final: m = 29 cells tested, 0 survivors, nothing implemented.

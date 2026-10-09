@@ -285,3 +285,16 @@
   (2+ dk, iptal); dizi literal'i (`ANY(array[...])`) ms. O iki sorgu autovacuum'la birlikte `market_trades` INSERT'lerini
   `DataFileRead`'e itti: ingestion 4,5 dk geride kaldı, strateji iki tick kripto'da stale-data stand-down yaptı. Canlı DB'de
   ölçüm sorgusu önce `SET statement_timeout` ve düz `EXPLAIN` ile. Kaynak: `docs/wiki/operations.md` "Crypto universe".
+
+- **2026-10-09 — Tick araştırması: indir→indirge→sil akışı; indirgeyicinin şeması ön-kayıttan türetilir; log saatini tahminle yazma.**
+  Sinyal araştırması tur 2: 6 720 Bybit sembol-günü (~120 GB gz) 8 işçiyle akıtıldı, her dosya 1 dakikalık bara
+  indirgenip hemen silindi. Disk tepe noktası birkaç dosya, sonuç 0,35 GB, süre ~25 dk. Üç tuzak çıktı. (1) Ön-kayıt
+  "büyük print = günde ≤ 300 adet" diyordu ama indirgeyici kova başına adet değil USD sakladı. Ham veri silindiği için
+  kural, getiri görülmeden ve loglanarak değiştirilmek zorunda kaldı. Kural: indirmeden ÖNCE ön-kayıttaki her niceliğin
+  indirgenmiş şemadan hesaplanabildiğini kontrol et. (2) Ön-kayıt loguna saatleri tahminle yazdım, 30–40 dk yanlış
+  çıktı; dosya mtime'larından düzeltildi. Kural: saat `date -u` ile alınır, ön-kayıt da ilk getiriden önce ayrı bir
+  commit olur (cdb5b8b). (3) Ortalama ile medyan zıt işaretli olabiliyor: yeni listing short'unun medyanı +1 248 bps,
+  ortalaması −1 987 (bir coin bir haftada 20×). OI-flush'ın medyanı da dönemden döneme +118 → +43 → +12'ye indi.
+  Kural: her hücrede medyan, %5 kırpılmış ortalama ve en iyi %5 / en iyi 10 günün payı raporlanır. Yakın kalan bir
+  hücre yalnız *görülmemiş* bir dönemde tek bir ön-kayıtlı testle yeniden açılır; onda da H11c t = 0,94 ile düştü.
+  Kaynak: `docs/wiki/signal-research-2026-10.md` "Round 2 (ticks)".
