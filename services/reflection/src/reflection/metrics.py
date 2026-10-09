@@ -28,6 +28,19 @@ class StrategyMetrics:
     # is inside the noise band (2026-09-13: SL:TP 2-3:1 across all champions).
     by_reason: dict[str, dict[str, str]] = field(default_factory=dict)
     n_raw: int = 0  # outcome rows behind the n_outcomes episodes
+    # Realised net USD per episode (its rows summed), in episode order: the
+    # sample the mutation gate tests and efficacy compares (same unit).
+    episode_pnls: list[float] = field(default_factory=list)
+    n_probes: int = 0  # ε-exploration rows left out (see `is_probe`)
+
+
+def is_probe(context: dict | None) -> bool:
+    """An ε-exploration probe (agent `maybe_explore`): a paper-only sample of
+    what the policy would NOT have traded. It is evidence for the lessons
+    corridor, not for the exploit policy that reflection mutates and efficacy
+    judges — on 2026-09-15/16 probes alone pushed matrix_agent us and bist
+    over the mutation gate (bist: 19 episodes, 0 of them the policy's)."""
+    return bool((context or {}).get("is_exploration"))
 
 
 async def metrics_window(
@@ -47,7 +60,8 @@ async def metrics_window(
     episodes, win_rate is the share of episodes whose summed pnl is positive,
     avg_score is the mean of per-episode mean scores, total_pnl_usd keeps
     every row's dollars. Per row, a strategy re-filling one losing call ten
-    times crossed the mutation gate on a single decision.
+    times crossed the mutation gate on a single decision. ε-exploration probes
+    are left out (`is_probe`).
     """
     since = datetime.now(UTC) - timedelta(hours=window_hours)
     stmt = (
@@ -55,6 +69,7 @@ async def metrics_window(
             Prediction.strategy_id, Prediction.asset_class, Prediction.symbol, Prediction.side,
             Prediction.generated_at, Prediction.horizon_seconds,
             Outcome.score, Outcome.pnl_usd, Outcome.pnl_pct, Outcome.reason,
+            Prediction.context,
         )
         .join(Prediction, Prediction.id == Outcome.prediction_id)
         .where(Prediction.strategy_id == strategy_id)
@@ -66,7 +81,10 @@ async def metrics_window(
         stmt = stmt.where(Prediction.asset_class == asset_class)
     async with shared_session_scope() as session:
         rows = [dict(r) for r in (await session.execute(stmt)).mappings().all()]
-    return summarize(strategy_id, version, rows, asset_class=asset_class)
+    kept = [r for r in rows if not is_probe(r.pop("context"))]
+    m = summarize(strategy_id, version, kept, asset_class=asset_class)
+    m.n_probes = len(rows) - len(kept)
+    return m
 
 
 def _mean(xs: list) -> Decimal:
@@ -87,8 +105,10 @@ def summarize(
 
     sym: dict[str, dict] = {}
     rsn: dict[str, dict] = {}
+    pnls: list[float] = []
     for g, score in zip(episodes, scores):
         pnl = sum(Decimal(r["pnl_usd"] or 0) for r in g)
+        pnls.append(float(pnl))
         s = sym.setdefault(g[0]["symbol"], {"n": 0, "n_raw": 0, "scores": [], "pnl": Decimal("0")})
         s["n"] += 1
         s["n_raw"] += len(g)
@@ -123,4 +143,5 @@ def summarize(
         asset_class=asset_class,
         by_reason=by_reason,
         n_raw=len(rows),
+        episode_pnls=pnls,
     )

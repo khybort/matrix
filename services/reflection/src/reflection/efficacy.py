@@ -45,6 +45,8 @@ from matrix_shared.edge_study import episode_pnls
 from matrix_shared.models import MutationProposal, Outcome, Prediction, StrategyConfig
 from sqlalchemy import desc, func, select
 
+from reflection.metrics import is_probe
+
 EFFICACY_MIN_HOURS = float(os.environ.get("MATRIX_EFFICACY_MIN_HOURS", "24"))
 EFFICACY_MAX_HOURS = float(os.environ.get("MATRIX_EFFICACY_MAX_HOURS", "336"))  # 14d
 EFFICACY_MIN_N = int(os.environ.get("MATRIX_EFFICACY_MIN_N", "50"))
@@ -58,7 +60,12 @@ Z_NEG = float(os.environ.get("MATRIX_EFFICACY_Z_NEG", "1.0"))
 # another week. Retire the tie and let the next proposal run.
 INDIFFERENCE_Z = float(os.environ.get("MATRIX_CHALLENGER_INDIFFERENCE_Z", "0.5"))
 INDIFFERENCE_MIN_N = int(os.environ.get("MATRIX_CHALLENGER_INDIFFERENCE_MIN_N", "100"))
-Z_POS = float(os.environ.get("MATRIX_EFFICACY_Z_POS", "1.0"))
+# Cut a challenger over only on the evidence a mutation needs to be proposed
+# (one-sided 95 %, reflection.mutate.UNDERPERF_CONF). At 1.0 the check, repeated
+# every tick until a verdict, cut a challenger with NO edge over 34 % of the time
+# (simulation 2026-10-09, docs/wiki/learning-loop-statistics.md); at 1.645 17 %,
+# while a +0.2 sd edge still cuts over 75 % of the time (85 % at 1.0).
+Z_POS = float(os.environ.get("MATRIX_EFFICACY_Z_POS", "1.645"))
 REVERT_COOLDOWN_DAYS = float(os.environ.get("MATRIX_EFFICACY_REVERT_COOLDOWN_DAYS", "7"))
 AUTO_ROLLBACK = os.environ.get("MATRIX_EFFICACY_AUTO_ROLLBACK", "true").strip().lower() != "false"
 # Bound the per-tick work: the June-2026 backlog is ~2,700 applied proposals and
@@ -133,6 +140,7 @@ async def _sample(
             Prediction.side,
             Prediction.generated_at,
             Prediction.horizon_seconds,
+            Prediction.context,
         )
         .join(Prediction, Prediction.id == Outcome.prediction_id)
         .where(Prediction.strategy_id == strategy_id)
@@ -144,7 +152,9 @@ async def _sample(
     if until is not None:
         stmt = stmt.where(Outcome.observed_at < until)
     rows = [r._asdict() for r in (await session.execute(stmt.order_by(Prediction.generated_at))).all()]
-    return Sample.from_pnls(episode_pnls(rows))
+    # Same sample as the mutation gate (reflection.metrics): the policy's own
+    # bets, ε-exploration probes left out.
+    return Sample.from_pnls(episode_pnls([r for r in rows if not is_probe(r.pop("context"))]))
 
 
 def _normalize(params: dict[str, Any] | None) -> str:

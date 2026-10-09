@@ -26,7 +26,15 @@ def _metrics(
         win_rate=win_rate,
         total_pnl_usd=total_pnl_usd,
         by_symbol={},
+        episode_pnls=episode_pnls(n_outcomes, total_pnl_usd),
     )
+
+
+def episode_pnls(n: int, total: Decimal) -> list[float]:
+    """n per-episode results summing to `total`, spread ±20 % of the mean:
+    the sign of `total` is significant at any n the gate looks at."""
+    mean = float(total) / n if n else 0.0
+    return [mean * (1.2 if i % 2 else 0.8) for i in range(n)]
 
 
 def _params(

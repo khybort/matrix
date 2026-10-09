@@ -28,7 +28,7 @@ def test_one_losing_bet_re_filled_does_not_cross_the_mutation_gate():
     assert m.total_pnl_usd == Decimal("-12") and m.win_rate == 0
     assert m.by_symbol["BTCUSDT"]["n"] == "1" and m.by_symbol["BTCUSDT"]["n_raw"] == "12"
     assert m.by_reason["hit_sl"]["n"] == "1"
-    assert not _underperforming(m, min_outcomes=10, score_trigger=Decimal("-0.05"))
+    assert not _underperforming(m, min_outcomes=10)
 
 
 def test_win_rate_is_per_episode_and_dollars_are_kept():
@@ -45,3 +45,38 @@ def test_recent_outcomes_items_are_bets_newest_first():
     items = episode_items(rows)
     assert [it["fills"] for it in items] == [1, 5]
     assert items[1]["pnl_usd"] == -5.0 and items[0]["reason"] == "hit_tp"
+
+
+def test_probes_are_not_the_policy_and_are_left_out():
+    from reflection.metrics import is_probe
+
+    assert is_probe({"is_exploration": True})
+    assert not is_probe({"is_exploration": False}) and not is_probe(None) and not is_probe({})
+
+
+def test_gate_needs_a_significant_loss_not_a_negative_mean():
+    # 12 bets, mean -0.5 USD, sd ~2 → upper bound > 0: noise, no mutation.
+    noisy = [_row(3600 * k, -0.5 + (2.0 if k % 2 else -2.0)) for k in range(12)]
+    m = summarize("s", 1, noisy)
+    assert m.n_outcomes == 12 and m.total_pnl_usd < 0
+    assert not _underperforming(m, min_outcomes=10)
+    # 12 bets that all lose about a dollar → significant → mutate.
+    losing = [_row(3600 * k, -1.0 - 0.1 * (k % 3)) for k in range(12)]
+    assert _underperforming(summarize("s", 1, losing), min_outcomes=10)
+
+
+def test_zero_edge_strategy_rarely_crosses_the_gate():
+    # Before 2026-10-09 the gate was total < 0 (or avg score < -0.05): a strategy
+    # with no edge crossed it about half the time. Now ~5 % (one-sided 95 %).
+    import random
+
+    rng = random.Random(4)
+    old = new = 0
+    trials = 2000
+    for _ in range(trials):
+        rows = [_row(3600 * k, rng.gauss(0, 1.0)) for k in range(20)]
+        m = summarize("s", 1, rows)
+        old += m.total_pnl_usd < 0
+        new += _underperforming(m, min_outcomes=10)
+    assert 0.4 < old / trials < 0.6
+    assert new / trials < 0.08

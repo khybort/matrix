@@ -10,11 +10,13 @@ are off-limits to this module. See docs/TRADING.md.
 
 from __future__ import annotations
 
+import os
 from decimal import Decimal
 from typing import Any
 
 import orjson
 from matrix_shared import call_claude_json
+from matrix_shared.evidence import MeanEvidence
 from matrix_shared.subscription_llm import MODEL_SONNET
 
 from reflection.metrics import StrategyMetrics
@@ -155,8 +157,12 @@ PARAM_TUNERS: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = {
 
 LLM_MODEL = MODEL_SONNET
 
-# Mutation triggers — fire when PnL is negative OR avg score is poor.
-NEG_AVG_SCORE_TRIGGER = Decimal("-0.05")
+# Mutation trigger: the upper one-sided confidence bound of realised net USD
+# per episode is below zero (Student t, UNDERPERF_CONF). Until 2026-10-09 it
+# was "n >= 10 and (total < 0 or avg_score < -0.05)": a strategy with no edge
+# at all crossed it about half the time, so the mutation history was driven by
+# noise (docs/wiki/learning-loop-statistics.md).
+UNDERPERF_CONF = float(os.environ.get("MATRIX_MUTATION_CONF", "0.95"))
 MIN_N_OUTCOMES = 10
 
 # Per-strategy minimum n_outcomes before param_tune fires.
@@ -189,18 +195,28 @@ def _normalize_weights(weights: dict[str, Decimal]) -> dict[str, Decimal]:
     return {k: v / total for k, v in weights.items()}
 
 
+def underperformance(m: StrategyMetrics) -> MeanEvidence:
+    """Per-episode net USD evidence the gate tests (exploration probes excluded)."""
+    return MeanEvidence.from_values(m.episode_pnls)
+
+
 def _underperforming(
     m: StrategyMetrics,
     *,
     min_outcomes: int,
-    score_trigger: Decimal,
+    conf: float = UNDERPERF_CONF,
 ) -> bool:
-    """True when we have enough samples and paper PnL or score says 'fix this'."""
+    """True when we have enough episodes AND the loss is significant: the
+    one-sided `conf` upper bound of mean net USD per episode is below zero.
+
+    Same sample and unit as `efficacy` (episode-summed pnl_usd, sample sd);
+    a mean below zero inside its noise band is not evidence that anything
+    needs fixing, and a mutation made on it is a coin toss the efficacy pass
+    then has to undo.
+    """
     if m.n_outcomes < min_outcomes:
         return False
-    if m.total_pnl_usd < 0:
-        return True
-    return m.avg_score < score_trigger
+    return underperformance(m).upper(conf) < 0
 
 
 def _merge_params(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
@@ -221,13 +237,12 @@ def rule_propose(
     m: StrategyMetrics,
     *,
     min_outcomes: int = MIN_N_OUTCOMES,
-    score_trigger: Decimal = NEG_AVG_SCORE_TRIGGER,
 ) -> MutationDraft | None:
-    """When paper PnL is negative, shift weight toward oi_delta/news and loosen
+    """When paper PnL is significantly negative, shift weight toward oi_delta/news and loosen
     threshold / extend horizon — opposite of the pre-2026-06 heuristic that
     dampened news and raised threshold (which contradicted CHANGES.md diagnosis).
     """
-    if not _underperforming(m, min_outcomes=min_outcomes, score_trigger=score_trigger):
+    if not _underperforming(m, min_outcomes=min_outcomes):
         return None
 
     weights = {k: Decimal(str(v)) for k, v in current_params.get("weights", {}).items()}
@@ -307,11 +322,10 @@ def rule_propose_param_tune(
     m: StrategyMetrics,
     *,
     min_outcomes: int = MIN_N_OUTCOMES,
-    score_trigger: Decimal = NEG_AVG_SCORE_TRIGGER,
     skip_knobs: frozenset[str] = frozenset(),
 ) -> MutationDraft | None:
     """For deterministic strategies (grid/dca/oi_delta), perturb numeric params
-    when win-rate / avg_score signals underperformance.
+    when realised net PnL per episode is significantly negative.
 
     Heuristic per strategy:
       grid:     loss → widen price_band_pct (fewer false fills) or raise horizon_s
@@ -333,7 +347,7 @@ def rule_propose_param_tune(
     # Use per-strategy minimum if defined — thin-signal strategies need more
     # samples before a knob change carries statistical weight.
     effective_min = PARAM_TUNE_MIN_N.get(strategy_id, min_outcomes)
-    if not _underperforming(m, min_outcomes=effective_min, score_trigger=score_trigger):
+    if not _underperforming(m, min_outcomes=effective_min):
         return None
 
     tuner = PARAM_TUNERS[strategy_id]

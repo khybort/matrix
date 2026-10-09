@@ -20,7 +20,6 @@ import os
 import signal
 import sys
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 
 from loguru import logger
 from matrix_shared import shared_session_scope
@@ -33,6 +32,7 @@ from reflection.mutate import (
     PARAM_TUNERS,
     _underperforming,
     llm_propose,
+    underperformance,
     rule_propose,
     rule_propose_param_tune,
 )
@@ -74,7 +74,7 @@ async def _mutation_blocked(cfg: StrategyConfig) -> str | None:
     return None
 
 
-async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_trigger: float) -> int:
+async def _tick(window_hours: float, use_llm: bool, min_outcomes: int) -> int:
     """One reflection cycle. Returns number of proposals written."""
     proposals_written = 0
     async with shared_session_scope() as session:
@@ -90,10 +90,11 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
         except Exception as e:
             logger.exception(f"metrics window failed for {cfg.strategy_id}: {e}")
             continue
+        ev = underperformance(m)
         logger.info(
-            f"{cfg.strategy_id}/{cfg.asset_class} v{cfg.version}: n={m.n_outcomes} episodes ({m.n_raw} rows) "
-            f"avg_score={m.avg_score:.4f} win_rate={m.win_rate:.3f} "
-            f"pnl={m.total_pnl_usd:.4f}USD"
+            f"{cfg.strategy_id}/{cfg.asset_class} v{cfg.version}: n={m.n_outcomes} episodes ({m.n_raw} rows, "
+            f"{m.n_probes} probe rows excluded) avg_score={m.avg_score:.4f} win_rate={m.win_rate:.3f} "
+            f"pnl={m.total_pnl_usd:.4f}USD per-episode {ev.mean:+.4f} (upper {ev.upper():+.4f})"
         )
 
         draft = None
@@ -101,8 +102,10 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
         # LLM path used to run for every active config on every tick, so a
         # profitable strategy was re-tuned as eagerly as a losing one and the
         # PnL-aligned rule path was pre-empted whenever the model answered.
-        if not _underperforming(m, min_outcomes=min_outcomes, score_trigger=Decimal(str(score_trigger))):
-            logger.info(f"{cfg.strategy_id}/{cfg.asset_class}: healthy or thin sample; no mutation")
+        if not _underperforming(m, min_outcomes=min_outcomes):
+            logger.info(
+                f"{cfg.strategy_id}/{cfg.asset_class}: loss not significant or thin sample; no mutation"
+            )
             continue
         # A running challenger or an unapplied proposal means nothing new can
         # be applied yet — spending an LLM tool-loop on it every tick only
@@ -127,7 +130,6 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
                 cfg.params,
                 m,
                 min_outcomes=min_outcomes,
-                score_trigger=Decimal(str(score_trigger)),
             )
         if draft is None:
             # For deterministic strategies (grid/dca/oi_delta), try the
@@ -184,7 +186,6 @@ async def _tick(window_hours: float, use_llm: bool, min_outcomes: int, score_tri
                 cfg.params,
                 m,
                 min_outcomes=min_outcomes,
-                score_trigger=Decimal(str(score_trigger)),
                 skip_knobs=skip_knobs,
             )
         if draft is None:
@@ -372,7 +373,6 @@ async def run(
     window_hours: float,
     use_llm: bool,
     min_outcomes: int,
-    score_trigger: float,
 ) -> None:
     stop = asyncio.Event()
 
@@ -386,7 +386,7 @@ async def run(
 
     while not stop.is_set():
         try:
-            n = await _tick(window_hours, use_llm, min_outcomes, score_trigger)
+            n = await _tick(window_hours, use_llm, min_outcomes)
             logger.info(f"tick: {n} new proposals")
         except Exception as e:
             logger.exception(f"reflection tick failed: {e}")
@@ -415,8 +415,9 @@ def main() -> None:
         help="Min n_outcomes required to consider mutation (default 10)",
     )
     parser.add_argument(
-        "--score-trigger", type=float, default=-0.05,
-        help="Trigger mutation when avg_score below this (default -0.05)",
+        "--score-trigger", type=float, default=None,
+        help="Ignored since 2026-10-09: the gate is the per-episode net PnL upper "
+             "bound (MATRIX_MUTATION_CONF). Kept so existing commands still parse.",
     )
     parser.add_argument("--once", action="store_true")
     parser.add_argument(
@@ -437,10 +438,10 @@ def main() -> None:
         n = asyncio.run(scan_grants_once())
         logger.info(f"scan-grants: granted {n} cert(s)")
     elif args.once:
-        asyncio.run(_tick(args.window_hours, use_llm, args.min_outcomes, args.score_trigger))
+        asyncio.run(_tick(args.window_hours, use_llm, args.min_outcomes))
     else:
         asyncio.run(
-            run(args.interval, args.window_hours, use_llm, args.min_outcomes, args.score_trigger)
+            run(args.interval, args.window_hours, use_llm, args.min_outcomes)
         )
 
 

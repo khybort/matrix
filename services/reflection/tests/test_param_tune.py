@@ -29,7 +29,15 @@ def _metrics(
         win_rate=win_rate,
         total_pnl_usd=total_pnl_usd,
         by_symbol={},
+        episode_pnls=episode_pnls(n_outcomes, total_pnl_usd),
     )
+
+
+def episode_pnls(n: int, total: Decimal) -> list[float]:
+    """n per-episode results summing to `total`, spread ±20 % of the mean:
+    the sign of `total` is significant at any n the gate looks at."""
+    mean = float(total) / n if n else 0.0
+    return [mean * (1.2 if i % 2 else 0.8) for i in range(n)]
 
 
 def _grid_params() -> dict:
@@ -87,8 +95,9 @@ def test_param_tune_grid_price_band_knob():
     assert after_band > Decimal("0.02"), "price_band_pct should increase with poor win_rate"
 
 
-def test_param_tune_grid_tightens_on_high_winrate():
-    """High win_rate + negative avg_score (but tune still triggered) → tighten."""
+def test_param_tune_profitable_grid_is_not_mutated():
+    """Positive PnL with a poor score used to trigger a 'tighten' tune; the gate
+    is now significant realised loss, so a profitable strategy is left alone."""
     m = _metrics(
         strategy_id="grid",
         win_rate=Decimal("0.60"),
@@ -96,10 +105,15 @@ def test_param_tune_grid_tightens_on_high_winrate():
         total_pnl_usd=Decimal("2.0"),
         n_outcomes=52,
     )
-    draft = rule_propose_param_tune("grid", _grid_params(), m)
-    assert draft is not None
-    after_horizon = int(draft.after_params["horizon_s"])
-    assert after_horizon < 300, "horizon_s should decrease when profitable with good win_rate"
+    assert rule_propose_param_tune("grid", _grid_params(), m) is None
+
+
+def test_param_tune_insignificant_loss_is_not_mutated():
+    """A negative mean inside its own noise band is not evidence: n=52, mean
+    -0.23 USD per episode, sd ~3 → upper bound > 0."""
+    m = _metrics(strategy_id="grid", total_pnl_usd=Decimal("-12.0"), n_outcomes=52)
+    m.episode_pnls = [(-0.23 + (3.0 if i % 2 else -3.0)) for i in range(52)]
+    assert rule_propose_param_tune("grid", _grid_params(), m) is None
 
 
 def test_param_tune_grid_widens_when_winrate_ok_but_pnl_negative():
@@ -129,21 +143,6 @@ def test_param_tune_dca_lengthens_interval_on_poor_winrate():
     assert draft.proposal_type == "param_tune"
     after = int(draft.after_params["interval_minutes"])
     assert after > 60, "interval_minutes should increase with poor win_rate"
-
-
-def test_param_tune_dca_shortens_interval_on_good_winrate():
-    """High win_rate + mildly bad score but positive PnL → shorten cadence."""
-    m = _metrics(
-        strategy_id="dca",
-        win_rate=Decimal("0.55"),
-        avg_score=Decimal("-0.06"),
-        total_pnl_usd=Decimal("2.0"),
-        n_outcomes=50,
-    )
-    draft = rule_propose_param_tune("dca", _dca_params(), m)
-    assert draft is not None
-    after = int(draft.after_params["interval_minutes"])
-    assert after < 60, "interval_minutes should decrease when profitable with good win_rate"
 
 
 def test_param_tune_dca_clamps_at_min():
@@ -445,6 +444,7 @@ def test_tp_sl_knob_tune_executes():
         win_rate=Decimal("0.30"),
         total_pnl_usd=Decimal("-5.0"),
         by_symbol={},
+        episode_pnls=episode_pnls(n_outcomes, Decimal("-5.0")),
     )
     params = {
         "n_grids": 10,
