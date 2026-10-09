@@ -1,0 +1,89 @@
+Pre-registration — signal research 2026-10, round 5: options-implied signals on BTC and ETH perps ("H14")
+Written 2026-10-09 17:05 UTC (date -u), before any return was computed and before any DVOL value, option trade, kline,
+funding rate or order book for this round was fetched. Only endpoint availability was probed (listed under DATA).
+Earlier rounds: ../signal_2026_10/PREREG.txt, ../signal_2026_10_r2/, ../signal_2026_10_r3/, ../signal_2026_10_r3b/,
+../signal_2026_10_r4/ (round 4, 66 cells, running in parallel).
+
+QUESTION. Options prices carry the market's fear/greed and insurance premium. Do extremes of the volatility risk premium,
+25-delta skew, implied-vol spikes, IV term-structure inversion or put/call demand predict the BTC / ETH perp return over
+3-7 days by enough to pay a taker round trip plus funding? Slow signals only: the target is >= 45 bps GROSS per episode.
+
+------------------------------------------------------------------------------------------------------------------------
+DATA (public only; fetched after this file is committed)
+ Deribit  public/get_volatility_index_data (www.deribit.com), BTC and ETH, resolution 3600 (DVOL, 30-day implied vol
+          index; served from 2021-03-24 for both).
+          public/get_last_trades_by_currency_and_time on history.deribit.com, kind=option, BTC and ETH: every option trade
+          in the 4-hour window 20:00-24:00 UTC of each day 2021-03-24 .. 2026-10-08 (fields used: instrument_name, iv,
+          index_price, amount, timestamp). Probed: the host serves 2021-04 and 2025 trades with `iv`. A full day per
+          currency is ~10-30 k trades (too many calls); the fixed 4 h window is the sample. >= 0.3 s between calls.
+          public/get_historical_volatility is NOT used (it serves only ~16 days).
+ Bybit    /v5/market/kline category=linear BTCUSDT, ETHUSDT, 1h, 2021-01-01 .. 2026-10-09 (perp prices; realised vol).
+          /v5/market/funding/history BTCUSDT, ETHUSDT over the same span.
+          /v5/market/orderbook BTCUSDT, ETHUSDT limit 200: 5 snapshots >= 60 s apart today (spread measurement).
+ Cache: every response stored under the session scratchpad r5/data/ and never refetched.
+
+DAILY FEATURES (asset in {BTC, ETH}; decision time D = 00:00 UTC each day; only data with timestamp < D)
+ DVOL_D   DVOL close of the last 1h bar ending at or before D.
+ RV30     annualised realised vol of the perp: std of 1h log returns over the 720 h before D * sqrt(8760), in vol points.
+ VRP      DVOL_D - RV30.
+ DVOLchg  ln(DVOL_D / DVOL_{D-24h}).
+ From the option trades in [D-4h, D) (Black-76 delta with F = index_price, r = 0, T = time to the 08:00 UTC expiry,
+ sigma = iv/100; strike, expiry and type parsed from instrument_name):
+ RR25     median iv of calls with delta in [0.15, 0.35] minus median iv of puts with delta in [-0.35, -0.15], both with
+          20 <= DTE <= 45. Missing if either side has < 5 trades.
+ TERM     median iv of trades with |delta| in [0.40, 0.60] and 1.5 <= DTE <= 10 minus the same with 45 <= DTE <= 120.
+          Missing if either bucket has < 5 trades.
+ PC3      sum over the last three daily windows of put notional (amount * index_price) / the same for calls.
+          Missing if any of the three windows has < 20 trades.
+ Percentile pct(X)_D = share of the asset's non-missing daily values of X in the 365 calendar days before D that are
+ < X_D. Requires >= 120 such values, else no signal that day.
+
+CELLS (14; BTC and ETH episodes pooled in each cell; direction fixed here from the economic prior)
+ A  volatility risk premium (Bollerslev-Tauchen-Zhou: high premium = priced fear, followed by higher returns)
+    A.hi.3 / A.hi.7   pct(VRP) >= 0.90  -> LONG,  hold 72 h / 168 h
+    A.lo.3 / A.lo.7   pct(VRP) <= 0.10  -> SHORT, hold 72 h / 168 h   (realised above implied = complacent pricing)
+ B  25-delta skew as fear / greed reversal
+    B.put.3 / B.put.7   pct(RR25) <= 0.10 (puts rich)  -> LONG
+    B.call.3 / B.call.7 pct(RR25) >= 0.90 (calls rich) -> SHORT
+ C  DVOL spike, fade the move that caused it
+    C.3 / C.7   pct(DVOLchg) >= 0.95 -> trade AGAINST the sign of the perp return over [D-24h, D) (long if < 0, short if > 0)
+ D  IV term-structure inversion (front > back = acute stress, contrarian)
+    D.3 / D.7   pct(TERM) >= 0.90 -> LONG
+ P  put/call demand extreme (contrarian)
+    P.3 / P.7   pct(PC3) >= 0.90 -> LONG
+ m for this round = 14.
+
+EPISODES
+ Signal window = a maximal run of consecutive decision days on which the cell's condition holds for that asset.
+ One episode per signal window, entered on its first day; and only if no episode of the same (cell, asset) is open at D.
+ A window that starts while an episode is open is skipped entirely (no re-entry later in the same window).
+ Entry at the close of the Bybit 1h perp bar ending D + 1 h (one full bar after the decision). Exit at the close of the
+ bar ending entry + hold. Equal notional per episode.
+
+P&L per episode, bps of notional (Bybit linear perp)
+ price      side * (P_exit / P_entry - 1) * 1e4
+ funding    every Bybit settlement with entry < t_settle <= exit: - side * rate * (P_settle / P_entry) * 1e4
+            (long pays positive funding; notional marked to market at the settlement hour's close).
+ cost       2 * 5.5 bps taker + the measured round-trip spread: the two fills walked against mid on today's books at $5k
+            per leg (median of the 5 snapshots, per asset).
+ net = price + funding - cost.  gross = price + funding.
+
+STATISTICS AND DECISION
+ SPLIT BY ENTRY TIME: TRAIN 2021-03-24 .. 2024-06-30, HOLDOUT 2024-07-01 .. 2026-10-08 (episodes must exit by the last
+ kline; later ones are dropped and counted). (The 365-day lookback means the first signals fall in ~2021-07.)
+ Per cell: n, mean net, median, mean gross, t clustered by ENTRY ISO WEEK (Student t, G-1 df, one-sided p vs 0).
+ Train pass: mean net > 0 and week-clustered t >= 2. Holdout evaluated once, only for train passers, rule frozen.
+ Holdout success requires ALL of:
+   (1) mean net > 0 and week-clustered t >= 2;
+   (2) Benjamini-Yekutieli q <= 0.05 over the programme at the cumulative m read at decision time from the research
+       ledger (docs/research/ledger.jsonl) if it exists, else 91 + 66 (round 4) + 14 = 171; H1's holdout p as reported,
+       round 4's decision p's if available, every other prior hypothesis p = 1, this round's train failures p = 1.
+ To be designed as a strategy module, a survivor also needs holdout mean net >= +15 bps.
+ Reported (not decision rules): holdout of train failures (record only, after the decision); per-asset split; day count
+ in market; trimmed (top/bottom 5 %) mean; cost x2; median; the signal's own frequency per year.
+
+IMPLEMENTATION RULE. No production code. If a cell survives, the write-up describes a strategy module design; if none
+survives, the negatives are written up in docs/wiki/signal-research-2026-10.md, section "Round 5: options-implied".
+
+------------------------------------------------------------------------------------------------------------------------
+LOG
