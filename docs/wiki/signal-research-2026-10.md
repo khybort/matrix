@@ -357,6 +357,37 @@ OI. Re-cutting these periods would just be more searching. The ≥ 45 bps-gross
 search came up empty on tick data. The only surviving edge is still round 1's
 hedged negative-funding carry.
 
+### Forward test r2f (liquidations)
+Pre-registered 2026-10-09. H8b-5m is being re-tested on what it was a proxy for: **real liquidations**, recorded from 2026-10-09 18:10 UTC
+(`ingestion.liquidation_recorder`, Bybit `allLiquidation` for all 791 USDT perps, migration 0044, [[operations]]).
+Pre-registered through the harness's forward mode (`services/backtest/research/signal_2026_10_r2f/PREREG.md`, committed
+alone in 599acb3; two register rows in ca2af89, **m = 174**).
+- Rule (`matrix_shared.liq_cascade`, one definition for the shadow module and the evaluation): at each 1-minute close τ,
+  L / S = USD notional of longs / shorts liquidated in [τ−5m, τ), every minute of it covered by the recorder;
+  Q = trailing-7-day p99 (nearest rank, zero windows count, ≥ 6 covered days) of the symbol's one-sided 5-minute notional.
+  Fade LONG when L ≥ max(Q, $25k) and the 5-minute move r5 ≤ −max(2 %, 5σ5); SHORT on the mirror. The displacement leg
+  is round 2's H8b-5m leg unchanged; the liquidation leg replaces its volume / aggressor-share proxy. Trailing-24h
+  turnover ≥ $2M. Entry at the close of the bar after the window (as round 2), hold **60 min (`r2f.L5.60`) and 240 min
+  (`r2f.L5.240`)**, one episode per (cell, symbol) at a time. Forward window: signals from 2026-10-17 (Q needs six
+  covered days) to 2028-10-17.
+- Cost as round 2: 11 bps taker + 2.2 × round 2's turnover spread map (2.2 = its H8b-5m measured event spread 6.88 bps /
+  map 3.14 bps over 866 episodes; ≈ 17 bps at $14M/day, round 2 charged 17–19), plus funding at every settlement crossed.
+- **n = 1000 per cell**, day-clustered t ≥ 2 and ledger BY q ≤ 0.05 at evaluation. Power from round 2's episodes:
+  SD 226 / 354 bps (60 / 240 min), day-cluster design effect 1.87 / 1.21. At round 2's pooled mean (+25 / +24 bps)
+  E[t] = 2.55 / 2.04, P(t ≥ 2) = 0.71 / 0.51; at +40 bps 0.98 / 0.90. The q gate at m ≈ 174 needs t ≈ 3.7: P = 0.13 /
+  0.05 at +25, 0.65 / 0.33 at +40. So a pass is strong evidence and a fail at +25 is weak evidence. Signal rate is
+  unknown until the feed has run; the 60-min cell decides first. Undecided cells at 2028-10-17 keep p = 1.
+- Live pieces: the recorder (above) and the shadow module `liq_cascade_fade` (strategy_configs crypto v1, `shadow`),
+  which trades the 60-min cell on the shadow wallet for coins the node streams (traded universe + carry watchlist; fires
+  elsewhere are logged only) and **stands down when the newest covered minute is > 180 s old**. Band in
+  `params.shadow_band` / `DEFAULT_BANDS`: +18…+32 bps (round 2 60-min holdout / train), floor 0, `min_episodes` 1000,
+  stale 504 h. The tracker reports; the harness decides.
+- Verified live 2026-10-09 18:20 UTC: rows landing (first 10 minutes: 2–6 events/min on 8–15 symbols); a 15-minute
+  probe of all 791 topics saw 84 events ($74k, 26 symbols, 66 shorts / 18 longs liquidated, 11 KB) and a 10-minute one 99
+  ($46k): 8 000–14 000 a day in a quiet market, 0.07 % of a core. Module: `liq_cascade_fade: liquidation feed live (newest covered minute 18:19); evaluating`; with < 6 covered
+  days every candidate logs `-> no (< 6 days covered)` until ~10-16. `forward.py status`: 0 of 1000 closed per cell.
+  Tracker: `shadow liq_cascade_fade/crypto: COLLECTING — 0/1000 closed ep, 0 open · band +18…+32, floor +0`.
+
 ## Round 3: positive-funding mirror — 2026-10-09: 18 cells, nothing survives
 Question: H1 lost most of its edge to borrow realism. Its mirror needs no loan: after an extreme
 **positive** settlement, short the perp, buy spot, collect funding. `cash_and_carry` already trades
