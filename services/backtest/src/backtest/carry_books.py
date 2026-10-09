@@ -1,0 +1,214 @@
+"""Book-priced accounting for spot-hedged carries (neg_funding_carry).
+
+A flat `round_trip_cost_pct x 2` made a short-spot carry on an illiquid coin
+look as cheap as BTC. The adversarial check of 2026-10-09
+(docs/wiki/signal-research-2026-10.md) priced the same episodes on real books:
+median four-leg cost 64 bps at $500 per leg against the 30 bps the study
+assumed, and a near-zero edge at $5k. So a carry whose prediction names its
+spot leg (`context.spot_venue` / `spot_symbol`) is opened and closed on the
+books instead:
+
+- open: both books must exist (no spot book -> no hedge -> no position); the
+  per-leg size is capped where every walk stays within MAX_LEG_IMPACT_BPS of
+  mid, and at UNCONFIRMED_MAX_LEG_USD until the strategy's promotion status is
+  `confirmed`; the impact of the two opening fills is recorded.
+- close: the two closing fills are walked on the books at close (falling back
+  to the estimate taken at open when a book is gone), plus four taker fees.
+- borrow: the hourly rate quoted at entry x BORROW_STRESS, per started hour,
+  as margin desks charge it.
+
+Book maths duplicates strategy.modules.crypto.neg_funding_carry on purpose:
+the two services ship as separate images and share no package but
+matrix_shared.
+"""
+
+from __future__ import annotations
+
+import math
+import os
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+import httpx
+from loguru import logger
+from sqlalchemy import text
+
+from matrix_shared import local_session_scope
+
+BORROW_STRESS = float(os.environ.get("MATRIX_CARRY_BORROW_STRESS", "3"))
+MAX_LEG_IMPACT_BPS = float(os.environ.get("MATRIX_CARRY_MAX_LEG_IMPACT_BPS", "10"))
+UNCONFIRMED_MAX_LEG_USD = float(os.environ.get("MATRIX_CARRY_UNCONFIRMED_MAX_LEG_USD", "500"))
+MIN_LEG_USD = float(os.environ.get("MATRIX_CARRY_MIN_LEG_USD", "50"))
+PERP_TAKER_BPS = float(os.environ.get("MATRIX_CARRY_PERP_TAKER_BPS", "5.5"))
+SPOT_TAKER_BPS = float(os.environ.get("MATRIX_CARRY_SPOT_TAKER_BPS", "10"))
+BOOK_MAX_AGE_S = 30.0
+
+Levels = list[tuple[float, float]]  # (price, qty), best first
+
+
+@dataclass(slots=True)
+class Book:
+    bids: Levels
+    asks: Levels
+    source: str
+
+    @property
+    def mid(self) -> float:
+        return (self.bids[0][0] + self.asks[0][0]) / 2
+
+
+def is_book_priced(context: dict | None) -> bool:
+    return bool(context and context.get("spot_venue") and context.get("spot_symbol"))
+
+
+def walk_bps(levels: Levels, mid: float, usd: float) -> float | None:
+    """Average distance from mid (bps) of a taker fill of `usd` walking
+    `levels`; None when the book is too thin to fill it."""
+    if usd <= 0 or mid <= 0:
+        return 0.0
+    rem, cost = usd, 0.0
+    for p, q in levels:
+        take = min(rem, p * q)
+        cost += take * abs(p - mid) / mid
+        rem -= take
+        if rem <= 1e-9:
+            return cost / usd * 1e4
+    return None
+
+
+def max_usd_within(levels: Levels, mid: float, max_bps: float) -> float:
+    """Largest taker notional whose average distance from mid stays within
+    `max_bps`, bounded by visible depth."""
+    lim = max_bps / 1e4
+    vol = cost = 0.0
+    for p, q in levels:
+        s = abs(p - mid) / mid
+        c = p * q
+        if s > lim:
+            x = (lim * vol - cost) / (s - lim)  # take that brings the average to the limit
+            if x < c:
+                return vol + max(0.0, x)
+        vol += c
+        cost += c * s
+    return vol
+
+
+def leg_cap_usd(perp: Book, spot: Book, max_bps: float = MAX_LEG_IMPACT_BPS) -> float:
+    return min(
+        max_usd_within(perp.asks, perp.mid, max_bps),
+        max_usd_within(perp.bids, perp.mid, max_bps),
+        max_usd_within(spot.bids, spot.mid, max_bps),
+        max_usd_within(spot.asks, spot.mid, max_bps),
+    )
+
+
+def fees_bps() -> float:
+    return 2 * PERP_TAKER_BPS + 2 * SPOT_TAKER_BPS
+
+
+def parse_levels(raw) -> Levels:
+    return [(float(p), float(q)) for p, q, *_ in raw or [] if float(q) > 0]
+
+
+_BOOK_URLS = {
+    ("bybit", "linear"): "https://api.bybit.com/v5/market/orderbook?category=linear&symbol={s}&limit=200",
+    ("bybit", "spot"): "https://api.bybit.com/v5/market/orderbook?category=spot&symbol={s}&limit=200",
+    ("binance", "spot"): "https://api.binance.com/api/v3/depth?symbol={s}&limit=100",
+}
+_DB_EXCHANGE = {("bybit", "linear"): "bybit", ("bybit", "spot"): "bybit-spot", ("binance", "spot"): "binance-spot"}
+
+
+async def fetch_book(venue: str, category: str, symbol: str) -> Book | None:
+    """Ingested snapshot <= 30 s old, else the venue's public REST depth."""
+    if (venue, category) not in _BOOK_URLS:
+        return None
+    async with local_session_scope() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT bids, asks FROM market_orderbook_snapshots WHERE exchange = :ex "
+                    "AND symbol = :sym AND snapshot_ts > :since ORDER BY snapshot_ts DESC LIMIT 1"
+                ),
+                {"ex": _DB_EXCHANGE[(venue, category)], "sym": symbol,
+                 "since": datetime.now(UTC) - timedelta(seconds=BOOK_MAX_AGE_S)},
+            )
+        ).first()
+    if row is not None:
+        b, a = parse_levels(row[0]), parse_levels(row[1])
+        if b and a:
+            return Book(b, a, "db")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(_BOOK_URLS[(venue, category)].format(s=symbol))
+            r.raise_for_status()
+            j = r.json()
+    except Exception as e:  # noqa: BLE001 — a missing book refuses the open / falls back at close
+        logger.debug(f"carry_books: {venue} {category} {symbol} book unavailable: {e}")
+        return None
+    if venue == "bybit":
+        d = j.get("result") or {}
+        b, a = parse_levels(d.get("b")), parse_levels(d.get("a"))
+    else:
+        b, a = parse_levels(j.get("bids")), parse_levels(j.get("asks"))
+    return Book(b, a, "rest") if b and a else None
+
+
+async def legs(symbol: str, context: dict) -> tuple[Book | None, Book | None]:
+    perp = await fetch_book("bybit", "linear", symbol)
+    spot = await fetch_book(str(context["spot_venue"]), "spot", str(context["spot_symbol"]))
+    return perp, spot
+
+
+def size_and_price_open(
+    perp: Book, spot: Book, notional: float, *, confirmed: bool
+) -> tuple[float, dict] | tuple[None, str]:
+    """(per-leg notional, context patch) or (None, refusal reason). `notional`
+    is what the engine's own sizing and risk gate allow; this only lowers it."""
+    cap = leg_cap_usd(perp, spot)
+    ceiling = math.inf if confirmed else UNCONFIRMED_MAX_LEG_USD
+    usd = min(notional, cap, ceiling)
+    if usd < MIN_LEG_USD:
+        return None, f"leg size {usd:.0f} < {MIN_LEG_USD:.0f} (impact cap {cap:.0f})"
+    walks = {
+        "perp_buy_bps": walk_bps(perp.asks, perp.mid, usd),
+        "spot_sell_bps": walk_bps(spot.bids, spot.mid, usd),
+        # estimates of the closing fills on today's book: the fallback when a
+        # book is missing at close
+        "perp_sell_est_bps": walk_bps(perp.bids, perp.mid, usd),
+        "spot_buy_est_bps": walk_bps(spot.asks, spot.mid, usd),
+    }
+    if any(v is None for v in walks.values()):
+        return None, "book too thin"
+    patch = {
+        "notional_usd": round(usd, 2),
+        "leg_cap_usd": round(cap, 2),
+        "ceiling_usd": None if confirmed else UNCONFIRMED_MAX_LEG_USD,
+        "sources": {"perp": perp.source, "spot": spot.source},
+        "borrow_stress": BORROW_STRESS,
+        **{k: round(v, 3) for k, v in walks.items()},
+    }
+    return usd, patch
+
+
+def close_cost_bps(book_open: dict, perp: Book | None, spot: Book | None, usd: float) -> dict:
+    """Four taker fees + the two recorded opening walks + the two closing walks
+    (on the books now, else the estimate taken at open)."""
+    perp_sell = walk_bps(perp.bids, perp.mid, usd) if perp is not None else None
+    spot_buy = walk_bps(spot.asks, spot.mid, usd) if spot is not None else None
+    out = {
+        "fees_bps": fees_bps(),
+        "perp_buy_bps": float(book_open["perp_buy_bps"]),
+        "spot_sell_bps": float(book_open["spot_sell_bps"]),
+        "perp_sell_bps": perp_sell if perp_sell is not None else float(book_open["perp_sell_est_bps"]),
+        "spot_buy_bps": spot_buy if spot_buy is not None else float(book_open["spot_buy_est_bps"]),
+        "close_source": "book" if perp_sell is not None and spot_buy is not None else "entry_estimate",
+    }
+    out["total_bps"] = round(sum(v for k, v in out.items() if k.endswith("_bps")), 3)
+    return out
+
+
+def borrow_charge(notional: Decimal, hourly: Decimal, stress: float, held_s: float) -> Decimal:
+    """Borrow at the quoted hourly rate x stress, per started hour."""
+    hours = math.ceil(max(0.0, held_s) / 3600.0 - 1e-9)
+    return notional * hourly * Decimal(str(stress)) * hours

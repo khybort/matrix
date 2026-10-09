@@ -19,6 +19,13 @@ from decimal import Decimal
 SLIPPAGE_BPS = Decimal("2")
 _BPS = Decimal("10000")
 
+# Delta-neutral carry family: positions priced by funding accrual, not price
+# moves, so directional slippage never applies to their (synthetic) fills.
+#   delta_neutral — long spot / short perp   (earns positive funding)
+#   inverse_carry — short spot / long perp   (earns negative funding)
+#   xexch_carry   — cross-exchange perp/perp  (earns the funding differential)
+CARRY_SIDES: frozenset[str] = frozenset({"delta_neutral", "inverse_carry", "xexch_carry"})
+
 
 def execution_cost_bps(asset_class: str | None, symbol: str | None = None) -> Decimal:
     """Per-side cost in bps: taker fee + slippage for the market, else legacy 2."""
@@ -60,10 +67,11 @@ def apply_slippage(
 ) -> Decimal:
     """Adverse fill price for one side of a trade.
 
-    Long entries pay up; long exits sell down. Shorts mirror. `delta_neutral`
-    (two-leg carry) is priced by funding accrual elsewhere — no adjustment.
+    Long entries pay up; long exits sell down. Shorts mirror. The carry family
+    (delta_neutral / inverse_carry / xexch_carry) is priced by funding accrual
+    elsewhere — no price adjustment.
     """
-    if side == "delta_neutral":
+    if side in CARRY_SIDES:
         return price
     bps = execution_cost_bps(asset_class, symbol) / _BPS
     if opening:

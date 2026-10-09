@@ -40,6 +40,10 @@
   (`test_shadow_wallet_booking.py`). Belirti: `paper_positions` cüzdan dağılımı ile `predictions.context.is_shadow` uyuşmaz.
 - **2026-09-13 — Sırasız LIMIT.** Aday havuzu `LIMIT n*5` ile ORDER BY'sız çekiliyordu; kuyruk büyüdükçe (764 açık prediction)
   rastgele dilim alınıyor, EV sıralaması hiç görmediği adayları seçemiyordu. LIMIT varsa ORDER BY şart.
+- **2026-09-15 — Ticker exchange filtresi.** İkinci venue (Binance funding poller) aynı `symbol` için daha yeni `ticker_snapshots`
+  satırı yazar. `ORDER BY snapshot_ts DESC LIMIT 1` exchange'siz Bybit fill'e Binance oranını işler (işaret bile ters
+  dönebilir). Tek-venue okuma `exchange='bybit'` pinli; cross-venue okuma `exchange=` ile ayrılır. Yeni venue feed'i
+  eklerken mevcut `symbol`-only sorguları tara.
 - **2026-09-13 — `market_trades` silmede indeks.** Tek indeks `(exchange, exchange_trade_id)`; `WHERE exchange_trade_id IN (...)`
   full scan (300M satır) → test temizliği 10+ dk. Her zaman `exchange = 'bybit' AND exchange_trade_id IN (...)`.
 

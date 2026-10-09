@@ -17,7 +17,7 @@ import os
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from loguru import logger
 from sqlalchemy import and_, func, or_, select, text
@@ -32,12 +32,17 @@ from matrix_shared.allocation import (
     risk_multiplier,
 )
 from matrix_shared.exchange_shadow import shadow_close_position, shadow_open_position
+
+from backtest import carry_books
+from backtest.carry_funding import flip_confirmed, recent_rates, settled_funding
 from matrix_shared.graph_overlay import link_outcome_node
-from matrix_shared.markets import all_markets
+from matrix_shared.markets import all_markets, get_market
 from matrix_shared.trading import (
+    CARRY_SIDES,
     apply_slippage,
     execution_cost_bps,
     funding_pnl_usd,
+    round_trip_cost_pct,
     virtual_pnl_pct,
 )
 from matrix_shared.models import (
@@ -116,15 +121,10 @@ async def ensure_shadow_wallets() -> int:
 def _is_shadow_prediction(p: Prediction) -> bool:
     return bool((p.context or {}).get("is_shadow", False))
 FRESHNESS_S = 60                       # crypto: ticks every few seconds
-FRESHNESS_S_BARS = 60 * 30             # BIST 1m bars + 15min Yahoo delay window
-SLIPPAGE_BPS = Decimal("2")  # legacy flat allowance; live fills use FeeModel via matrix_shared.trading
-SCORE_CAP_PCT = Decimal("0.01")  # ±1% horizon caps the score at ±1
-# Positions whose close_by is more than this far in the past AND for which
-# we have no live price are flat-closed to prevent indefinite orphan
-# accumulation (the KONYA BIST bug: positions stuck 72h with no price data).
-ORPHAN_STALE_THRESHOLD_S = 86400  # 24h past close_by
-WALLET_SNAPSHOT_INTERVAL_S = float(os.environ.get("WALLET_SNAPSHOT_INTERVAL_S", "60"))
-
+FRESHNESS_S_BARS = 60 * 30             # BIST/US 1m bars + 15min Yahoo delay window
+# Markets priced from `market_bars` (Yahoo candles) rather than tick prints.
+# Crypto reads MarketTrade; equities (bist, us) read the 1m bar close.
+_BAR_PRICE_CLASSES = frozenset({"bist", "us"})
 
 # A signal is only worth trading while it is still fresh. Measured 2026-09-20:
 # the average fill happened 53% (momentum_xs), 41% (dca), 40% (grid) of the way
@@ -136,13 +136,6 @@ WALLET_SNAPSHOT_INTERVAL_S = float(os.environ.get("WALLET_SNAPSHOT_INTERVAL_S", 
 # horizon are left unfilled (they still earn a virtual outcome, so the learning
 # loop keeps the evidence for free), and EV decays with age so fresh candidates
 # outrank stale ones.
-# Markets priced from `market_bars` (Yahoo candles) rather than tick prints:
-# crypto reads MarketTrade, equities read the 1m bar close. Referenced by
-# `_latest_price` since 572966c but its definition never reached git — a
-# latent NameError on any BIST/US mark, live only because the working tree
-# carried it.
-_BAR_PRICE_CLASSES = frozenset({"bist", "us"})
-
 MAX_SIGNAL_AGE_FRAC = float(os.environ.get("MATRIX_MAX_SIGNAL_AGE_FRAC", "0.20"))
 MIN_SIGNAL_WINDOW_S = float(os.environ.get("MATRIX_MIN_SIGNAL_WINDOW_S", "45"))
 
@@ -165,17 +158,42 @@ def is_fresh_enough(generated_at: datetime, horizon_seconds: int | None, now: da
     return elapsed <= max(horizon * MAX_SIGNAL_AGE_FRAC, MIN_SIGNAL_WINDOW_S)
 
 
-async def _latest_funding_rate(symbol: str) -> Decimal | None:
-    """Latest funding rate for a crypto perp from the LOCAL ticker snapshot table.
+def _market_allows_short(asset_class: str) -> bool:
+    """Whether the market for `asset_class` permits short positions.
 
-    Returns None if no snapshot exists — callers treat that as 0 accrual.
-    We use the *live* rate rather than the rate-at-open so ongoing delta_neutral
-    positions correctly reflect funding flips mid-hold.
+    Falls back to False (long-only) for unknown/unregistered classes so a
+    stray asset_class can never silently open a short.
+    """
+    try:
+        return get_market(asset_class).allows_short()
+    except KeyError:
+        return False
+
+
+SLIPPAGE_BPS = Decimal("2")  # legacy flat allowance; live fills use FeeModel via matrix_shared.trading
+SCORE_CAP_PCT = Decimal("0.01")  # ±1% horizon caps the score at ±1
+# Positions whose close_by is more than this far in the past AND for which
+# we have no live price are flat-closed to prevent indefinite orphan
+# accumulation (the KONYA BIST bug: positions stuck 72h with no price data).
+ORPHAN_STALE_THRESHOLD_S = 86400  # 24h past close_by
+WALLET_SNAPSHOT_INTERVAL_S = float(os.environ.get("WALLET_SNAPSHOT_INTERVAL_S", "60"))
+
+
+async def _latest_funding_rate(symbol: str, exchange: str = "bybit") -> Decimal | None:
+    """Latest funding rate for a crypto perp on `exchange` (default bybit).
+
+    Must be venue-pinned: after the Binance funding poller, the newest
+    `ticker_snapshots` row for a symbol is often `exchange='binance'`. Mixing
+    that into a Bybit paper fill would accrue the wrong rate (and could flip
+    inverse/cash-and-carry signs). Returns None if no snapshot exists —
+    callers treat that as 0 accrual. Live rate, not rate-at-open, so ongoing
+    carry positions reflect funding flips mid-hold.
     """
     async with local_session_scope() as session:
         stmt = (
             select(TickerSnapshot.funding_rate)
             .where(TickerSnapshot.symbol == symbol)
+            .where(TickerSnapshot.exchange == exchange)
             .where(TickerSnapshot.funding_rate.isnot(None))
             .order_by(TickerSnapshot.snapshot_ts.desc())
             .limit(1)
@@ -184,19 +202,136 @@ async def _latest_funding_rate(symbol: str) -> Decimal | None:
         return Decimal(row.funding_rate) if row else None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Carry (delta-neutral funding capture) position family
+# ─────────────────────────────────────────────────────────────────────────────
+# All carry sides hold two hedged legs and accrue funding rather than price
+# moves. They differ only in WHICH direction captures the funding:
+#   delta_neutral  — long spot / short perp; earns POSITIVE funding (longs pay)
+#   inverse_carry  — short spot / long perp; earns NEGATIVE funding (shorts pay)
+#   xexch_carry    — short perp on the high-funding venue / long perp on the low
+#                    one; earns the cross-exchange funding DIFFERENTIAL
+# The accrual formula is identical (notional × elapsed/8 × rate); only the
+# effective "rate" fed to it changes. For delta_neutral/inverse the rate is the
+# single-venue funding times a fixed ±1 sign (`_carry_sign`); for xexch the
+# caller supplies the already-signed differential, so its sign is +1.
+# Tuple form (from the shared frozenset) for stable SQL IN/NOT IN clauses.
+_CARRY_SIDES: tuple[str, ...] = tuple(sorted(CARRY_SIDES))
+
+
+def _is_carry(side: str) -> bool:
+    return side in CARRY_SIDES
+
+
+def _carry_sign(side: str) -> Decimal:
+    """+1 for a carry that earns POSITIVE funding, -1 for one that earns
+    NEGATIVE funding. xexch_carry's rate is pre-signed by the caller (+1)."""
+    return Decimal("-1") if side == "inverse_carry" else Decimal("1")
+
+
+async def _latest_funding_rate_on(symbol: str, exchange: str) -> Decimal | None:
+    """Latest funding rate for `symbol` on a specific `exchange` (cross-exchange
+    accrual reads bybit and binance separately). None when no snapshot exists."""
+    async with local_session_scope() as session:
+        stmt = (
+            select(TickerSnapshot.funding_rate)
+            .where(TickerSnapshot.symbol == symbol)
+            .where(TickerSnapshot.exchange == exchange)
+            .where(TickerSnapshot.funding_rate.isnot(None))
+            .order_by(TickerSnapshot.snapshot_ts.desc())
+            .limit(1)
+        )
+        row = (await session.execute(stmt)).first()
+        return Decimal(row.funding_rate) if row else None
+
+
+async def _xexch_short_venue(session, prediction_id: uuid.UUID) -> str | None:
+    """Read the venue that the xexch carry SHORTS (high-funding leg) from the
+    prediction context, fixed at open. `session` must be a SHARED-tier session
+    (predictions live there)."""
+    row = (await session.execute(
+        select(Prediction.context).where(Prediction.id == prediction_id)
+    )).first()
+    if row is None or not row.context:
+        return None
+    venue = row.context.get("xexch_short_venue")
+    return venue if venue in ("bybit", "binance") else None
+
+
+async def _carry_accrual_rate(pos: PaperPosition, short_venue: str | None = None) -> Decimal | None:
+    """Signed 8h rate the carry is CAPTURING (positive = earning).
+
+    - delta_neutral / inverse_carry: single-venue (bybit) funding × ±1 sign.
+    - xexch_carry: f(short_venue) − f(long_venue); `short_venue` comes from the
+      prediction context, fixed at open. Returns None when the required funding
+      data is missing (callers treat None as 0 accrual).
+    """
+    if pos.side == "xexch_carry":
+        if short_venue is None:
+            return None
+        long_venue = "binance" if short_venue == "bybit" else "bybit"
+        f_short = await _latest_funding_rate_on(pos.symbol, short_venue)
+        f_long = await _latest_funding_rate_on(pos.symbol, long_venue)
+        if f_short is None or f_long is None:
+            return None
+        return f_short - f_long
+    venue = pos.exchange if pos.exchange in ("bybit", "binance") else "bybit"
+    fr = await _latest_funding_rate(pos.symbol, venue)
+    if fr is None:
+        return None
+    return fr * _carry_sign(pos.side)
+
+
+def _carry_legs(pos: PaperPosition, short_venue: str | None) -> list[tuple[str, Decimal]]:
+    """(venue, sign) per funding leg; sign +1 earns the reported rate, -1 pays it."""
+    if pos.side == "xexch_carry":
+        if short_venue is None:
+            return []
+        long_venue = "binance" if short_venue == "bybit" else "bybit"
+        return [(short_venue, Decimal("1")), (long_venue, Decimal("-1"))]
+    venue = pos.exchange if pos.exchange in ("bybit", "binance") else "bybit"
+    return [(venue, _carry_sign(pos.side))]
+
+
+async def _carry_settled_capture(pos: PaperPosition, short_venue: str | None, now: datetime) -> Decimal:
+    """Funding the carry collected, as a fraction of notional (signed: + earned)."""
+    opened = pos.opened_at if pos.opened_at.tzinfo else pos.opened_at.replace(tzinfo=UTC)
+    total = Decimal("0")
+    for venue, sign in _carry_legs(pos, short_venue):
+        total += sign * await settled_funding(pos.symbol, venue, opened, now)
+    return total
+
+
+async def _carry_flip_confirmed(pos: PaperPosition, short_venue: str | None, now: datetime) -> bool:
+    """The captured rate has been adverse for the whole confirmation window.
+    A single reading flipped on Bybit's post-settlement placeholder and closed
+    51 of 51 inverse/xexch carries at their first settlement."""
+    legs = _carry_legs(pos, short_venue)
+    if not legs:
+        return False
+    best = Decimal("0")
+    for venue, sign in legs:
+        rates = await recent_rates(pos.symbol, venue, now)
+        if not rates:
+            return False
+        # Most favourable reading of this leg inside the window.
+        best += max(sign * r for r in rates)
+    return flip_confirmed([best])
+
+
 async def _latest_price(symbol: str, asset_class: str = "crypto") -> Decimal | None:
     """Latest mark price for a symbol.
 
-    crypto → MarketTrade (tick prints, sub-minute fresh)
-    bist   → MarketBar 1m close (Yahoo-delayed, wider freshness window)
+    crypto      → MarketTrade (tick prints, sub-minute fresh)
+    bist / us   → MarketBar 1m close (Yahoo-delayed, wider freshness window)
     """
-    if asset_class == "bist":
+    if asset_class in _BAR_PRICE_CLASSES:
         cutoff = datetime.now(UTC) - timedelta(seconds=FRESHNESS_S_BARS)
         async with local_session_scope() as session:
             stmt = (
                 select(MarketBar.close)
                 .where(MarketBar.symbol == symbol)
-                .where(MarketBar.asset_class == "bist")
+                .where(MarketBar.asset_class == asset_class)
                 .where(MarketBar.interval == "1m")
                 .where(MarketBar.ts >= cutoff)
                 .order_by(MarketBar.ts.desc())
@@ -240,16 +375,17 @@ def _unrealized_pnl(
 ) -> Decimal:
     """Compute unrealized PnL for an open position.
 
-    For delta_neutral positions the PnL is purely funding accrual:
+    For carry positions (delta_neutral / inverse_carry / xexch_carry) the PnL is
+    purely funding accrual:
         pnl = notional × (elapsed_hours / 8) × funding_rate_8h
 
-    `funding_rate_8h` must be supplied by the caller for delta_neutral (read
-    from the latest TickerSnapshot asynchronously before calling this function).
-    If it is None the function returns 0 — callers ensure they fetch it first.
+    `funding_rate_8h` is the EFFECTIVE, already-signed rate the carry captures
+    (earning-positive) — the caller computes it via `_carry_accrual_rate` so the
+    inverse/xexch direction is baked in. If it is None the function returns 0.
 
     For long/short positions the standard mark-vs-entry formula applies.
     """
-    if pos.side == "delta_neutral":
+    if _is_carry(pos.side):
         if funding_rate_8h is None:
             return Decimal("0")
         now = datetime.now(UTC)
@@ -340,10 +476,13 @@ async def _current_equity(session, wallet: Wallet) -> tuple[Decimal, Decimal, in
 
     unrealized = Decimal("0")
     for pos in open_positions:
-        if pos.side == "delta_neutral":
-            fr = await _latest_funding_rate(pos.symbol)
-            # mark is irrelevant for delta_neutral; pass opened_price as a
-            # placeholder so the function signature is satisfied.
+        if _is_carry(pos.side):
+            short_venue = None
+            if pos.side == "xexch_carry":
+                short_venue = await _xexch_short_venue(session, pos.prediction_id)
+            fr = await _carry_accrual_rate(pos, short_venue=short_venue)
+            # mark is irrelevant for a carry; pass opened_price as a placeholder
+            # so the function signature is satisfied.
             unrealized += _unrealized_pnl(pos, pos.opened_price, funding_rate_8h=fr)
         else:
             mark = await _latest_price(pos.symbol, pos.asset_class)
@@ -634,6 +773,18 @@ async def _kelly_fractions(
     return out
 
 
+async def _promotion_confirmed(strategy_id: str, asset_class: str) -> bool:
+    """True only when the promotion bar says `confirmed`. Unknown (cold
+    cache, study failure) is not confirmed: the size ceiling stays on."""
+    from matrix_shared.edge_study import strategy_edge
+
+    try:
+        row = await strategy_edge(strategy_id, asset_class)
+    except Exception:  # noqa: BLE001 — advisory; the ceiling is the safe default
+        return False
+    return bool(row) and row.get("status") == "confirmed"
+
+
 async def open_due_positions() -> int:
     """Open positions per market — each asset_class has its own wallet +
     concurrent-position slots, so one market's signal flood can't starve
@@ -688,6 +839,36 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             )
         ).all()
         strategy_open: dict[str, int] = {sid: cnt for sid, cnt in strategy_open_rows}
+
+        # Per-symbol occupancy of EXISTING opens (the in-loop counter used to
+        # start at 0 every tick, so the soft cap only limited same-tick floods).
+        symbol_open_rows = (
+            await session.execute(
+                select(PaperPosition.symbol, func.count(PaperPosition.id))
+                .where(PaperPosition.wallet_id == wallet.id)
+                .where(PaperPosition.status == "open")
+                .group_by(PaperPosition.symbol)
+            )
+        ).all()
+        symbol_open_count: dict[str, int] = {sym: int(n) for sym, n in symbol_open_rows}
+
+        # Carry family (delta_neutral / inverse_carry / xexch_carry) all harvest
+        # funding on the same underlying. Stacking inverse+xexch on STEEM doubled
+        # correlated exposure and a second ~30 bps round-trip for one thesis.
+        # One open carry per symbol per wallet; EV-sort picks the better draft
+        # when both queue on the same tick. Existing overlaps are left to run
+        # off — flattening them now would realize the cost without the hold.
+        carry_occupied: set[str] = {
+            row[0]
+            for row in (
+                await session.execute(
+                    select(PaperPosition.symbol)
+                    .where(PaperPosition.wallet_id == wallet.id)
+                    .where(PaperPosition.status == "open")
+                    .where(PaperPosition.side.in_(_CARRY_SIDES))
+                )
+            ).all()
+        }
 
         # Pre-fetch slot configs. The shadow (challenger) pass borrows the
         # CHAMPION wallet's per-strategy slots so a challenger runs under the
@@ -753,10 +934,18 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
         # no real signal evaluation. Such predictions are flagged 'expired'
         # below instead, so they're scored once and removed from the queue.
         now = datetime.now(UTC)
-        # BIST is long-only; crypto also allows delta_neutral (funding capture).
-        allowed_sides = (
-            ["long", "short", "delta_neutral"] if asset_class == "crypto" else ["long"]
-        )
+        # Sides are market-driven: long always; short only where the adapter
+        # allows it (crypto, us); the carry family (delta_neutral / inverse_carry
+        # / xexch_carry) is a crypto-only funding play.
+        allowed_sides = ["long"]
+        if _market_allows_short(asset_class):
+            allowed_sides.append("short")
+        if asset_class in ("crypto", "test"):
+            # "test" is the isolated-engine asset (tests/isolated_market.py);
+            # production never calls _open_for_market("test"). Allowed here so
+            # carry-overlap tests can book inverse/xexch without the live crypto
+            # wallet.
+            allowed_sides.extend(_CARRY_SIDES)
         # Fetch a broad candidate pool (up to 5× slots) so the EV sort can pick
         # the best predictions rather than whichever happened to arrive first.
         pred_stmt = (
@@ -826,6 +1015,22 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             )
 
         def _ev(p: Prediction) -> float:
+            if _is_carry(p.side):
+                # Carry EV is expected funding capture over the hold, not a
+                # tp/sl bet. Gross (pre-cost); the EV floor charges the 2-leg
+                # cost. The draft context stashes the effective, direction-signed
+                # 8h rate: funding_rate_8h for single-venue (already ± for
+                # inverse), funding_diff_8h for the xexch differential.
+                try:
+                    if p.side == "xexch_carry":
+                        fr = float((p.context or {}).get("funding_diff_8h") or 0.0)
+                    else:
+                        fr = float((p.context or {}).get("funding_rate_8h") or 0.0)
+                        fr *= float(_carry_sign(p.side))
+                except (TypeError, ValueError):
+                    fr = 0.0
+                periods = (p.horizon_seconds or 0) / 28800.0  # 8h funding cycles
+                return fr * periods
             tp = float(p.tp_pct) if p.tp_pct is not None else float(SCORE_CAP_PCT)
             sl = float(p.sl_pct) if p.sl_pct is not None else float(SCORE_CAP_PCT)
             cfg = slot_configs.get(p.strategy_id)
@@ -846,12 +1051,18 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
 
     # Track newly opened counts per strategy/symbol to enforce soft caps.
     newly_opened: dict[str, int] = {}
-    symbol_open_count: dict[str, int] = {}
     opened = 0
 
     for p in candidates:
         if opened >= wallet_slots_left:
             break
+
+        if _is_carry(p.side) and p.symbol in carry_occupied:
+            logger.debug(
+                f"skip {p.id}: carry already open on {p.symbol} "
+                f"(one funding-harvest per underlying)"
+            )
+            continue
 
         if (p.strategy_id, p.symbol, p.side) in open_bets:
             continue
@@ -864,11 +1075,12 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
         sym_cap = max(1, int(wallet.max_concurrent_positions * sym_share + 0.5))
         if symbol_open_count.get(p.symbol, 0) >= sym_cap:
             continue
-        # BIST is long-only (T+2 settlement, retail short restrictions). The
-        # strategy/agent layers already filter shorts, but this is a defensive
-        # gate in case a buggy proposal slips through.
-        if p.asset_class == "bist" and p.side == "short":
-            logger.warning(f"skip {p.id}: short on BIST disallowed ({p.symbol})")
+        # Long-only markets (e.g. BIST: T+2 settlement, retail short
+        # restrictions) must never open a short. The strategy/agent layers
+        # already filter these, but this is a defensive gate in case a buggy
+        # proposal slips through. Short-enabled markets (crypto, us) pass.
+        if p.side == "short" and not _market_allows_short(p.asset_class):
+            logger.warning(f"skip {p.id}: short disallowed on {p.asset_class} ({p.symbol})")
             continue
 
         # Per-strategy slot gate (layer 2)
@@ -908,7 +1120,9 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
         # does not clear costs) is not an opinion — it keeps the old sizing
         # rather than silently suppressing a trade the slot gate allowed.
         kn = kelly_notional(
-            equity=equity, max_notional=max_notional, kelly_f=kelly_f.get(p.strategy_id)
+            equity=equity,
+            max_notional=max_notional,
+            kelly_f=kelly_f.get(p.strategy_id),
         )
         if kn:
             logger.debug(
@@ -916,8 +1130,32 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             )
             notional = kn
 
+        # A carry that names its spot leg is priced and sized on both books
+        # (backtest.carry_books): no spot book means no hedge, so no position;
+        # size only ever goes down from what the risk gate allowed.
+        book_open = None
+        if _is_carry(p.side) and carry_books.is_book_priced(p.context):
+            perp_b, spot_b = await carry_books.legs(p.symbol, p.context)
+            if perp_b is None or spot_b is None:
+                logger.info(
+                    f"skip {p.id}: no {'perp' if perp_b is None else 'spot'} book for "
+                    f"{p.symbol} carry (no hedge, no position)"
+                )
+                continue
+            usd, book_open = carry_books.size_and_price_open(
+                perp_b, spot_b, float(notional),
+                confirmed=await _promotion_confirmed(p.strategy_id, p.asset_class),
+            )
+            if usd is None:
+                logger.info(f"skip {p.id}: {p.symbol} carry {book_open}")
+                continue
+            notional = min(notional, Decimal(str(usd)).quantize(Decimal("0.01"), rounding=ROUND_DOWN))
+            book_open["notional_usd"] = float(notional)
+
         try:
-            booked = await _book_position(p, notional=notional, entry=entry, shadow=shadow)
+            booked = await _book_position(
+                p, notional=notional, entry=entry, shadow=shadow, book_open=book_open
+            )
         except IntegrityError:
             # Another opener (a second engine tick, a test process) filled this
             # prediction between our candidate query and the insert. The
@@ -931,6 +1169,8 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
         newly_opened[p.strategy_id] = newly_opened.get(p.strategy_id, 0) + 1
         symbol_open_count[p.symbol] = symbol_open_count.get(p.symbol, 0) + 1
         open_bets.add((p.strategy_id, p.symbol, p.side))
+        if _is_carry(p.side):
+            carry_occupied.add(p.symbol)
         opened += 1
         logger.info(
             f"opened {p.side} {p.symbol} [{p.asset_class}] notional={notional:.2f} "
@@ -948,10 +1188,14 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
     return opened
 
 
-async def _book_position(p: Prediction, *, notional: Decimal, entry: Decimal, shadow: bool):
+async def _book_position(
+    p: Prediction, *, notional: Decimal, entry: Decimal, shadow: bool, book_open: dict | None = None
+):
     """Debit the wallet and insert the position in one transaction. Returns the
     wallet id, or None when the wallet is missing/tripped/underfunded. Raises
-    IntegrityError if the prediction already has a position."""
+    IntegrityError if the prediction already has a position. `book_open` (a
+    book-priced carry's opening fills) is stamped on the prediction in the
+    same transaction, so the close can never miss it."""
     async with shared_session_scope() as session:
             # Same wallet the candidate pool was built for. Resolving without
             # `shadow` here booked every challenger position — with no
@@ -993,6 +1237,9 @@ async def _book_position(p: Prediction, *, notional: Decimal, entry: Decimal, sh
                     status="open",
                 )
             )
+            if book_open is not None:
+                pred_db = await session.get(Prediction, p.id)
+                pred_db.context = {**(pred_db.context or {}), "book_open": book_open}
             wallet_id = wallet.id
     return wallet_id
 
@@ -1028,11 +1275,48 @@ async def _close_position(pos: PaperPosition, pred: Prediction, reason: str, now
     no fresh price exists and `force` is off (the caller retries next tick);
     with `force=True` (circuit trip) it flat-closes at entry instead.
     """
-    if pos.side == "delta_neutral":
+    context_patch: dict = {}
+    if _is_carry(pos.side):
         # PnL is funding accrual over actual hold duration; no price-based
-        # slippage. opened_at is the anchor; fr read live for correctness.
-        fr = await _latest_funding_rate(pos.symbol)
-        pnl_usd = _unrealized_pnl(pos, pos.opened_price, funding_rate_8h=fr)
+        # slippage. opened_at is the anchor; the effective (direction-signed)
+        # rate is read live for correctness (inverse flips sign; xexch uses the
+        # cross-venue differential from the context's short leg).
+        short_venue = pred.context.get("xexch_short_venue") if pred.context else None
+        # Funding as the venue pays it: the rate in force at each settlement
+        # the hold actually crossed (backtest.carry_funding). The old
+        # `hours/8 x rate_at_close` booked ~0 on every flip exit, because the
+        # closing rate was Bybit's post-settlement placeholder.
+        captured = await _carry_settled_capture(pos, short_venue, now)
+        pnl_usd = pos.notional_usd * captured
+        ctx = pred.context or {}
+        book_open = ctx.get("book_open")
+        if book_open:
+            # Book-priced carry (backtest.carry_books): four taker fees, the
+            # two opening fills walked at open, the two closing fills walked
+            # now. A flat cost made an illiquid coin's spread free.
+            perp_b, spot_b = await carry_books.legs(pos.symbol, ctx)
+            cost = carry_books.close_cost_bps(book_open, perp_b, spot_b, float(pos.notional_usd))
+            pnl_usd -= pos.notional_usd * Decimal(str(cost["total_bps"])) / Decimal("10000")
+            context_patch["book_close"] = cost
+        else:
+            # A carry holds two hedged legs and pays open+close fees on BOTH.
+            # The paper model used to charge carries nothing, so funding
+            # capture looked free and the edge was a cost-model subsidy
+            # (docs/TRADING.md: never model cheaper than the venue charges).
+            # Charge a round-trip on each leg = 2× round_trip_cost.
+            pnl_usd -= pos.notional_usd * round_trip_cost_pct(pos.asset_class, pos.symbol) * 2
+        # A short-spot carry pays to borrow the coin: the hourly rate quoted at
+        # entry x the stress multiple, per started hour. Squeezed coins borrow
+        # dearer than the calm-day quote (adversarial check 2026-10-09).
+        borrow_h = ctx.get("borrow_rate_hourly")
+        if borrow_h:
+            opened_b = pos.opened_at if pos.opened_at.tzinfo else pos.opened_at.replace(tzinfo=UTC)
+            stress = float((book_open or {}).get("borrow_stress", carry_books.BORROW_STRESS))
+            charge = carry_books.borrow_charge(
+                pos.notional_usd, Decimal(str(borrow_h)), stress, (now - opened_b).total_seconds()
+            )
+            pnl_usd -= charge
+            context_patch["borrow_charged_usd"] = str(charge)
         # For scoring: express PnL as % of notional (analogous to pnl_pct
         # for directional positions).
         pnl_pct = pnl_usd / pos.notional_usd if pos.notional_usd else Decimal("0")
@@ -1072,9 +1356,11 @@ async def _close_position(pos: PaperPosition, pred: Prediction, reason: str, now
             # receive it. Uses the latest 8h rate as the hold-average proxy.
             if pos.asset_class == "crypto":
                 opened = pos.opened_at if pos.opened_at.tzinfo else pos.opened_at.replace(tzinfo=UTC)
-                elapsed_h = Decimal(str((now - opened).total_seconds() / 3600.0))
-                fr = await _latest_funding_rate(pos.symbol)
-                pnl_usd += funding_pnl_usd(pos.side, pos.notional_usd, fr, elapsed_h)
+                # Settlements crossed, at the rate in force — a 10-minute
+                # trade that crosses none pays none (was pro-rated before).
+                venue = pos.exchange if pos.exchange in ("bybit", "binance") else "bybit"
+                paid = await settled_funding(pos.symbol, venue, opened, now)
+                pnl_usd += funding_pnl_usd(pos.side, pos.notional_usd, paid, Decimal("8"))
                 pnl_pct = pnl_usd / pos.notional_usd if pos.notional_usd else pnl_pct
             capped = max(min(pnl_pct, SCORE_CAP_PCT), -SCORE_CAP_PCT)
             score = capped / SCORE_CAP_PCT
@@ -1088,6 +1374,8 @@ async def _close_position(pos: PaperPosition, pred: Prediction, reason: str, now
 
         pred_db = await session.get(Prediction, pred.id)
         pred_db.status = "closed"
+        if context_patch:
+            pred_db.context = {**(pred_db.context or {}), **context_patch}
 
         # Atomic release: single UPDATE so a concurrent open can't clobber the
         # decrement (the lost-update that caused phantom-locked capital). The
@@ -1138,16 +1426,16 @@ async def close_due_positions() -> int:
         # Three close paths share the same write-side code below:
         #   1) tp/sl: any open position whose prediction has tp_pct or sl_pct
         #      set AND the current mark crosses the threshold (sign-aware).
-        #      Not applicable to delta_neutral (no price-based TP/SL).
+        #      Not applicable to carries (no price-based TP/SL).
         #   2) horizon: prediction's close_by has elapsed.
-        #   3) funding-flip: delta_neutral positions where the live funding
-        #      rate has turned negative (longs no longer paying shorts).
+        #   3) funding-flip: carry positions whose captured rate has turned
+        #      negative (the carry now PAYS instead of earning).
         # Path 1 is evaluated first; handled_ids prevents double-close.
         tpsl_stmt = (
             select(PaperPosition, Prediction)
             .join(Prediction, Prediction.id == PaperPosition.prediction_id)
             .where(PaperPosition.status == "open")
-            .where(PaperPosition.side != "delta_neutral")
+            .where(PaperPosition.side.notin_(_CARRY_SIDES))
             .where(
                 (Prediction.tp_pct.isnot(None)) | (Prediction.sl_pct.isnot(None))
             )
@@ -1162,13 +1450,13 @@ async def close_due_positions() -> int:
         )
         horizon_rows = (await session.execute(horizon_stmt)).all()
 
-        # Funding-flip candidates: delta_neutral positions whose horizon has
-        # NOT yet elapsed (those are caught by the horizon query above).
+        # Funding-flip candidates: carry positions whose horizon has NOT yet
+        # elapsed (those are caught by the horizon query above).
         funding_flip_stmt = (
             select(PaperPosition, Prediction)
             .join(Prediction, Prediction.id == PaperPosition.prediction_id)
             .where(PaperPosition.status == "open")
-            .where(PaperPosition.side == "delta_neutral")
+            .where(PaperPosition.side.in_(_CARRY_SIDES))
             .where(Prediction.close_by > now)
         )
         funding_flip_rows = (await session.execute(funding_flip_stmt)).all()
@@ -1194,11 +1482,15 @@ async def close_due_positions() -> int:
         handled_ids.add(pos.id)
 
     # --- path 3: funding-flip early exit ---
+    # The thesis breaks when the carry's CAPTURED rate turns negative (it now
+    # pays instead of earns): for delta_neutral that's funding<0, for inverse
+    # funding>0, for xexch the venue differential collapsing/inverting. The
+    # direction-signed rate makes all three a single `< 0` test.
     for pos, pred in funding_flip_rows:
         if pos.id in handled_ids:
             continue
-        fr = await _latest_funding_rate(pos.symbol)
-        if fr is not None and fr < Decimal("0"):
+        short_venue = pred.context.get("xexch_short_venue") if pred.context else None
+        if await _carry_flip_confirmed(pos, short_venue, now):
             work.append((pos, pred, "funding_flip"))
             handled_ids.add(pos.id)
 
