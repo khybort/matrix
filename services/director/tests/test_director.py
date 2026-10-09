@@ -156,3 +156,20 @@ async def test_retire_and_revoke_only_move_in_safe_direction():
         async with shared_session_scope() as s:
             await s.execute(text("DELETE FROM paper_trade_certificate WHERE strategy_id=:sid"), {"sid": sid})
             await s.execute(text("DELETE FROM strategy_configs WHERE strategy_id=:sid"), {"sid": sid})
+
+
+def test_render_brief_has_one_shadow_line_per_tracked_strategy():
+    from matrix_shared import shadow_tracker as st
+
+    band = st.DEFAULT_BANDS[("neg_funding_carry", "crypto")]
+    now = datetime(2026, 10, 9, 16, 0, tzinfo=UTC)
+    rep = st.evaluate([], band, now=now, qualifying=2, strategy_id="neg_funding_carry", asset_class="crypto")
+    brief = render_brief(SystemDigest(now=now, shadow=[rep]))
+    lines = [ln for ln in brief.splitlines() if ln.startswith("shadow ")]
+    assert lines == [
+        "shadow neg_funding_carry/crypto: COLLECTING — 0/20 closed ep, 0 open · band +100…+300, "
+        "floor +30 · last open never · 2 qualifying settlements/72h"
+    ]
+    assert "shadow" in SystemDigest(now=now, shadow=[rep]).as_dict()
+    assert "shadow tracker: no strategy has a registered band" in render_brief(SystemDigest(now=now, shadow=[]))
+    assert "shadow tracker: unavailable" in render_brief(SystemDigest(now=now))

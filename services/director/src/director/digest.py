@@ -95,6 +95,7 @@ class SystemDigest:
     regime: dict[str, Any] = field(default_factory=dict)  # asset_class → regime key
     ranker: list[dict[str, Any]] = field(default_factory=list)  # traded vs untraded (virtual) pnl% per market
     llm: dict[str, Any] = field(default_factory=dict)  # today's LLM usage by service (usage_ledger)
+    shadow: list[dict[str, Any]] | None = None  # shadow_tracker reports; None = probe failed
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -102,6 +103,7 @@ class SystemDigest:
             "challengers": self.challengers, "efficacy": self.efficacy, "proposals": self.proposals,
             "dev": self.dev, "lessons": self.lessons, "certs": self.certs, "wallets": self.wallets,
             "by_method": self.by_method, "regime": self.regime, "ranker": self.ranker, "llm": self.llm,
+            "shadow": [{k: v for k, v in r.items() if k != "band"} for r in self.shadow or []],
         }
 
 
@@ -255,6 +257,13 @@ async def collect_digest(now: datetime | None = None) -> SystemDigest:
     except Exception as e:  # noqa: BLE001 — digest must never fail the tick
         logger.warning(f"digest: dev_tasks probe failed: {e}")
 
+    # Shadow bets against their pre-registered bands (one line each in the brief).
+    try:
+        from matrix_shared.shadow_tracker import collect as _collect_shadow
+        d.shadow = await _collect_shadow(now)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"digest: shadow tracker failed: {e}")
+
     # LLM spend / turns today, per service, from the shared usage ledger.
     try:
         from matrix_shared.usage_ledger import summary as _usage_summary
@@ -295,6 +304,13 @@ def render_brief(d: SystemDigest) -> str:
         lines.append("challengers: " + ", ".join(
             f"{c['strategy_id']}/{c['asset_class']} v{c['version']} (n={c['n']} ep/{c['n_raw']} fills)"
             for c in d.challengers))
+    if d.shadow is None:
+        lines.append("shadow tracker: unavailable (see director log)")
+    elif not d.shadow:
+        lines.append("shadow tracker: no strategy has a registered band")
+    else:
+        from matrix_shared.shadow_tracker import format_line
+        lines.extend(format_line(r) for r in d.shadow)
     e = d.efficacy
     if d.llm.get("calls"):
         top = ", ".join(f"{svc} ${v['cost_usd']:.2f}/{v['calls']}" for svc, v in list(d.llm["by_service"].items())[:4])

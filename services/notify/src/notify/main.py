@@ -35,6 +35,7 @@ from notify.bot import (
     push,
 )
 from notify.health import HealthFlags, collect_health, detect_health_alerts
+from notify.shadow import SHADOW_EVERY_S, detect_shadow_alerts, load_state, save_state
 from notify.state import (
     get_active_strategies,
     get_default_wallet,
@@ -86,6 +87,8 @@ async def _poll_loop(
 ) -> None:
     snap = PollSnapshot()
     health_flags = HealthFlags()
+    shadow_state = load_state()
+    shadow_due = 0.0
     # Seed once before going into the loop so the first tick has a baseline.
     try:
         snap.wallet = await get_default_wallet()
@@ -119,6 +122,23 @@ async def _poll_loop(
             alerts.extend(health_alerts)
         except Exception as e:
             logger.exception(f"health probe failed: {e}")
+
+        # Shadow-book verdicts against their pre-registered bands.
+        if time.time() >= shadow_due:
+            shadow_due = time.time() + SHADOW_EVERY_S
+            try:
+                from datetime import datetime, timezone
+
+                from matrix_shared.shadow_tracker import collect as collect_shadow
+
+                reports = await collect_shadow()
+                shadow_alerts, shadow_state = detect_shadow_alerts(
+                    shadow_state, reports, datetime.now(timezone.utc)
+                )
+                save_state(shadow_state)
+                alerts.extend(shadow_alerts)
+            except Exception as e:
+                logger.exception(f"shadow tracker failed: {e}")
 
         for level, text in alerts:
             # Special sentinel from alerts.py — replace with the actual summary.
