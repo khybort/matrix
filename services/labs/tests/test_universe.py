@@ -177,3 +177,33 @@ def test_plan_churn_cap_limits_activations():
     scored = [_S(f"TEST_{i}", 0.9, 5e6) for i in range(5)]
     enter, _ = _plan_flips(scored, {}, cfg, NOW)
     assert len(enter) == 2
+
+
+# ── symbol_episode_edges ─────────────────────────────────────────────────────
+
+
+def _fill(sec: int, score: float, *, symbol: str = "BTCUSDT", side: str = "long") -> dict:
+    from datetime import UTC, datetime, timedelta
+
+    return {"strategy_id": "grid", "asset_class": "crypto", "symbol": symbol, "side": side,
+            "generated_at": datetime(2026, 10, 1, tzinfo=UTC) + timedelta(seconds=sec),
+            "horizon_seconds": 600, "score": score}
+
+
+def test_symbol_edge_counts_a_refilled_bet_once():
+    from labs.universe import symbol_episode_edges
+
+    # Ten re-fills of one winning bet are one sample, not ten.
+    rows = [_fill(30 * i, 0.8) for i in range(10)]
+    assert symbol_episode_edges(rows)["BTCUSDT"] == _shrink_edge(1, 0.8)
+
+
+def test_symbol_edge_averages_episodes_not_rows():
+    from labs.universe import symbol_episode_edges
+
+    rows = [_fill(0, 1.0), _fill(30, 1.0), _fill(60, 1.0),  # one episode, mean 1.0
+            _fill(900, -1.0),                                # a second, -1.0
+            _fill(0, 0.5, symbol="ETHUSDT")]
+    edges = symbol_episode_edges(rows)
+    assert edges["BTCUSDT"] == _shrink_edge(2, 0.0)
+    assert edges["ETHUSDT"] == _shrink_edge(1, 0.5)

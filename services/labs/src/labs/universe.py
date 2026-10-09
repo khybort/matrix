@@ -32,6 +32,7 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from matrix_shared import session_scope, shared_session_scope
+from matrix_shared.edge_study import episode_groups
 from matrix_shared.models import TradableSymbol
 
 # ── Config (env-overridable; tune without a migration) ───────────────────────
@@ -286,30 +287,42 @@ def _shrink_edge(n: int, raw_avg_score: float) -> float:
     return max(0.0, min(1.0, (shrunk + 1.0) / 2.0))
 
 
+def symbol_episode_edges(rows: list[dict]) -> dict[str, float]:
+    """Shrunk per-symbol edge from fills counted in episodes.
+
+    A strategy that re-emits the same (symbol, side) inside its horizon and is
+    filled again has made one bet (`edge_study.episode_groups`); per row, one
+    lucky call on a symbol re-filled ten times read as ten agreeing samples and
+    escaped the shrinkage. Each episode contributes the mean score of its
+    fills; n is the episode count.
+    """
+    per_symbol: dict[str, list[float]] = {}
+    for g in episode_groups(sorted(rows, key=lambda r: r["generated_at"])):
+        per_symbol.setdefault(g[0]["symbol"], []).append(
+            sum(float(r["score"] or 0.0) for r in g) / len(g)
+        )
+    return {sym: _shrink_edge(len(xs), sum(xs) / len(xs)) for sym, xs in per_symbol.items() if xs}
+
+
 async def _edge_map(asset_class: str, lookback_days: float) -> dict[str, float]:
     """Per-symbol realized edge in [0,1] from closed outcomes (SHARED tier).
 
     Symbols with no outcomes are simply absent → the scorer treats them as
-    neutral (0.5). All strategies count (a symbol's edge is cross-strategy).
+    neutral (0.5). All strategies count (a symbol's edge is cross-strategy),
+    one sample per episode.
     """
     since = datetime.now(UTC) - timedelta(days=lookback_days)
     async with shared_session_scope() as db:
         res = await db.execute(text("""
-            SELECT p.symbol AS symbol,
-                   COUNT(o.id) AS n,
-                   AVG(o.score) AS avg_score
+            SELECT p.strategy_id, p.asset_class, p.symbol, p.side,
+                   p.generated_at, p.horizon_seconds, o.score
             FROM outcomes o
             JOIN predictions p ON p.id = o.prediction_id
             WHERE p.asset_class = :ac AND o.observed_at >= :since
-            GROUP BY p.symbol
+              AND o.reason <> 'orphan_flat_close'
         """), {"ac": asset_class, "since": since})
-        out: dict[str, float] = {}
-        for row in res:
-            n = int(row.n or 0)
-            if n <= 0:
-                continue
-            out[row.symbol] = _shrink_edge(n, float(row.avg_score or 0.0))
-        return out
+        rows = [dict(r) for r in res.mappings().all()]
+    return symbol_episode_edges(rows)
 
 
 async def _write_scores(asset_class: str, scored: list[ScoredSymbol]) -> None:

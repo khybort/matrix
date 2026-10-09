@@ -12,6 +12,7 @@ Usage:
     uv run python -m labs.main --once                # one eval + score + (try) evolve
     uv run python -m labs.main --seed-only           # seed population and exit
     uv run python -m labs.main --leaderboard         # print top-N and exit
+    uv run python -m labs.main --recompute-fitness   # rescore counters on episodes and exit
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from matrix_shared import shared_session_scope
 from matrix_shared.markets.crypto import crypto_universe
 from matrix_shared.models import LabEvaluation, LabExperiment
 
-from labs.evaluate import emit_signals, score_due_evaluations
+from labs.evaluate import emit_signals, episode_counts, refresh_fitness, score_due_evaluations
 from labs.evolve import seed_initial_population, run_evolution_cycle
 from labs.promote import (
     apply_best_pending,
@@ -77,16 +78,21 @@ async def _leaderboard(limit: int = 15, asset_class: str | None = None) -> None:
         print(f"no active experiments{f' for {asset_class}' if asset_class else ''}")
         return
 
-    print(f"{'id':>6} {'cls':>6} {'gen':>4} {'n_eval':>6} {'n_sig':>6} {'wins':>5} "
-          f"{'fitness':>9} {'thr':>6} {'hor':>4}")
+    # n = independent episodes (a re-emitted bet counts once), n_raw = scored
+    # rows, unsc = evaluations that could not be scored (no mark price).
+    counts = await episode_counts([e.id for e in rows])
+    print(f"{'id':>6} {'cls':>6} {'gen':>4} {'n':>5} {'n_raw':>6} {'unsc':>5} {'n_sig':>6} "
+          f"{'win%':>5} {'fitness':>9} {'thr':>6} {'hor':>4}")
     for e in rows:
         params = e.params or {}
         thr = params.get("signal_threshold", "")
         hor = params.get("horizon_seconds", "")
+        st, unsc = counts[e.id]
+        win = f"{100 * st.n_wins / st.n:.0f}" if st.n else "-"
         print(
             f"{str(e.id)[:6]:>6} {e.asset_class:>6} {e.generation:>4} "
-            f"{e.n_evaluations:>6} {e.n_signals:>6} {e.n_wins:>5} "
-            f"{Decimal(e.fitness_score):>9.4f} {str(thr)[:6]:>6} {str(hor):>4}"
+            f"{st.n:>5} {st.n_raw:>6} {unsc:>5} {e.n_signals:>6} {win:>5} "
+            f"{st.fitness:>9.4f} {str(thr)[:6]:>6} {str(hor):>4}"
         )
 
     top = rows[0]
@@ -208,6 +214,10 @@ def main() -> None:
     parser.add_argument("--seed-only", action="store_true", help="Seed initial population and exit")
     parser.add_argument("--leaderboard", action="store_true", help="Print top genomes and exit")
     parser.add_argument(
+        "--recompute-fitness", action="store_true",
+        help="Rewrite active/promoted experiments' counters and fitness from their episodes and exit",
+    )
+    parser.add_argument(
         "--asset-class",
         default=None,
         help="Restrict --leaderboard to this asset class (e.g. 'crypto', 'bist')",
@@ -261,6 +271,16 @@ def main() -> None:
 
     if args.leaderboard:
         asyncio.run(_leaderboard(asset_class=args.asset_class))
+        return
+
+    if args.recompute_fitness:
+        async def _recompute():
+            async with shared_session_scope() as session:
+                ids = list((await session.execute(
+                    select(LabExperiment.id).where(LabExperiment.status.in_(("active", "promoted")))
+                )).scalars())
+            logger.info(f"recompute-fitness: {await refresh_fitness(ids)} experiment(s) rescored on episodes")
+        asyncio.run(_recompute())
         return
 
     if args.seed_only:

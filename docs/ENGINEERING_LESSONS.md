@@ -200,3 +200,14 @@
   (`MAX_ENTRY_AGE`, `MAX_BAR_GAP`). Üçüncü: tek-strateji koşusu m=1 ile düzeltiliyordu (BHY = çıplak p<0.05, DSR deflate
   edilmiyordu) — aile boyutu koşunun kapsamından değil kitaptan gelir. Ölçüm biriminin değiştiği bir ön-kayıt "taşınmaz"
   kuralını çiğnemeden geçersizdir: `superseded` işaretle, sil değil.
+
+- **2026-10-09 — Artımlı sayaç örnek birimini dondurur; tanımlı ama denetlenmeyen sabit koruma değildir.** Lab, 2026-09-13'te
+  (exp, symbol) başına tek açık değerlendirme kuralını aldı ama `lab_experiments.n_evaluations/n_wins/total_score` her skorda
+  `+= 1` ile büyüyordu: kuraldan önceki satırların %88'i hâlâ açık bir bahsin kopyasıydı ve sayaçlarda kaldı. 09-13'te
+  terfi eden 4bbc9b "152 değerlendirme, %85 kazanç, fitness 0.61" ile geçti; bölümle 20 bahis, %65, fitness 0.02 (bar 0.05).
+  Terfi edilmiş on genomdan hiçbiri bölüm sayımıyla barı geçmiyor. Kural: karar veren bir istatistiği kaynak satırlardan
+  ve tek tanımla (`edge_study.one_per_episode`) yeniden hesapla, sayaç artırma; yayım tarafını düzeltmek geçmiş agregayı
+  düzeltmez (`labs.main --recompute-fitness`). İkinci: `ENTRY_FRESHNESS_S = 30` tanımlıydı, hiç okunmuyordu — kesinti
+  sonrası giriş deliğin öncesindeki ticker, çıkış canlı işlemdi. Bir sabiti tanımlarken kullanıldığı satırı da `grep` ile
+  gör. Üçüncü: `test_auto_apply_safe` konteyner içinde canlı paylaşılan DB'ye bağlanıp `apply_best_pending_safe()` ile
+  **bütün** bekleyen önerileri tarıyordu; artık `LABS_TEST_SHARED_DSN` yoksa atlanır. Kaynak: `docs/wiki/edge-study.md`.

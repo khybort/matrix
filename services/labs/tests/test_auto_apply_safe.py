@@ -24,6 +24,15 @@ os.environ.setdefault("LOCAL_DATABASE_URL", TEST_SHARED_DSN)
 
 from matrix_shared import shared_session_scope
 from matrix_shared.models import MutationProposal, StrategyConfig, Wallet
+
+# apply_best_pending_safe() sweeps EVERY pending proposal in the database it
+# is pointed at. Inside a service container SHARED_DATABASE_URL is the live
+# book, so without an explicit test DSN these tests would apply real pending
+# proposals as a side effect (and collide with live configs, e.g. grid v1).
+pytestmark = pytest.mark.skipif(
+    "LABS_TEST_SHARED_DSN" not in os.environ,
+    reason="needs LABS_TEST_SHARED_DSN pointing at a throwaway shared DB",
+)
 from matrix_shared.models.slot_config import StrategySlotConfig
 
 

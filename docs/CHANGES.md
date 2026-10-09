@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-10-09 — Lab fitness, sembol edge'i, Director ve dashboard bölüm (episode) sayar
+- `labs`: `n_evaluations / n_wins / total_score / fitness_score` artık skorlanmış satırlardan `edge_study.one_per_episode` ile yeniden hesaplanır (artımlı sayaç yok); `labs.main --recompute-fitness` aktif+terfi etmiş 51 deneyi yeniden skorladı. Terfi taraması bölüm sayımıyla tekrar kontrol eder, `metrics_window`'a `n/n_raw/n_unscorable/unit` yazar. `ENTRY_FRESHNESS_S` (60 s) artık uygulanıyor. `universe._edge_map` sembol edge'ini bölüm başına hesaplar (paper engine EV sıralaması bunu okur).
+- Director digest + `strategy_pnl` aracı, web `/api/dashboard` `strategyAgg` ve `/api/public/stats`: n ve win rate bölüm başına, `n_raw` (fill) ve `n_unscorable` (orphan flat-close) yanında. Web, Python tanımının TS aynasını kullanır (`apps/web/src/lib/episodes.ts`) — ikisi birlikte değişmeli. `public/stats` artık orphan flat-close'ları saymaz.
+
 ## 2026-10-09 — BIST ve US durduruldu; agent karar aralığı 15 s → 60 s
 - `strategy_configs`: 5 BIST + 1 US satırı `active` → `paused` (geri almak: aynı id'lerde `status='active'`). Ingestion yalnız `--markets crypto` (compose base + dev). Sebep: `docs/wiki/market-cadence-study.md` — hiçbir BIST/US stratejisi rastgele girişi t≥2 ile yenmiyor, BIST round trip 40 bps, veri ~15 dk gecikmeli, yfinance hataları ingestion logunun %68'i.
 - `agent.main` `--interval 60` (`DEFAULT_INTERVAL_S`): aynı bahisler 60 s gecikmeyle 15 s'den 1.4–2.5 bps iyi (t=2.4–4.3); hızın getirisi yok, LLM rate bütçesi rahatlar. Paper engine'in 5 s çıkış monitörü değişmedi.

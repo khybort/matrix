@@ -7,15 +7,25 @@
 
 from __future__ import annotations
 
+import statistics
+import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from agent.features import extract_symbol_features
 from loguru import logger
-from sqlalchemy import desc, func, select
+from sqlalchemy import func, select
 
 from matrix_shared import local_session_scope, shared_session_scope
-from matrix_shared.models import LabEvaluation, LabExperiment, MarketBar, MarketTrade
+from matrix_shared.edge_study import one_per_episode
+from matrix_shared.models import (
+    LabEvaluation,
+    LabExperiment,
+    MarketBar,
+    MarketTrade,
+    TickerSnapshot,
+)
 from matrix_shared.trading import apply_slippage
 
 from labs.decide import decide_with_genome
@@ -23,8 +33,11 @@ from labs.genome import Genome
 
 # Cap on per-trade pnl for score normalization; ±1% maps to ±1
 SCORE_CAP_PCT = Decimal("0.01")
-# How fresh "now" price must be to open a new evaluation
-ENTRY_FRESHNESS_S = 30
+# How fresh the "now" price must be to open a new evaluation. Until 2026-10-09
+# this was declared and never checked: after an ingestion outage the entry was
+# the last ticker before the hole and the exit a live trade, so the score was
+# the jump across the hole, not anything the genome decided.
+ENTRY_FRESHNESS_S = 60
 # Window around close_at to accept a mark price (need a trade within this window)
 MARK_WINDOW_S = 60
 # BIST uses 1m bars + Yahoo's ~15min delay — widen the score window accordingly.
@@ -33,6 +46,110 @@ MARK_WINDOW_S_BARS = 60 * 30
 
 FITNESS_K = Decimal(__import__("os").environ.get("MATRIX_LAB_FITNESS_K", "1.0"))
 FITNESS_FULL_N = 25
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodeStats:
+    n: int  # independent episodes (the sample size)
+    n_raw: int  # scored rows
+    n_wins: int
+    total_score: Decimal
+    std: Decimal
+    fitness: Decimal
+
+
+def episode_stats(rows: list[dict]) -> EpisodeStats:
+    """Fitness inputs over episodes, not rows.
+
+    `rows` are scored evaluations of ONE experiment (experiment_id, asset_class,
+    symbol, side, generated_at, close_at, score, pnl_pct), any order. Before
+    2026-09-13 the 20 s tick opened a new evaluation per (experiment, symbol)
+    every tick while one was still open, so 88 % of all lab rows were copies of
+    a bet already being scored; the counters summed them as samples (one
+    promoted genome: 129 wins of 152). The episode definition is the edge
+    study's (`one_per_episode`); the first evaluation of an episode is the bet.
+    """
+    items = sorted(
+        (
+            {
+                "strategy_id": r["experiment_id"],
+                "asset_class": r["asset_class"],
+                "symbol": r["symbol"],
+                "side": r["side"],
+                "generated_at": r["generated_at"],
+                "horizon_seconds": max(1, int((r["close_at"] - r["generated_at"]).total_seconds())),
+                "score": Decimal(r["score"]),
+                "pnl_pct": Decimal(r["pnl_pct"]),
+            }
+            for r in rows
+        ),
+        key=lambda r: r["generated_at"],
+    )
+    eps = one_per_episode(items)
+    n = len(eps)
+    scores = [e["score"] for e in eps]
+    total = sum(scores, Decimal("0"))
+    std = Decimal(str(statistics.stdev(float(x) for x in scores))) if n > 1 else Decimal("0")
+    return EpisodeStats(
+        n=n,
+        n_raw=len(items),
+        n_wins=sum(1 for e in eps if e["pnl_pct"] > 0),
+        total_score=total,
+        std=std,
+        fitness=compute_fitness(n=n, mean=total / n if n else Decimal("0"), std=std),
+    )
+
+
+async def _scored_rows(session, experiment_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[dict]]:
+    rows = (await session.execute(
+        select(
+            LabEvaluation.experiment_id, LabEvaluation.asset_class, LabEvaluation.symbol,
+            LabEvaluation.side, LabEvaluation.generated_at, LabEvaluation.close_at,
+            LabEvaluation.score, LabEvaluation.pnl_pct,
+        )
+        .where(LabEvaluation.experiment_id.in_(experiment_ids))
+        .where(LabEvaluation.status == "scored")
+    )).mappings().all()
+    out: dict[uuid.UUID, list[dict]] = {eid: [] for eid in experiment_ids}
+    for r in rows:
+        out[r["experiment_id"]].append(dict(r))
+    return out
+
+
+async def episode_counts(experiment_ids: list[uuid.UUID]) -> dict[uuid.UUID, tuple[EpisodeStats, int]]:
+    """(episode stats, n_unscorable) per experiment, for reports."""
+    if not experiment_ids:
+        return {}
+    async with shared_session_scope() as session:
+        scored = await _scored_rows(session, experiment_ids)
+        stale = dict((await session.execute(
+            select(LabEvaluation.experiment_id, func.count())
+            .where(LabEvaluation.experiment_id.in_(experiment_ids))
+            .where(LabEvaluation.status == "stale")
+            .group_by(LabEvaluation.experiment_id)
+        )).all())
+    return {eid: (episode_stats(scored[eid]), int(stale.get(eid, 0))) for eid in experiment_ids}
+
+
+async def refresh_fitness(experiment_ids: list[uuid.UUID]) -> int:
+    """Rewrite each experiment's counters and fitness from its scored episodes.
+
+    n_evaluations / n_wins / total_score are episode counts from here on;
+    n_signals stays the number of evaluations opened."""
+    if not experiment_ids:
+        return 0
+    async with shared_session_scope() as session:
+        scored = await _scored_rows(session, experiment_ids)
+        for eid in experiment_ids:
+            exp = await session.get(LabExperiment, eid)
+            if exp is None:
+                continue
+            st = episode_stats(scored[eid])
+            exp.n_evaluations = st.n
+            exp.n_wins = st.n_wins
+            exp.total_score = st.total_score
+            exp.fitness_score = st.fitness
+    return len(experiment_ids)
 
 
 def compute_fitness(*, n: int, mean: Decimal, std: Decimal) -> Decimal:
@@ -74,6 +191,18 @@ async def emit_signals(symbols: list[str], asset_class: str = "crypto") -> int:
     if not experiments:
         return 0
 
+    now = datetime.now(UTC)
+    async with local_session_scope() as session:
+        last_tick = dict((await session.execute(
+            select(TickerSnapshot.symbol, func.max(TickerSnapshot.snapshot_ts))
+            .where(TickerSnapshot.symbol.in_(symbols))
+            .where(TickerSnapshot.snapshot_ts >= now - timedelta(seconds=ENTRY_FRESHNESS_S))
+            .group_by(TickerSnapshot.symbol)
+        )).all())
+    symbols = [s for s in symbols if s in last_tick]
+    if not symbols:
+        return 0
+
     # Pre-extract features once per symbol (cheap one-shot SQL each)
     feature_cache = {sym: await extract_symbol_features(sym) for sym in symbols}
 
@@ -90,7 +219,6 @@ async def emit_signals(symbols: list[str], asset_class: str = "crypto") -> int:
     open_pairs = {(eid, sym) for eid, sym in open_rows}
 
     opened = 0
-    now = datetime.now(UTC)
     for exp in experiments:
         try:
             genome = Genome.from_dict(exp.params)
@@ -187,6 +315,7 @@ async def score_due_evaluations(stale_after_s: int = 600) -> tuple[int, int]:
 
     scored = 0
     stale = 0
+    touched: set[uuid.UUID] = set()
     for ev in evals:
         mark = await _mark_price_near(ev.symbol, ev.close_at, ev.asset_class)
         if mark is None:
@@ -220,25 +349,10 @@ async def score_due_evaluations(stale_after_s: int = 600) -> tuple[int, int]:
             ev_db.score = score
             ev_db.status = "scored"
 
-            exp_db = await session.get(LabExperiment, ev.experiment_id)
-            if exp_db is not None:
-                exp_db.n_evaluations += 1
-                if pnl_pct > 0:
-                    exp_db.n_wins += 1
-                exp_db.total_score = exp_db.total_score + score
-                # Fitness = lower confidence bound of the mean score
-                # (mean − k·std/√n), × sample-size factor. A mean alone let a
-                # lucky genome with huge variance win best-of-20 selection.
-                std_row = (await session.execute(
-                    select(func.stddev_samp(LabEvaluation.score))
-                    .where(LabEvaluation.experiment_id == ev.experiment_id)
-                    .where(LabEvaluation.status == "scored")
-                )).scalar()
-                avg = exp_db.total_score / Decimal(exp_db.n_evaluations)
-                exp_db.fitness_score = compute_fitness(
-                    n=exp_db.n_evaluations, mean=avg,
-                    std=Decimal(std_row) if std_row is not None else Decimal("0"),
-                )
         scored += 1
+        touched.add(ev.experiment_id)
 
+    # Fitness is recomputed from the experiment's episodes rather than
+    # incremented per row, so a re-emitted bet can never count twice.
+    await refresh_fitness(sorted(touched))
     return scored, stale

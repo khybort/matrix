@@ -39,6 +39,8 @@ from matrix_shared import shared_session_scope
 from matrix_shared.models import LabExperiment, MutationProposal, StrategyConfig, Wallet
 from matrix_shared.models.slot_config import StrategySlotConfig
 
+from labs.evaluate import episode_counts
+
 # Eligibility thresholds — promotion is *consequential*, so defaults are strict.
 MIN_EVAL_FOR_PROMOTION = 30
 MIN_FITNESS_FOR_PROMOTION = Decimal("0.05")
@@ -271,17 +273,23 @@ async def scan_for_promotions(
 
         after_params = _scrub_forbidden(_enrich_lab_params(candidate.params or {}))
 
-        win_rate = (
-            Decimal(candidate.n_wins) / Decimal(candidate.n_evaluations)
-            if candidate.n_evaluations
-            else Decimal("0")
-        )
+        # Gate on what the episodes say, not on the stored counters: those were
+        # summed per row before 2026-10-09 and a genome that has not been
+        # rescored since would otherwise promote on re-emitted copies.
+        st, n_unscorable = (await episode_counts([candidate.id]))[candidate.id]
+        if st.n < min_eval or st.fitness < min_fitness:
+            logger.info(
+                f"promote scan: lab {str(candidate.id)[:8]} fails on episodes "
+                f"(n={st.n} of {st.n_raw} rows, fitness={st.fitness}); skipping"
+            )
+            return None
+        win_rate = Decimal(st.n_wins) / Decimal(st.n) if st.n else Decimal("0")
         rationale = (
             f"Lab promotion: experiment {str(candidate.id)[:8]} "
             f"(gen {candidate.generation}). "
-            f"fitness={candidate.fitness_score:.4f}, "
-            f"n_eval={candidate.n_evaluations}, n_wins={candidate.n_wins}, "
-            f"win_rate={win_rate:.3f}. "
+            f"fitness={st.fitness:.4f}, "
+            f"n={st.n} episodes (n_raw={st.n_raw}, n_unscorable={n_unscorable}), "
+            f"n_wins={st.n_wins}, win_rate={win_rate:.3f}. "
             f"Beats min_fitness={min_fitness}, min_eval={min_eval}."
         )
 
@@ -296,10 +304,14 @@ async def scan_for_promotions(
             metrics_window={
                 "lab_experiment_id": str(candidate.id),
                 "lab_generation": candidate.generation,
-                "fitness_score": str(candidate.fitness_score),
+                "fitness_score": str(st.fitness),
                 "promotion_min_fitness": str(min_fitness),
-                "n_evaluations": candidate.n_evaluations,
-                "n_wins": candidate.n_wins,
+                "n_evaluations": st.n,
+                "n": st.n,
+                "n_raw": st.n_raw,
+                "n_unscorable": n_unscorable,
+                "unit": "episode",
+                "n_wins": st.n_wins,
                 "win_rate": str(win_rate),
             },
             rationale=rationale,
@@ -313,7 +325,7 @@ async def scan_for_promotions(
 
     logger.info(
         f"promote scan: proposal {str(proposal_id)[:8]} created from "
-        f"lab {str(candidate.id)[:8]} (fitness={candidate.fitness_score:.4f})"
+        f"lab {str(candidate.id)[:8]} (fitness={st.fitness:.4f}, n={st.n} episodes)"
     )
     return proposal_id
 
