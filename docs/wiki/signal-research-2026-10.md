@@ -705,3 +705,100 @@ arms, evaluates the three revisit rules over `series` episodes only, and sends `
 `SELECT context->>'borrow_source', count(*) FROM predictions WHERE strategy_id =
 'neg_funding_carry' AND status <> 'open' GROUP BY 1` (shared) tells series from fallback; an episode
 charged at `stressed_entry` or `mixed` tells nothing (or only part) about real borrow.
+
+## Round 5: options-implied — 2026-10-09: 14 cells, nothing survives
+Question: do extremes in Deribit option prices (volatility risk premium, 25-delta skew, DVOL spikes, IV
+term inversion, put/call demand) predict the BTC / ETH perp over 3–7 days by enough to pay a taker round
+trip and funding? Slow signals only; the target was ≥ 45 bps gross per episode. Scripts, pre-registration
+and its timestamped log: `services/backtest/research/signal_2026_10_r5/` (`PREREG.txt` committed alone in
+1b2b6e1 before any data was fetched). Cells registered in `docs/research/ledger.jsonl` (27aaf25) before any
+return; train verdicts committed in 79bb6cf; record-only holdouts and finals after that.
+
+**Design.**
+- Data (public): Deribit DVOL 1h for BTC and ETH from 2021-03-24. Every Deribit option trade in the
+  20:00–24:00 UTC window of each day from `history.deribit.com`: 4 050 windows, 4.83 M trades, each with its
+  `iv`. Bybit BTCUSDT / ETHUSDT 1h klines and funding. Today's Bybit books. Deribit's own historical-vol
+  endpoint serves only ~16 days, so realised vol comes from the perp klines.
+- Features at 00:00 UTC, from data before then:
+  - VRP = DVOL − 30-day realised vol;
+  - RR25 = median iv of 0.15–0.35-delta calls minus the same for puts, 20–45 DTE (Black-76 delta from the
+    trade's iv);
+  - TERM = ATM iv at 1.5–10 DTE minus ATM iv at 45–120 DTE;
+  - PC3 = 3-day put/call notional;
+  - DVOLchg = 24 h log change of DVOL.
+
+  Each feature is ranked against its own trailing 365 days (≥ 120 values). RR25 is missing on 36–49 % of
+  days, because the 4 h window is thin in the 25-delta bucket. TERM is missing on 19–30 %.
+- 14 cells, direction fixed in advance from the economic prior:
+  - A.hi: VRP ≥ p90, long. A.lo: VRP ≤ p10, short.
+  - B.put: RR25 ≤ p10 (puts rich), long. B.call: RR25 ≥ p90 (calls rich), short.
+  - C: DVOLchg ≥ p95, fade the last 24 h move.
+  - D: TERM ≥ p90 (front-end inversion), long.
+  - P: PC3 ≥ p90, long.
+
+  Each is held 3 d or 7 d. BTC and ETH are pooled, with one episode per signal window and no overlap per
+  asset. Entry is the close of the bar ending 01:00 UTC.
+- Cost: 2 × 5.5 bps taker, plus the walked spread at $5k (BTC 0.012 bps, ETH 0.040 bps round trip:
+  negligible), plus every funding settlement over the hold on mark-to-market notional. Total ≈ 11 bps plus
+  funding.
+- Split: train 2021-03-24..2024-06-30, holdout 2024-07-01..2026-10-08. Pass: train net > 0 with
+  week-clustered t ≥ 2. Then holdout net > 0, t ≥ 2, ledger BHY q ≤ 0.05 and net ≥ +15.
+
+**Result: no cell passes train** (k = 0), so no holdout opened. The holdouts below are record-only rows in
+the ledger and never enter q. Net is bps per episode; t is clustered by entry ISO week.
+
+| cell | train net (t_wk) | n | train gross | holdout net (t_wk) | n | holdout median | verdict |
+|---|---|---|---|---|---|---|---|
+| A.hi.3 VRP high → long 3d | +185.4 (1.72) | 39 | +196.4 | −17.3 (−0.13) | 29 | −83.0 | rejected (train) |
+| A.hi.7 | −34.2 (−0.24) | 33 | −23.1 | +87.5 (0.37) | 23 | −75.2 | rejected |
+| A.lo.3 VRP low → short 3d | −26.7 (−0.36) | 36 | −15.7 | +50.8 (0.56) | 27 | +29.1 | rejected |
+| A.lo.7 | +8.5 (0.05) | 30 | +19.5 | −3.5 (−0.02) | 21 | +97.7 | rejected |
+| B.put.3 puts rich → long 3d | −10.6 (−0.08) | 50 | +0.4 | −19.0 (−0.37) | 80 | +7.7 | rejected |
+| B.put.7 | −14.6 (−0.05) | 34 | −3.6 | −24.2 (−0.21) | 57 | +75.1 | rejected |
+| B.call.3 calls rich → short 3d | −107.6 (−1.57) | 71 | −96.6 | −124.9 (−1.23) | 23 | −112.8 | rejected |
+| B.call.7 | −65.4 (−0.54) | 52 | −54.4 | −278.3 (−1.67) | 18 | −333.6 | rejected |
+| C.3 DVOL spike → fade 3d | −132.7 (−1.72) | 85 | −121.7 | −73.3 (−0.85) | 59 | +21.7 | rejected |
+| C.7 | −166.2 (−1.50) | 74 | −155.2 | −231.7 (−1.72) | 47 | −110.5 | rejected |
+| **D.3 IV inversion → long 3d** | **+135.7 (0.77)** | 48 | +146.7 | **+115.1 (1.61)** | 70 | +200.8 | rejected (train t) |
+| D.7 | +13.5 (0.05) | 38 | +24.6 | +82.1 (0.81) | 53 | +205.1 | rejected |
+| P.3 put/call high → long 3d | +22.1 (0.30) | 90 | +33.1 | −46.5 (−1.18) | 114 | −23.2 | rejected |
+| P.7 | +122.8 (1.18) | 75 | +133.8 | +1.9 (0.02) | 89 | −17.7 | rejected |
+
+**Cumulative m = 171** (ledger, 2026-10-09): 91 from rounds 1–3b, 14 from round 5 and 66 from round 4.
+Every round-5 cell has q = 1. H1 is still the only test with q ≤ 0.05, at q = 9.4e-5.
+
+### Claims
+- **Options extremes do not time BTC/ETH over 3–7 days.** Episodes are rare (8–50 a year pooled) and the
+  per-episode spread is several hundred bps, so a +100…+200 bps mean is still t < 2. A clean pass would have
+  needed t ≈ 3.9 against BHY at m = 171, which is out of reach at these sample sizes.
+- **Cost was never the problem.** On BTC/ETH perps the round trip is about 11 bps and funding −17…+21 bps
+  per episode. Every cell's gross moves by ±100–300 bps, and the sign of the gross decides each cell, not the
+  cost (cost ×2 shifts the nets by −11).
+- **The contrarian priors are wrong in sign on skew and DVOL spikes.** Calls-rich (B.call) and fade-the-spike
+  (C) lose in both splits, and so did the price leg: these extremes behave as **momentum**, not reversal.
+  The mirror rules (follow the skew, follow the spike move) were not pre-registered. Their sign-flipped
+  figures, +54…+267 gross with t ≤ 1.72, are post-hoc and need a new registration on new data before they
+  count for anything.
+- **Benchmark drift flatters every long cell.** The unconditional 00:00-entry long earns, in price bps:
+  BTC +30 / +68 train and +19 / +48 holdout at 3 d / 7 d; ETH +32 / +72 and +11 / +29. A long cell must
+  beat that, not just zero. D.3's +115 holdout exceeds it by about +100 bps, but at t 1.6.
+- **Closest to an edge: front-end IV inversion → long 3 d (D.3).** It is positive in both splits (+136 /
+  +115, medians +166 / +201, 64–65 % winners) but fails the train t (0.77). In train, the best five weeks
+  (+10 705 bps) and the worst five (−10 888) cancel. By year: 2022 −28 (n 29), 2023 +241 (6), 2024 H1 +453
+  (13); holdout 2024 H2 +208 (21), 2025 +65 (35), 2026 +100 (14). Inversion in the 2022 bear market was not a
+  bottom. It is the only family where train and holdout agree in sign and
+  size. **Reopening it** takes a new pre-registered forward test: a live daily feature (Deribit public chain,
+  no history needed), long BTC/ETH 72 h when TERM ≥ trailing p90, with n fixed in advance (≥ 60 episodes,
+  which is about 2 years at its ~30-a-year holdout rate). Re-cutting this history would only be more
+  searching.
+- **Data limits.**
+  - The 4 h window is a sample of the day: skew and term are measured on 20:00–24:00 UTC trades only.
+    Median-of-trades iv is noisier than a fitted surface.
+  - Black-76 delta uses the index, not the forward. That shifts the bucket edges by a few delta points at
+    45–120 DTE.
+  - No survivorship issue (BTC/ETH).
+  - Data stays in the session scratchpad `r5/data/`: DVOL, klines, funding, books, 4 050 trade windows
+    (357 MB JSON) and `features.pkl` / `episodes.pkl`.
+
+**Verdict: rejected.** No module is designed. What follows for the main session is nothing to build. Options
+data does not belong in the live feature set until a forward test of D.3 is pre-registered and passes.

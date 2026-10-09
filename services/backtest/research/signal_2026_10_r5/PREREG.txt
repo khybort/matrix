@@ -99,3 +99,6 @@ LOG
 2026-10-09 17:36 UTC  TRAIN decision (research.py train). Measured round-trip spread at $5k: BTC 0.012 bps, ETH 0.040 bps.
                   No cell has net > 0 with t_wk >= 2: closest A.hi.3 +185.4 bps, t_wk 1.72 (n 39, 29 weeks); P.7 +122.8, t 1.18.
                   k = 0 train passers -> no holdout opens. Train rows written to docs/research/ledger.jsonl (r5.*).
+2026-10-09 17:38 UTC  Record-only holdouts of all 14 train failures (research.py record) and finals written to the ledger: m = 171
+                  (round 4's 66 cells registered meanwhile in 98bcd2d), every r5 cell q = 1, verdict rejected_train. Closest:
+                  D.3 train +135.7 (t 0.77) / holdout +115.1 (t 1.61, record only). Write-up: wiki "Round 5: options-implied".

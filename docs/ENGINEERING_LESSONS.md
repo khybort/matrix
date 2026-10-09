@@ -512,3 +512,16 @@
 - **2026-10-09 — Zero is a value, missing is an anomaly.** shadow_tracker treated a "0" borrow quote / all-zero recorded
   series like a missing charge and fired `broken`. Anomaly checks must separate "the field is absent / the fallback
   did not run" from "the recorded input was zero".
+
+- **2026-10-09 — Historical option skew is free on `history.deribit.com`; sample a fixed window and let the signal's rarity set the bar.**
+  Round 5 (options-implied, 14 cells, none passes train): `public/get_last_trades_by_currency_and_time` on
+  `history.deribit.com` serves every option trade back to 2021 **with its `iv` and index price**. That is the only
+  public route to historical 25-delta skew and IV term structure (Black-76 delta from the trade's iv). `public/get_historical_volatility`
+  serves only ~16 days, and DVOL (`get_volatility_index_data`, from 2021-03-24) is 30-day only. A full day is 10–30 k trades per currency.
+  A fixed 4 h window per day (≈ 1 200 trades) with five date-span workers at ~0.3 s spacing fetched 4 050 windows in about 25 min with
+  zero retries, but the 25-delta buckets are then empty on 36–49 % of days. Pre-register the missing rule.
+  Two lessons on the statistics: (1) a daily signal at a p90 extreme on two assets gives only 8–50 episodes a year, with ±300 bps per-episode
+  spread, so even +150 bps a cell sits at t < 2. Check the attainable t from n and the spread before registering, or the round is decided by sample
+  size. (2) A long cell must beat the drift (BTC +48…+68 bps unconditional per 7 d), not zero. Report that benchmark next to it.
+  Tooling: `python3 -I` drops user site-packages (no pandas on the host). `pgrep -f "<pattern>"` inside a waiting shell matches the waiting shell
+  itself and never exits; match on the pid list instead. Scripts: `services/backtest/research/signal_2026_10_r5/`.
