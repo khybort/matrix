@@ -53,12 +53,22 @@ how much the answer would change.
   own book snapshots ([[methods]]), but fees remain assumed and nothing is
   validated against real fills. Until live or exchange-simulated fills exist,
   every net-of-cost conclusion still carries that assumption.
-- **Is the 15-second cadence justified?** Nothing has shown that faster
-  decisions earn more than they cost in spread. *Test*: compare realised PnL of
-  the same strategy at 15 s vs 60 s vs 300 s decision intervals.
-- **Should BIST and US be running at all right now?** They add surface area,
-  cost and attention while crypto has no edge. The argument for keeping them is
-  regime diversification; there is no evidence yet either way.
+- ~~**Is the 15-second cadence justified?**~~ **Answered 2026-10-09: no.**
+  The same 8 737 crypto episodes entered 60 s after the signal instead of
+  15 s net +1.4 bps (t=2.4; strict-bar model +2.5, t=4.3); 300 s +1.7. No
+  strategy is net positive at any cadence, and on the LLM path the loop was
+  really ~39 s (median gap; p50 call 18.6 s + 15 s sleep). Recommended: agent
+  `--interval 60`. Since 09-30 every LLM call has failed, so the agent is
+  rule-only ([[market-cadence-study]]).
+- ~~**Should BIST and US be running at all right now?**~~ **Answered
+  2026-10-09: no — pause both.** Since 09-01, one per episode: BIST −43.0 bps
+  net (t=−10.4, n=638; round trip 40 bps, data ~15 min delayed), US −11.4
+  (t=−5.6, n=309); no strategy in either beats random entry at t≥2. Paper:
+  BIST −60 bps on 105 fills, US −24 on 28. They took ~38 % of weekday agent
+  LLM calls and two thirds of the ingestion log. Switch: `strategy_configs`
+  status → `'paused'` for `asset_class IN ('bist','us')` plus ingestion
+  `--markets crypto` ([[market-cadence-study]]). Re-entry needs a hypothesis
+  whose gross clears the round trip, on real-time data.
 - ~~**Someone else holds this bot token.**~~ — closed 2026-09-20 by rotation.
   The finding stands and is recorded in [[incidents]]: with every local consumer
   stopped, a lone traced poller took 3 conflicts in 240 s at an in-flight count

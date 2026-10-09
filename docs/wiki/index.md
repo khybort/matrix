@@ -25,6 +25,7 @@ working".
 - [pnl-reality](pnl-reality.md) — measured economics: why it loses money
 - [edge-study](edge-study.md) — controlled test of entry timing vs random entry
 - [strategy-scoreboard](strategy-scoreboard.md) — every emitting strategy on clean signals, net of cost (2026-10-09: none pays)
+- [market-cadence-study](market-cadence-study.md) — BIST/US vs their cost (pause both) and 15 s vs 60 s vs 300 s decisions (speed earns nothing)
 - [methods](methods.md) — quant methodology applied, with why
 - [research-backlog](research-backlog.md) — methods not yet applied, each with its decisive test
 - [learning-loop](learning-loop.md) — reflection, labs, lessons, memory, and their gates

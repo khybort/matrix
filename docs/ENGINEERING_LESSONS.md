@@ -178,3 +178,14 @@
   cüzdanın tutabildiği bahistir**; aynı (strateji, sembol, yön) ufku içinde tekrar ederse bir sayılır (`one_per_episode`).
   Bir "edge" bulunduğunda önce gün/saat ve (sembol, saat) kümesine göre dağılımına bak — tek kümeden geliyorsa yoktur.
   Ayrıca: bar `ts` başlangıçtır; sinyal anındaki barın kapanışı gelecektir (`entry_index`).
+
+- **2026-10-09 — 1 dakikalık bar 15 saniyelik gecikmeyi ölçemez; ölçmeden önce verinin kendi gecikmesine bak.**
+  "15 s vs 60 s vs 300 s" karar gecikmesini 1m barlarla simüle ederken "0 s" girişini *son kapanmış bar* aldım:
+  oi_breakout 0→15 s arasında 15.6 bps, oi_delta 6.7 bps kaybediyor göründü (t≈2.4) — hızın para ettiği sonucu.
+  Yapaydı: son kapanmış bar ortalama sinyalden 30 s *önce* kapanır ve sinyali tetikleyen hareketi içerir; kimsenin
+  işlem yapamayacağı bir fiyat. Zamanı ortalanmış barla (t+d−30 s'yi içeren bar) aynı stratejiler gecikmeyle *iyileşti*.
+  Kural: bar çözünürlüğünden küçük gecikmeleri yalnız (a) zamanı ortalanmış fiyatla ve (b) gecikmeler arası **eşli fark**
+  olarak raporla; seviye değil. `entry_price_ref`'e de çapalama: dca ve BIST'te bar fiyatından ortalama +38…+314 bps
+  uzak, sinyal anı fiyatı değil. Ve hızı tartışmadan önce `created_at − ts` ile verinin gecikmesine bak: BIST yfinance
+  barları **~15 dk** geç yazılıyor (12:17 barı 12:32:37'de) — 15 s'lik döngü 900 s'lik veriyle karar veriyordu.
+  Kaynak: `docs/wiki/market-cadence-study.md`.
