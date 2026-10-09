@@ -323,6 +323,86 @@ def test_q_grows_with_every_test_ever_registered(env):
     assert ledger.qvalues()["r9.a"] > q_small * 20
 
 
+# ---------------------------------------------------------------- forward test
+FWD_START = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _fwd_spec(**kw) -> Spec:
+    return _spec(cells=(Cell("f", {"x": 1}),), train=("2025-01-01", "2026-01-01"),
+                 holdout=("2026-01-01", "2027-01-01"), forward_n=10, **kw)
+
+
+def _fwd_builder(late_net=-1e4, open_nan=False):
+    """An episode every 5 days, held 3 days; the first 10 pay ~+50, later ones `late_net`."""
+    def build(cell, start, end):
+        out = []
+        for i in range(30):
+            t = FWD_START + timedelta(days=5 * i)
+            if not start <= t < end:
+                continue
+            net = (50.0 + (10 if i % 2 else -10)) if i < 10 else late_net
+            out.append(Episode("BTC", t, t + timedelta(hours=1), t + timedelta(days=3, hours=1),
+                               float("nan") if open_nan and i == 9 else net))
+        return out
+    return build
+
+
+def test_classic_spec_has_no_forward_key():
+    # committed spec blocks of earlier rounds must keep matching
+    assert "forward_n" not in _spec().to_dict()
+    assert _fwd_spec().to_dict()["forward_n"] == 10
+
+
+def test_forward_prereg_and_register_row(env):
+    root, _git, ledger, _reg, _ = env
+    study = _registered(env, _fwd_spec())
+    assert "Forward test" in (root / PREREG).read_text()
+    assert ledger.tests()["r9.f"].register["forward_n"] == 10
+    with pytest.raises(HoldoutError, match="forward test"):
+        study.evaluate(_fwd_builder())
+
+
+def test_forward_refused_before_n_closed_and_writes_nothing(env):
+    _root, _git, ledger, _reg, _ = env
+    study = _registered(env, _fwd_spec())
+    n = len(ledger.lines())
+    early = FWD_START + timedelta(days=46)  # 10th episode (day 45) still open
+    st = study.forward_status("f", _fwd_builder(), now=early)
+    assert st == {"test_id": "r9.f", "closed": 9, "need": 10, "unpriced": 0, "due": False}
+    with pytest.raises(HoldoutError, match="9 of 10"):
+        study.open_forward("f", _fwd_builder(), now=early)
+    assert len(ledger.lines()) == n
+
+
+def test_open_episode_with_unknown_net_holds_its_place(env):
+    study = _registered(env, _fwd_spec())
+    early = FWD_START + timedelta(days=46)
+    st = study.forward_status("f", _fwd_builder(open_nan=True), now=early)
+    assert st["closed"] == 9 and st["unpriced"] == 0
+
+
+def test_forward_decides_once_on_exactly_n(env):
+    _root, _git, ledger, _reg, _ = env
+    study = _registered(env, _fwd_spec())
+    later = FWD_START + timedelta(days=200)  # 30 episodes closed; the last 20 lose 1e4
+    res = study.open_forward("f", _fwd_builder(), now=later)
+    assert res.n == 10 and res.mean > 0 and res.passed
+    t = ledger.tests()["r9.f"]
+    assert t.holdout_open is not None and t.holdout["forward_n"] == 10
+    with pytest.raises(HoldoutError, match="already decided"):
+        study.open_forward("f", _fwd_builder(), now=later)
+    final = study.finalise()[0]
+    assert final["verdict"] in ("survives", "rejected_forward") and final["m"] == 1
+    assert final["verdict"] == ("survives" if final["q"] <= 0.05 else "rejected_forward")
+
+
+def test_ledger_refuses_train_row_for_forward_test(env):
+    _root, _git, ledger, _reg, _ = env
+    _registered(env, _fwd_spec())
+    with pytest.raises(LedgerError, match="no train split"):
+        ledger.append({"kind": "train", "test_id": "r9.f", "passed": True})
+
+
 # ---------------------------------------------------------------- ledger
 def test_ledger_detects_an_edited_row(env):
     study = _registered(env)

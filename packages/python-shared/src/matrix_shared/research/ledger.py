@@ -13,6 +13,10 @@ Row kinds, per test (`test_id` = "<round>.<cell>"):
   holdout       -> decision holdout result                        (once; after holdout_open)
                    or record_only=true for a train failure        (once; never enters q)
   final         -> verdict, q and m at that moment                (once)
+
+A forward test (register row with `forward_n`) has no train row: its single
+holdout_open / holdout pair is the decision, written once forward_n episodes
+have closed (protocol.Study.open_forward).
   note          -> free text (e.g. an adversarial check that revised a result)
 
 Tamper evidence: each row carries `prev`, the sha256 of the previous line, and
@@ -152,8 +156,13 @@ class Ledger:
         if st is None:
             raise LedgerError(f"{tid} is not registered")
         if kind == "train":
+            if st.register.get("forward_n"):
+                raise LedgerError(f"{tid}: a forward test has no train split")
             if st.train is not None:
                 raise LedgerError(f"{tid}: train verdict already recorded (frozen)")
+        elif kind == "holdout_open" and st.register.get("forward_n"):
+            if st.holdout_open is not None:
+                raise LedgerError(f"{tid}: forward test already opened once")
         elif kind == "holdout_open":
             if st.train is None:
                 raise LedgerError(f"{tid}: no holdout before the train decision is recorded")
@@ -172,6 +181,11 @@ class Ledger:
                     raise LedgerError(f"{tid}: holdout result without holdout_open")
                 if st.holdout is not None:
                     raise LedgerError(f"{tid}: holdout already decided")
+        elif kind == "final" and st.register.get("forward_n"):
+            if st.holdout is None:
+                raise LedgerError(f"{tid}: no final verdict before the forward decision")
+            if st.final is not None:
+                raise LedgerError(f"{tid}: final verdict already written")
         elif kind == "final":
             if st.train is None:
                 raise LedgerError(f"{tid}: no final verdict before train")
