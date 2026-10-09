@@ -89,3 +89,8 @@ for why the books showed 0 % wins.
 pays: on the 25-coin universe it nets −39 bps per episode (t_wk −114 train, −137 holdout), and widening it
 to the carry watchlist trades only rejected cells. At v4's 0.08 % floor it was silent on the traded set.
 To revive: set the row back to `active` — but only with new evidence.
+
+**2026-10-09 — `xexch_funding_arb` retired** (v1 config `e902c1ac…` → `retired`; its one open position closes at
+horizon as usual). Its own book: −25.6 bps per episode (t = −3.56, n = 40). Round 3b ("Round 3b: perp-perp hedge")
+showed the perp-perp hedge loses in every cell (−35 to −48 bps train, t ≤ −8.7): the squeeze is on every venue, so the
+hedge leg pays ~86 % of the funding the long leg collects. Revive only with new evidence.
