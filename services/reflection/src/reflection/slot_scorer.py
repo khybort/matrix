@@ -18,6 +18,7 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from matrix_shared import shared_session_scope
 from matrix_shared.stats import wilson_lower
+from matrix_shared.trading import CARRY_SIDES
 from matrix_shared.models import MutationProposal, PaperPosition, Prediction, StrategyConfig, Wallet
 from matrix_shared.models.slot_config import StrategySlotConfig
 
@@ -53,6 +54,10 @@ FILLS_PER_BET_LOOKBACK = 4
 # promoted. Slots granted to a strategy that emits nothing are dead capacity,
 # and its trailing record is frozen, so the same "promote" fired every pass.
 EMISSION_WINDOW_H = float(os.environ.get("MATRIX_SLOT_EMISSION_WINDOW_H", "24"))
+# Sides that open a position. The carry family trades too: counting only
+# long/short made every carry strategy "not running", so its slots could fall
+# but never rise, whatever its record.
+TRADED_SIDES: tuple[str, ...] = ("long", "short", *sorted(CARRY_SIDES))
 
 
 @dataclass(slots=True)
@@ -114,7 +119,7 @@ async def _is_live(session, strategy_id: str, asset_class: str) -> bool:
         .where(Prediction.strategy_id == strategy_id)
         .where(Prediction.asset_class == asset_class)
         .where(Prediction.generated_at >= since)
-        .where(Prediction.side.in_(("long", "short")))
+        .where(Prediction.side.in_(TRADED_SIDES))
         .limit(1)
     )).first() is not None
 

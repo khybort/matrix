@@ -356,3 +356,25 @@ async def test_unknown_edge_holds_an_allocation_instead_of_clawing_it_back(monke
     monkeypatch.setattr(E, "strategy_edge", no_answer)
     v = await _ss._entry_edge_verdict("anything", "crypto")
     assert v == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_carry_strategy_with_recent_signal_is_live():
+    """A carry strategy emits inverse_carry / delta_neutral / xexch_carry, never
+    long/short. `_is_live` used to look only for long/short signals, so every
+    carry strategy read as "not running" and its slots could never be promoted."""
+    from matrix_shared.models import StrategyConfig
+
+    sid = f"TEST_carry_live_{uuid.uuid4().hex[:6]}"
+    now = datetime.now(timezone.utc)
+    async with shared_session_scope() as session:
+        session.add(StrategyConfig(strategy_id=sid, asset_class=ASSET, version=1, status="active", params={}))
+        session.add(Prediction(
+            id=uuid.uuid4(), strategy_id=sid, strategy_version=1, asset_class=ASSET,
+            symbol="TESTCARRYUSDT", exchange="bybit", side="inverse_carry",
+            confidence=Decimal("0.5"), horizon_seconds=172800, entry_price_ref=Decimal("1"),
+            generated_at=now - timedelta(minutes=5), close_by=now + timedelta(hours=47),
+            status="pending",
+        ))
+    async with shared_session_scope() as session:
+        assert await _ss._is_live(session, sid, ASSET) is True
