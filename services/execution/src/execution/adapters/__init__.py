@@ -16,5 +16,6 @@ from __future__ import annotations
 
 from execution.adapters.bist import BistLiveExecutor
 from execution.adapters.crypto import CryptoLiveExecutor
+from execution.adapters.us import UsAlpacaExecutor
 
-__all__ = ["BistLiveExecutor", "CryptoLiveExecutor"]
+__all__ = ["BistLiveExecutor", "CryptoLiveExecutor", "UsAlpacaExecutor"]

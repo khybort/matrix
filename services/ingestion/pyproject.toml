@@ -30,6 +30,8 @@ matrix-ingest = "ingestion.main:main"
 matrix-news = "ingestion.news:main"
 matrix-bist-bars = "ingestion.bist.bars:main"
 matrix-bist-symbols = "ingestion.bist.symbols:main"
+matrix-us-bars = "ingestion.us.bars:main"
+matrix-us-symbols = "ingestion.us.symbols:main"
 
 [tool.ruff]
 line-length = 100

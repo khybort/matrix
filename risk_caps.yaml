@@ -26,3 +26,13 @@ bist:
   max_concurrent_positions: 3
   daily_loss_circuit_pct: 0.08   # T+2 settlement → wider DD tolerance
   equity_trailing_stop_pct: 0.15
+
+us:
+  # US equities: short-allowed, T+1, deep liquidity + 6.5h session. Positions
+  # can be re-entered intraday and hedged with shorts, so DD tolerance sits
+  # between crypto and BIST; more concurrent slots than BIST (broader universe).
+  starting_capital_usd: 10000
+  max_position_pct: 0.03
+  max_concurrent_positions: 5
+  daily_loss_circuit_pct: 0.06
+  equity_trailing_stop_pct: 0.12

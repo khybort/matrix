@@ -1,7 +1,7 @@
 // /api/markets — registered market adapters + live stats per market.
 //
-// Phase G surface. The registry itself is mirrored here statically (two
-// markets, two rows — anything more dynamic would need a Python-side
+// Phase G surface. The registry itself is mirrored here statically (one
+// row per market — anything more dynamic would need a Python-side
 // JSON endpoint we don't have yet). The interesting work is the live
 // stats join: universe size, recent prediction count, recent paper
 // position count, latest equity per market.
@@ -18,11 +18,11 @@ type MarketDef = {
   sessionDescription: string;
   allowsShort: boolean;
   settlementDays: number;
-  liveExecutor: "wired" | "phase1-stub";
+  liveExecutor: "wired" | "phase1-stub" | "alpaca";
 };
 
-// Mirrors matrix_shared.markets.{crypto,bist} — kept short on purpose;
-// when a third market lands the per-market description here gets a
+// Mirrors matrix_shared.markets.{crypto,bist,us} — kept short on purpose;
+// when a new market lands the per-market description here gets a
 // matching row.
 const MARKETS: MarketDef[] = [
   {
@@ -40,6 +40,14 @@ const MARKETS: MarketDef[] = [
     allowsShort: false,
     settlementDays: 2,
     liveExecutor: "phase1-stub",
+  },
+  {
+    name: "us",
+    assetClass: "us",
+    sessionDescription: "Mon-Fri 09:30-16:00 America/New_York (NYSE holidays)",
+    allowsShort: true,
+    settlementDays: 1,
+    liveExecutor: "alpaca",
   },
 ];
 
@@ -75,6 +83,11 @@ export async function GET() {
         if (m.assetClass === "bist") {
           const [r] = await sqlLocal`
             SELECT COUNT(*) AS n FROM bist_symbols WHERE active = TRUE
+          `;
+          universeSize = Number(r?.n ?? 0);
+        } else if (m.assetClass === "us") {
+          const [r] = await sqlLocal`
+            SELECT COUNT(*) AS n FROM us_symbols WHERE active = TRUE
           `;
           universeSize = Number(r?.n ?? 0);
         } else if (m.assetClass === "crypto") {

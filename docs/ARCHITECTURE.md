@@ -120,7 +120,9 @@ This loop is what makes the system *appreciate* in value rather than stay static
 
 ## Markets (pluggable via `MarketAdapter`)
 
-Every pipeline stage routes through `matrix_shared.markets.MarketAdapter` so adding a new market is one adapter + one registry entry, not a refactor of every service. As of Phase G two adapters are registered: `CryptoMarket` (Bybit/Binance perpetuals, 24/7, T+0, shortable) and `BistMarket` (Borsa Istanbul equities, Mon–Fri 10:00–18:00 Europe/Istanbul, T+2, long-only, paper-only until Phase 1).
+Every pipeline stage routes through `matrix_shared.markets.MarketAdapter` so adding a new market is one adapter + one registry entry, not a refactor of every service. Three adapters are registered: `CryptoMarket` (Bybit/Binance perpetuals, 24/7, T+0, shortable), `BistMarket` (Borsa Istanbul equities, Mon–Fri 10:00–18:00 Europe/Istanbul, T+2, long-only, paper-only until Phase 1), and `UsMarket` (NYSE/Nasdaq cash equities, Mon–Fri 09:30–16:00 America/New_York with the full US holiday calendar + 13:00 early-close half-days, **T+1**, **shortable**). US data comes from yfinance bars (no API key); its universe is discovered from the S&P 500 + Nasdaq-100 constituents into `us_symbols`. US execution is a real `UsAlpacaExecutor` (Alpaca REST) that degrades to `health()=False` without `ALPACA_*` creds and stays paper-only until a `paper_trade_certificate` + `LIVE_EXECUTION_ENABLED` open the gate.
+
+Bar-based markets (`bist`, `us`) price paper positions off `market_bars` 1m closes; crypto prices off tick prints. The paper engine derives short-eligibility per trade from `MarketAdapter.allows_short()` (no hardcoded per-market branches).
 
 **Surface every adapter implements:**
 - `universe(db)` — active tradable symbols

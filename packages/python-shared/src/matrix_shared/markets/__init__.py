@@ -19,6 +19,7 @@ from .registry import all_markets, get_market, infer_market, register
 # disambiguation in infer_market (which raises on ambiguity anyway).
 from . import bist as _bist  # noqa: F401
 from . import crypto as _crypto  # noqa: F401
+from . import us as _us  # noqa: F401
 
 __all__ = [
     "ExecutionAdapter",

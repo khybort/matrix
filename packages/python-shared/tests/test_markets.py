@@ -21,16 +21,18 @@ from matrix_shared.markets import (
 )
 from matrix_shared.markets.bist import BistMarket
 from matrix_shared.markets.crypto import CryptoMarket
+from matrix_shared.markets.us import UsMarket
 
 TR = ZoneInfo("Europe/Istanbul")
+NY = ZoneInfo("America/New_York")
 
 
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
-def test_registry_has_crypto_and_bist() -> None:
+def test_registry_has_all_markets() -> None:
     names = {m.name for m in all_markets()}
-    assert names == {"crypto", "bist"}
+    assert names == {"crypto", "bist", "us"}
 
 
 def test_get_market_returns_singleton() -> None:
@@ -86,6 +88,53 @@ def test_bist_cache_overrides_regex() -> None:
     assert not get_market("bist").claims_symbol("GARAN")
     # Reset for downstream tests.
     BistMarket._known_symbols = None
+
+
+def test_us_claims_only_cached_symbols() -> None:
+    # Cache-only routing: cold cache claims nothing (avoids BIST-regex
+    # ambiguity); primed cache claims exactly the listed tickers.
+    UsMarket._known_symbols = None
+    us = get_market("us")
+    assert not us.claims_symbol("AAPL")
+    UsMarket.set_known_symbols({"AAPL", "MSFT"})
+    assert us.claims_symbol("AAPL")
+    assert us.claims_symbol("msft")  # case-insensitive
+    assert not us.claims_symbol("NVDA")
+    # Reset for downstream tests.
+    UsMarket._known_symbols = None
+
+
+# ---------------------------------------------------------------------------
+# US trading rules + session
+# ---------------------------------------------------------------------------
+def test_us_allows_short_true() -> None:
+    assert get_market("us").allows_short() is True
+
+
+def test_us_settlement_t_plus_one() -> None:
+    assert get_market("us").settlement_days() == 1
+
+
+def test_us_session_weekday_open() -> None:
+    # Monday 2026-01-05, 12:00 ET — inside 09:30–16:00.
+    weekday_noon = datetime(2026, 1, 5, 12, 0, 0, tzinfo=NY)
+    assert get_market("us").is_session_open(weekday_noon) is True
+
+
+def test_us_session_before_open() -> None:
+    early = datetime(2026, 1, 5, 9, 0, 0, tzinfo=NY)
+    assert get_market("us").is_session_open(early) is False
+
+
+def test_us_session_weekend_closed() -> None:
+    sat = datetime(2026, 1, 3, 12, 0, 0, tzinfo=NY)
+    assert get_market("us").is_session_open(sat) is False
+
+
+def test_us_session_holiday_closed() -> None:
+    # MLK Jr. Day 2026 = 3rd Monday of January = Jan 19.
+    mlk_noon = datetime(2026, 1, 19, 12, 0, 0, tzinfo=NY)
+    assert get_market("us").is_session_open(mlk_noon) is False
 
 
 # ---------------------------------------------------------------------------

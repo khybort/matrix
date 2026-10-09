@@ -589,6 +589,27 @@
   ile 0 gün / −$50'e gevşetilmiş, dev_agent `merged` sadece DB etiketi (0 gerçek merge), `notify`
   çalışmıyor, retention/backup yok (local DB 97 GB). Sıralı P0-P5 planı ve ilk 10 iş dokümanda.
 
+## 2026-06-02 — US equities market (asset_class='us')
+
+- New `MarketAdapter`: `matrix_shared/markets/us.py` (`UsMarket`, name/asset_class
+  `us`). NYSE calendar in `matrix_shared/markets/us_calendar.py` — 09:30–16:00
+  America/New_York, US holidays (Good Friday + floating Mondays) + 13:00
+  early-close half-days. **Shorting allowed**, **T+1** settlement.
+- New `us_symbols` table + `UsSymbol` model. Universe discovered from S&P 500 +
+  Nasdaq-100 (Wikipedia, no API key). `market_bars` gains a `market_bars_us`
+  partition (migration 0038). Default US wallet + US `matrix_agent` config seeded.
+- Ingestion: `ingestion/us/{discover,bars,symbols}.py` + `adapters/us.py`
+  (yfinance, no ticker suffix). Entry points `matrix-us-bars` / `matrix-us-symbols`.
+- Execution: `execution/adapters/us.py` `UsAlpacaExecutor` — real Alpaca adapter
+  that degrades to `health()=False` without `ALPACA_*` creds; live still gated by
+  `paper_trade_certificate`.
+- Strategy: `strategy/modules/us/` (gap_fade, intraday_reversion, volume_breakout,
+  momentum, news_event) — long **and** short; registered in `STRATEGIES_BY_MARKET`.
+- Cross-cutting: `backtest/paper_trade.py` short-allow + bar-price selection are now
+  market-aware (`get_market(asset_class).allows_short()` + bar-based classes),
+  replacing the hardcoded crypto/bist special-cases.
+- Web: `/api/markets` gains a `us` row.
+
 ## 2026-06-02 — Graph hot-path vs backfill priority (speed-first)
 
 - Ingest: agent only for docs within `GRAPH_HOT_WINDOW_HOURS` (48h); older backlog

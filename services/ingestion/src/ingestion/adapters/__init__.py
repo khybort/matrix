@@ -10,5 +10,6 @@ from __future__ import annotations
 
 from ingestion.adapters.bist import BistIngestor
 from ingestion.adapters.crypto import CryptoIngestor
+from ingestion.adapters.us import UsIngestor
 
-__all__ = ["BistIngestor", "CryptoIngestor"]
+__all__ = ["BistIngestor", "CryptoIngestor", "UsIngestor"]

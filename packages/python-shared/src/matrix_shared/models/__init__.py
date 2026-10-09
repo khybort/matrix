@@ -15,6 +15,7 @@ from matrix_shared.models.raw_document import RawDocument
 from matrix_shared.models.slot_config import StrategySlotConfig
 from matrix_shared.models.strategy_config import MutationProposal, StrategyConfig
 from matrix_shared.models.tradable_symbol import TradableSymbol
+from matrix_shared.models.us_symbol import UsSymbol
 from matrix_shared.models.wallet import Wallet, WalletSnapshot
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "StrategySlotConfig",
     "TickerSnapshot",
     "TradableSymbol",
+    "UsSymbol",
     "Wallet",
     "WalletSnapshot",
 ]
