@@ -56,6 +56,9 @@ async def measure_spreads(hours: float = 6.0) -> dict[str, float]:
         "    / nullif(((asks->0->>0)::numeric + (bids->0->>0)::numeric)/2, 0) * 10000) AS med "
         "FROM market_orderbook_snapshots "
         "WHERE snapshot_ts > now() - make_interval(secs => :secs) "
+        # perp books only: the carry watchlist's spot legs share the perp's
+        # symbol (exchange bybit-spot / binance-spot) and have their own spread
+        "  AND exchange = 'bybit' "
         "  AND json_array_length(bids) > 0 AND json_array_length(asks) > 0 "
         "GROUP BY 1 HAVING count(*) >= :min_n"
     )

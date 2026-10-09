@@ -27,6 +27,7 @@ from matrix_shared.markets import IngestorAdapter
 from matrix_shared.markets.crypto import (
     CARRY_WATCHLIST_ASSET_CLASS,
     crypto_ingest_universe_async,
+    crypto_universe_async,
 )
 
 from ingestion import carry_watchlist
@@ -47,17 +48,20 @@ async def _default_symbols() -> list[str]:
     return await crypto_ingest_universe_async()
 
 
-async def spot_legs() -> dict[str, list[str]]:
-    """venue -> spot pairs of the active carry watchlist."""
+async def spot_legs(core: set[str]) -> dict[str, list[str]]:
+    """venue -> spot pairs of the active carry watchlist. A perp that joined
+    the traded universe since the last refresh is skipped: spot ticker rows
+    share the perp's symbol, and readers that take the newest ticker of a
+    symbol without an exchange filter (agent features) must not see them."""
     async with shared_session_scope() as db:
         rows = (await db.execute(text(
-            "SELECT components_json->>'spot_venue', components_json->>'spot_symbol' "
+            "SELECT symbol, components_json->>'spot_venue', components_json->>'spot_symbol' "
             "FROM tradable_symbols WHERE asset_class = :ac AND active "
             "AND components_json->>'spot_symbol' IS NOT NULL ORDER BY rank NULLS LAST"),
             {"ac": CARRY_WATCHLIST_ASSET_CLASS})).all()
     out: dict[str, list[str]] = {"bybit": [], "binance": []}
-    for venue, pair in rows:
-        if venue in out and pair not in out[venue]:
+    for perp, venue, pair in rows:
+        if perp not in core and venue in out and pair not in out[venue]:
             out[venue].append(pair)
     return out
 
@@ -109,7 +113,7 @@ class CryptoIngestor(IngestorAdapter):
         async def _reconcile() -> None:
             await perp.set_symbols(await _default_symbols())
             if carry and bybit_spot is not None and binance_spot is not None:
-                legs = await spot_legs()
+                legs = await spot_legs(set(await crypto_universe_async()))
                 await bybit_spot.set_symbols(legs["bybit"])
                 await binance_spot.set_symbols(legs["binance"])
 
