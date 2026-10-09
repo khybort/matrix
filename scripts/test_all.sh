@@ -27,7 +27,7 @@ cd "$ROOT"
 DC=(docker compose -f docker-compose.yml -f docker-compose.dev.yml)
 PYTEST_ARGS=${PYTEST_ARGS:-}
 
-ALL_SUITES=(shared agent agent_lessons backtest brain dev_agent director execution
+ALL_SUITES=(names shared agent agent_lessons backtest brain dev_agent director execution
             graph ingestion labs notify reflection strategy synthesis bulletin web)
 
 # service dir -> compose service that owns the image
@@ -98,6 +98,16 @@ run_py_suite() {
   return $rc
 }
 
+# Undefined names in production code: a refactor that drops a binding still
+# passes any suite that doesn't reach that line (labs emit_signals, 2026-10-09).
+run_names() {
+  "${DC[@]}" run --rm --no-deps -T -v "$ROOT:/repo:ro" -w /repo --entrypoint uv backtest \
+    run --no-sync --with pyflakes python -m pyflakes packages/python-shared/src services/*/src \
+    | grep -E "undefined name|redefinition of unused" | grep -v "undefined name '__" > /tmp/names.$$ || true
+  if [ -s /tmp/names.$$ ]; then cat /tmp/names.$$; echo "names: $(wc -l < /tmp/names.$$) error(s)"; rm -f /tmp/names.$$; return 1; fi
+  rm -f /tmp/names.$$; echo "names: 0 errors passed"
+}
+
 run_web() {
   docker image inspect matrix-web:local >/dev/null 2>&1 || { echo "SKIP (no matrix-web image)"; return 77; }
   # The dev-stage image carries node_modules; the dev overlay mounts src + tsconfig.
@@ -117,6 +127,7 @@ for s in "${suites[@]}"; do
   echo "================ $s ================"
   log="$LOG_DIR/$s.log"
   if [ "$s" = web ]; then run_web 2>&1 | tee "$log"; rc=${PIPESTATUS[0]}
+  elif [ "$s" = names ]; then run_names 2>&1 | tee "$log"; rc=${PIPESTATUS[0]}
   else run_py_suite "$s" 2>&1 | tee "$log"; rc=${PIPESTATUS[0]}; fi
   tail_line=$(grep -E "(passed|failed|error|no tests ran)" "$log" | tail -1)
   case $rc in

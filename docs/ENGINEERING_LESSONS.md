@@ -478,3 +478,9 @@
   builder; never hand-roll splits, t or BHY again. When extracting a protocol, prove it by replaying a finished round
   exactly (round 3: 36 rows, n exact, net ±0.05 bps), and give every guard a test that tries to break it.
   Source: `docs/wiki/research-harness.md`.
+
+- **2026-10-09 — Bir refactor bağlamayı düşürdü, testler yeşil kaldı.** `6530b87` tazelik sorgusunu
+  `fresh_symbols()`'a taşırken `emit_signals`'ın yerel `now`'ını sildi; `close_at` hâlâ kullanıyordu. Sinyal
+  üreten her labs tick'i 17:05'ten itibaren `NameError` attı, hiçbir test o DB yolunu koşmadığı için 41/41 geçti.
+  Kural: `make test-all` artık ilk suite olarak `names` koşar (pyflakes: undefined name / redefinition). Bir
+  dosyayı bölen her değişiklikten sonra o gate kırmızıysa commit yok.
