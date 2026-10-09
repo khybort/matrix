@@ -27,6 +27,7 @@ working".
 - [strategy-scoreboard](strategy-scoreboard.md) — every emitting strategy on clean signals, net of cost (2026-10-09: none pays)
 - [signal-research-2026-10](signal-research-2026-10.md) — 38 pre-registered hypotheses on 1y Bybit history; only hedged negative-funding carry survives the holdout
 - [market-cadence-study](market-cadence-study.md) — BIST/US vs their cost (pause both) and 15 s vs 60 s vs 300 s decisions (speed earns nothing)
+- [maker-execution](maker-execution.md) — resting entries/exits on Bybit ticks: +4…+6 bps per episode, but no strategy turns net positive (2026-10-09)
 - [llm-value-audit](llm-value-audit.md) — does the LLM or the knowledge graph earn its rate budget? (2026-10-09: neither; agent rule-only, graph heuristic)
 - [methods](methods.md) — quant methodology applied, with why
 - [research-backlog](research-backlog.md) — methods not yet applied, each with its decisive test

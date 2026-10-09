@@ -23,6 +23,10 @@ The gains elsewhere are irrelevant while those strategies hold no capital.
 being charged taker fees by our cost model; correcting that accounting would
 change the EV floor for every strategy. Do not implement as a PnL improvement —
 implement it only alongside actually placing limit take-profits.
+**Re-tested on ticks 2026-10-09** ([[maker-execution]]), with both legs and
+the whole book. Resting for 5–15 s and then crossing is worth +4…+6 bps per
+episode, and maker exits add +1.7. No strategy turns net positive, so nothing
+was built. Long waits fill the losers in every arm, not only momentum.
 
 ## 2. Strategies that beat neither null — demoted, deliberately not deleted
 Eleven of thirteen beat neither null and two pick direction worse than a coin

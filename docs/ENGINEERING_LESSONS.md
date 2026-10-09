@@ -251,3 +251,17 @@
   stratejide maliyet düz `round_trip_cost_pct` ile değil, açılış ve kapanışta defter yürüyüşüyle yazılır (medyan 64 bps vs
   varsayılan 30). Eksik hedge bacağı = açılmayan pozisyon, asla sahte hedge. Kaynak: `docs/wiki/signal-research-2026-10.md`
   "Shadow-book hardening".
+
+- **2026-10-09 — Maker (post-only) çalışması: dolumu sonraki printler belirler; "skip" varyantı değer değil, az işlemdir.**
+  Bar tabanlı `execution_study` bir alışı, barın dibi son fiyata *değince* dolmuş sayıyordu (kuyruk yok, o fiyat ask
+  olabilir), girişi dolum barının kapanışından yapıyordu ve maker ücreti 1 bps'ti (Bybit VIP0 gerçeği 2 bps, rebate yok).
+  Bybit tick'leriyle (yalnız trade-through veya kuyruk hacmi doldurur) yeniden ölçünce: dolan maker girişi aynı sinyalde
+  ~10,6 bps kazandırıyor, ama ters seçim ve dolmayanın kovalanması bunun yarısını geri alıyor. Net kazanç epizod başına
+  +4…+6 bps (gün-kümeli t ≥ 10). Hiçbir strateji pozitife dönmüyor. Train'i hep "5 sn bekle, dolmazsa atla" kazandı;
+  sebep, negatif bir sinyalde az doldurmanın daha az kaybettirmesi. Kurallar: (1) Pasif emir simülasyonunda dolum kararı
+  yerleştirmeden *sonraki* printlerden gelir, asla yerleştirme anındaki kotasyondan veya bar dokunuşundan değil. (2) Bir
+  yürütme politikasının değeri, *aynı epizodlarda* taker'a karşı eşli farkla raporlanır; mutlak net ayrıca raporlanır ama
+  "skip" kolunun avantajı politika değeri sayılmaz. (3) Ücret sabitini borsa tablosundan doğrula, tarihini yaz. (4) Yerel
+  `market_trades` 7 gün tutulur (kesintiden sonra 10-09 12:01'den başlıyordu). Geçmiş tick'ler için
+  `public.bybit.com/trading/<SYM>/<SYM><YYYY-MM-DD>.csv.gz` kullan. RPI printlerini at; delist olmuş sembolde dosya 404
+  HTML'i döner, indirince `gzip -t` ile doğrula. Kaynak: `docs/wiki/maker-execution.md`.
