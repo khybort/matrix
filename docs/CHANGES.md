@@ -586,6 +586,20 @@
   ile 0 gün / −$50'e gevşetilmiş, dev_agent `merged` sadece DB etiketi (0 gerçek merge), `notify`
   çalışmıyor, retention/backup yok (local DB 97 GB). Sıralı P0-P5 planı ve ilk 10 iş dokümanda.
 
+## 2026-06-02 — Graph hot-path vs backfill priority (speed-first)
+
+- Ingest: agent only for docs within `GRAPH_HOT_WINDOW_HOURS` (48h); older backlog
+  drains via heuristic (8-wide) without blocking Cursor. Backfill upgrades heuristic→agent
+  only when idle (`GRAPH_BACKFILL_ONLY_IDLE`, unprocessed=0, no active tick).
+- Agent features: prefer precomputed `graph_signals` over AGE cypher when signal is rich.
+
+## 2026-06-02 — Graph backfill agent upgrade fix
+
+- Backfill bypasses stale-doc heuristic shortcut (`force_agent=True`) so queued rows
+  actually re-run agent extraction.
+- Cooldown (`graph_backfill_at`) applied after failed attempts only, not before.
+- Upgrade metric counts `graph_source=agent`; batch 6 / interval 120s / concurrency 2.
+
 ## 2026-06-02 — Graph backlog drain fix
 
 - `graph/main.py`: `_fetch_batch` SQL-filters unprocessed docs (was top-N newest then

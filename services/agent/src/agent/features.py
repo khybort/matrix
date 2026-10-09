@@ -201,23 +201,25 @@ async def extract_symbol_features(symbol: str, asset_class: str = "crypto") -> S
             )).all()
         apply_bar_features(f, [(r[0], Decimal(r[1]), Decimal(r[2] or 0)) for r in bars])
 
-    # Graph-derived features.
-    # Federated read: local AGE first, then supplement with the freshest
-    # remote aggregate any PC published into graph_signals. Local data
-    # always wins when both are non-empty; remote fills coverage gaps.
+    # Graph-derived features — prefer precomputed graph_signals (fast path) so
+    # the 15s agent loop is not blocked on AGE cypher. Fall back to local AGE
+    # when federation cache is thin or missing.
     try:
         asset = base_token_to_asset(symbol)
-        local_ctx: GraphAssetContext = await get_asset_context(asset, window_hours=24.0)
-        ctx = local_ctx
-        # Only consult remote if local is thin — saves a Neon round-trip when
-        # we already have rich coverage.
+        remote_ctx = await get_remote_graph_signal(asset, max_age_minutes=30.0)
         if (
-            local_ctx.direct_mention_count < 3
-            or len(local_ctx.related_companies) < 2
+            remote_ctx is not None
+            and remote_ctx.direct_mention_count >= 3
+            and len(remote_ctx.related_companies) >= 1
         ):
-            remote_ctx = await get_remote_graph_signal(asset, max_age_minutes=30.0)
-            if remote_ctx is not None:
-                ctx = merge_contexts(local_ctx, remote_ctx)
+            ctx = remote_ctx
+        else:
+            local_ctx: GraphAssetContext = await get_asset_context(asset, window_hours=24.0)
+            ctx = (
+                merge_contexts(local_ctx, remote_ctx)
+                if remote_ctx is not None
+                else local_ctx
+            )
         f.graph_mention_count = ctx.direct_mention_count
         f.graph_recency_weight = ctx.recency_weighted_count
         f.graph_direct_polarity = ctx.direct_polarity

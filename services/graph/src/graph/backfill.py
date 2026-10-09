@@ -39,9 +39,9 @@ class BackfillConfig:
     def from_env(cls) -> BackfillConfig:
         return cls(
             enabled=_env_bool("GRAPH_BACKFILL_ENABLED", True),
-            batch=max(1, int(os.environ.get("GRAPH_BACKFILL_BATCH", "2"))),
-            interval_s=float(os.environ.get("GRAPH_BACKFILL_INTERVAL_S", "300")),
-            cooldown_s=float(os.environ.get("GRAPH_BACKFILL_COOLDOWN_S", "3600")),
+            batch=max(1, int(os.environ.get("GRAPH_BACKFILL_BATCH", "6"))),
+            interval_s=float(os.environ.get("GRAPH_BACKFILL_INTERVAL_S", "120")),
+            cooldown_s=float(os.environ.get("GRAPH_BACKFILL_COOLDOWN_S", "1800")),
         )
 
 
@@ -132,19 +132,28 @@ async def backfill_tick(process_doc, *, limit: int | None = None) -> int:
 
     import asyncio
 
-    for doc in batch:
-        await touch_attempt(doc.id)
-
-    # Agent path is expensive — one doc at a time, separate from new-doc concurrency.
-    sem = asyncio.Semaphore(1)
+    concurrency = max(1, int(os.environ.get("GRAPH_BACKFILL_CONCURRENCY", "1")))
+    sem = asyncio.Semaphore(concurrency)
     results = await asyncio.gather(
         *[process_doc(doc, sem) for doc in batch],
         return_exceptions=True,
     )
-    ok = sum(1 for r in results if r is True)
+
+    upgraded = 0
+    for doc, result in zip(batch, results, strict=True):
+        if isinstance(result, Exception):
+            logger.warning(f"backfill failed for {doc.id}: {result}")
+            await touch_attempt(doc.id)
+            continue
+        if result == "agent":
+            upgraded += 1
+        elif result is not None:
+            # Processed but still heuristic/llm — short cooldown before retry.
+            await touch_attempt(doc.id)
+
     pending = await count_pending()
     logger.info(
-        f"backfill tick: upgraded {ok}/{len(batch)} docs "
+        f"backfill tick: upgraded {upgraded}/{len(batch)} docs "
         f"({pending} heuristic rows still queued)"
     )
-    return ok
+    return upgraded

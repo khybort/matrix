@@ -44,12 +44,19 @@ from graph.publish import DEFAULT_ASSETS, publish_all
 
 DEFAULT_INTERVAL_S = float(os.environ.get("GRAPH_INTERVAL_S", "20"))
 DEFAULT_BATCH = max(1, int(os.environ.get("GRAPH_BATCH", "50")))
-DEFAULT_CONCURRENCY = max(1, int(os.environ.get("GRAPH_CONCURRENCY", "6")))
+DEFAULT_AGENT_CONCURRENCY = max(1, int(os.environ.get("GRAPH_AGENT_CONCURRENCY", "2")))
+DEFAULT_HEURISTIC_CONCURRENCY = max(
+    1, int(os.environ.get("GRAPH_HEURISTIC_CONCURRENCY", "8"))
+)
+DEFAULT_HOT_WINDOW_H = float(os.environ.get("GRAPH_HOT_WINDOW_HOURS", "48"))
 DEFAULT_STALE_HEURISTIC_DAYS = float(os.environ.get("GRAPH_STALE_HEURISTIC_DAYS", "7"))
 DEFAULT_BACKFILL_PAUSE_UNPROCESSED = max(
-    0, int(os.environ.get("GRAPH_BACKFILL_PAUSE_UNPROCESSED", "20"))
+    0, int(os.environ.get("GRAPH_BACKFILL_PAUSE_UNPROCESSED", "5"))
 )
-DEFAULT_PUBLISH_INTERVAL_S = 120.0  # publish federated aggregates twice / extract loop
+DEFAULT_BACKFILL_ONLY_IDLE = os.environ.get("GRAPH_BACKFILL_ONLY_IDLE", "true").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+DEFAULT_PUBLISH_INTERVAL_S = 120.0  # precomputed aggregates for agent read path
 PROCESSED_KEY = "graph_processed_at"
 
 
@@ -111,6 +118,21 @@ def _doc_is_stale(doc: RawDocument) -> bool:
     return pub < datetime.now(UTC) - timedelta(days=DEFAULT_STALE_HEURISTIC_DAYS)
 
 
+def _doc_is_hot(doc: RawDocument) -> bool:
+    """Recent news — worth agent extraction on the ingest hot path."""
+    if doc.published_at is None:
+        return False
+    pub = doc.published_at
+    if pub.tzinfo is None:
+        pub = pub.replace(tzinfo=UTC)
+    return pub >= datetime.now(UTC) - timedelta(hours=DEFAULT_HOT_WINDOW_H)
+
+
+def _ingest_use_agent(doc: RawDocument) -> bool:
+    """Hot-path ingest: agent only for fresh docs; never block on old backlog."""
+    return _doc_is_hot(doc) and not _doc_is_stale(doc)
+
+
 async def _mark_processed(
     doc_id, source: str, *, chunk_count: int = 1
 ) -> None:
@@ -133,22 +155,33 @@ def _chunk_count(body: str | None) -> int:
     return max(1, len(plan_semantic_chunks(text, cfg)))
 
 
-async def _process_doc(doc, sem: asyncio.Semaphore) -> bool:
+async def _process_doc(
+    doc,
+    sem: asyncio.Semaphore,
+    *,
+    force_agent: bool = False,
+    heuristic_only: bool = False,
+) -> str | None:
+    """Process one document. Returns extraction source on success, None on failure."""
     async with sem:
         chunks = _chunk_count(doc.body)
         try:
-            if _doc_is_stale(doc):
+            if heuristic_only:
                 entities = heuristic_extract(doc.title, doc.body)
                 relations = []
                 source = "heuristic"
-            else:
+            elif force_agent or _ingest_use_agent(doc):
                 entities, relations, source = await extract_entities(doc.title, doc.body)
+            else:
+                entities = heuristic_extract(doc.title, doc.body)
+                relations = []
+                source = "heuristic"
         except Exception as e:
             logger.exception(f"extract failed for {doc.id}: {e}")
-            return False
+            return None
         if not entities:
             await _mark_processed(doc.id, source, chunk_count=chunks)
-            return False
+            return None
         try:
             await upsert_document(
                 doc.id,
@@ -174,13 +207,13 @@ async def _process_doc(doc, sem: asyncio.Semaphore) -> bool:
                     logger.warning(f"relation upsert failed: {e}")
         except Exception as e:
             logger.exception(f"graph upsert failed for {doc.id}: {e}")
-            return False
+            return None
         await _mark_processed(doc.id, source, chunk_count=chunks)
         logger.info(
             f"processed {doc.id} ({doc.source}): {len(entities)} entities, "
             f"{len(relations)} relations (src={source}, chunks={chunks})"
         )
-        return True
+        return source
 
 
 async def _tick(limit: int, reprocess: bool) -> int:
@@ -191,13 +224,24 @@ async def _tick(limit: int, reprocess: bool) -> int:
             logger.warning(f"tick: {backlog} unprocessed but fetch returned 0")
         return 0
     if backlog:
-        logger.info(f"tick: backlog {backlog}, batch {len(batch)}")
+        n_hot = sum(1 for d in batch if _ingest_use_agent(d))
+        logger.info(
+            f"tick: backlog {backlog}, batch {len(batch)} "
+            f"(hot/agent={n_hot}, fast/heuristic={len(batch) - n_hot})"
+        )
 
-    sem = asyncio.Semaphore(DEFAULT_CONCURRENCY)
+    agent_sem = asyncio.Semaphore(DEFAULT_AGENT_CONCURRENCY)
+    heuristic_sem = asyncio.Semaphore(DEFAULT_HEURISTIC_CONCURRENCY)
+
+    async def _run_one(doc: RawDocument) -> str | None:
+        if reprocess or _ingest_use_agent(doc):
+            return await _process_doc(doc, agent_sem, force_agent=reprocess)
+        return await _process_doc(doc, heuristic_sem, heuristic_only=True)
+
     results = await asyncio.gather(
-        *[_process_doc(doc, sem) for doc in batch], return_exceptions=True
+        *[_run_one(doc) for doc in batch], return_exceptions=True
     )
-    ok = sum(1 for r in results if r is True)
+    ok = sum(1 for r in results if isinstance(r, str))
     if ok:
         remaining = await count_unprocessed()
         logger.info(f"tick: processed {ok}/{len(batch)} ({remaining} left)")
@@ -212,7 +256,6 @@ async def run(
 ) -> None:
     stop = asyncio.Event()
     backfill_cfg = BackfillConfig.from_env()
-    last_backfill = 0.0
 
     def _handle_signal(*_: object) -> None:
         logger.info("shutdown signal received")
@@ -231,8 +274,12 @@ async def run(
         )
 
     last_publish = 0.0
+    # Defer first backfill until one interval elapses — ingest gets first shot.
+    last_backfill = asyncio.get_event_loop().time()
+
     while not stop.is_set():
         loop_started = asyncio.get_event_loop().time()
+        n = 0
         try:
             n = await _tick(limit, reprocess=False)
         except Exception as e:
@@ -248,9 +295,17 @@ async def run(
                     f"backfill paused: {unprocessed} unprocessed "
                     f"(resumes at <= {DEFAULT_BACKFILL_PAUSE_UNPROCESSED})"
                 )
+            elif DEFAULT_BACKFILL_ONLY_IDLE and (n > 0 or unprocessed > 0):
+                logger.debug(
+                    "backfill paused: ingest active "
+                    f"(tick={n}, unprocessed={unprocessed})"
+                )
             else:
                 try:
-                    await backfill_tick(_process_doc)
+                    async def _backfill_process(doc, sem: asyncio.Semaphore) -> str | None:
+                        return await _process_doc(doc, sem, force_agent=True)
+
+                    await backfill_tick(_backfill_process)
                     last_backfill = loop_started
                 except Exception as e:
                     logger.exception(f"backfill tick failed: {e}")
@@ -323,15 +378,21 @@ def main() -> None:
 
     if args.backfill_once:
         async def _bf():
-            n = await backfill_tick(_process_doc, limit=args.backfill_limit)
-            logger.info(f"backfill-once: upgraded {n} document(s)")
+            async def _backfill_process(doc, sem: asyncio.Semaphore) -> str | None:
+                return await _process_doc(doc, sem, force_agent=True)
+
+            n = await backfill_tick(_backfill_process, limit=args.backfill_limit)
+            logger.info(f"backfill-once: upgraded {n} document(s) to agent source")
         asyncio.run(_bf())
         return
 
     logger.info(
         f"graph start: limit={args.limit} interval={args.interval}s "
-        f"concurrency={DEFAULT_CONCURRENCY} once={args.once} reprocess={args.reprocess} "
-        f"publish_interval={args.publish_interval}s assets={args.assets}"
+        f"agent_concurrency={DEFAULT_AGENT_CONCURRENCY} "
+        f"heuristic_concurrency={DEFAULT_HEURISTIC_CONCURRENCY} "
+        f"hot_window_h={DEFAULT_HOT_WINDOW_H} once={args.once} "
+        f"reprocess={args.reprocess} publish_interval={args.publish_interval}s "
+        f"assets={args.assets}"
     )
     if args.once:
         asyncio.run(_tick(args.limit, args.reprocess))
