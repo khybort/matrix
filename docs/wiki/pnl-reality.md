@@ -1,6 +1,6 @@
 ---
 title: PnL reality — why it loses money
-updated: 2026-09-20
+updated: 2026-10-09
 sources: ["db: outcomes ⋈ predictions, 30d window to 2026-09-19", "packages/python-shared/src/matrix_shared/trading.py", "db: wallets"]
 status: current
 ---
@@ -40,15 +40,21 @@ The honest state of the only thing that matters. Measured, not modelled.
   (crypto taker 5.5 + slippage 2, per side; `trading.execution_cost_bps`).
   Gross drift on those trades is ≈ 0: the system is paying the spread to learn
   nothing.
-- **Part of the loss was self-inflicted, and it is now fixed.** Measured
-  2026-09-20 ([[edge-study]]): `momentum_xs`'s *signals* beat random entry by
-  +36.0 bps (t=6.04, n=799) while its *fills* came in at −35.8 bps, because the
-  average fill landed 53 % into the horizon. Across the book fills were
-  20–53 % late. The freshness gate in [[paper-engine]] closes that gap; whether
-  it turns into profit is the open test.
+- **~~Part of the loss was self-inflicted~~ — withdrawn 2026-10-09.** The
+  2026-09-20 claim that `momentum_xs`'s *signals* beat random entry by +36.0
+  bps (t=6.04, n=799) while its fills lost −35.8 was pseudo-replication: 87 %
+  of those rows were one three-hour burst re-emitting the same ten bets
+  ([[edge-study]]). Counted once per bet, with no look-ahead and no scoring
+  across bar gaps, the signals measure **−23.2 bps vs random entry (t=−2.05,
+  277 episodes from 2 188 rows, 30 d to 2026-10-09)**. The fills lost because
+  the signal had nothing to give, not because they were late. Fills *were*
+  20–53 % late across the book and the freshness gate in [[paper-engine]]
+  still fixes that, but it was not hiding an edge.
 - **`grid`, `dca` and `funding_reversion` still have no signal** (−0.7, −2.7,
   +3.0 bps vs random) and produce most of the volume — the cost engine.
-- **Therefore: with one exception, no strategy in the book has demonstrated edge after costs.**
+- **Therefore: no strategy in the book has demonstrated edge after costs** (2026-10-09:
+  on the corrected study none clears BHY at m=14; the best is `funding_reversion`
+  +3.5 bps vs random time, t=1.34, against a ~15 bps round trip).
   The system is not losing because of a leak or a mis-parameterisation; it is
   losing because its signals are, so far, indistinguishable from noise once
   costs are charged. G3 in [[purpose-and-goals]] is far away.

@@ -189,3 +189,14 @@
   uzak, sinyal anı fiyatı değil. Ve hızı tartışmadan önce `created_at − ts` ile verinin gecikmesine bak: BIST yfinance
   barları **~15 dk** geç yazılıyor (12:17 barı 12:32:37'de) — 15 s'lik döngü 900 s'lik veriyle karar veriyordu.
   Kaynak: `docs/wiki/market-cadence-study.md`.
+
+- **2026-10-09 — Sözde-tekrar tek modülde kalmaz; bar boşluğu da sahte edge üretir.** `one_per_episode` yalnız edge study'ye
+  girmişti; barrier/horizon/execution/meta çalışmaları, sertifika, efficacy ve slot scorer hâlâ satır sayıyordu
+  (funding_reversion 3 101 fill = 473 bahis; meta-label matrix_agent/crypto için +107 bps "lift" üretti, bölümle AUC 0.52).
+  Kural: "örnek" tanımı tek yerde (`edge_study.episode_groups`), her tüketici onu çağırır; yeni bir istatistik yazarken
+  `grep _load_candidates\|outcomes` ile tüm tüketicileri tara. İkinci tuzak: `entry_index` son kapanmış barı alıyordu ama
+  barın **yaşına** bakmıyordu — seride delik varsa giriş saatler öncesine düşüp ufuk deliğin üstünden geçiyordu
+  (bist_volume_breakout +104 bps t=16.7 → −10.7). Bar tabanlı her simülasyonda giriş tazeliği + pencere bitişikliği şart
+  (`MAX_ENTRY_AGE`, `MAX_BAR_GAP`). Üçüncü: tek-strateji koşusu m=1 ile düzeltiliyordu (BHY = çıplak p<0.05, DSR deflate
+  edilmiyordu) — aile boyutu koşunun kapsamından değil kitaptan gelir. Ölçüm biriminin değiştiği bir ön-kayıt "taşınmaz"
+  kuralını çiğnemeden geçersizdir: `superseded` işaretle, sil değil.
