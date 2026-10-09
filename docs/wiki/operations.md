@@ -223,6 +223,20 @@ positive quote (the stressed fallback was not applied); a zero charge on a
 zero entry quote, or on a `series` close whose recorded hourly mean is zero,
 is the venue's price and is not broken (2026-10-09).
 
+**Executable episodes only (2026-10-09).** A position whose open the live
+executor would have aborted (`predictions.context.exec_precheck.status =
+would_abort`, from the shared `carry_executor.precheck_open`) is left out of
+every statistic, the verdict, the band comparison and `revisit`; the report
+carries `would_abort` (episodes) and `would_abort_closed`. Signals paper did not
+open for the same reason (`exec_precheck.status = skipped`, no position) are
+`refused`, broken down by failing check. Digest line part, always present:
+`executable only: 1 would-abort ep excluded, 3 executor refused (books 1,
+borrow_drift 2)`. The carry evidence (`edge_study.carry_edge_rows`) drops the
+same positions before `confirmed` (`n_would_abort`). Tag past entries with
+`docker compose exec backtest uv run python -m backtest.carry_precheck_replay
+--since <iso> [--tag] [--now]` (as of each open, on the recorded books and
+quotes; `--now` for contrast only).
+
 Two pre-registered A/B splits ride on the same closed episodes (added 2026-10-09):
 `by_borrow_source` (n, mean net per `context.borrow_source`: series / mixed /
 stressed_entry, `unknown` for closes before the recorder; re-emissions that

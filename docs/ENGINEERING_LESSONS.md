@@ -570,3 +570,14 @@
   and Kelly branches (a later branch would re-widen it). The equity choice makes the paper leg never exceed the executor's
   and equal it to the cent; the test pins `paper leg == CarryExecutor._wallet_leg_cap`. A new sizing branch for carries
   must sit above that clamp.
+- **2026-10-09 — Paper must refuse what live would refuse, through the same function, on the inputs live would have.**
+  The carry executor's pre-trade checks (books, borrow-quote drift, quota, margin) were not run in paper, so the shadow
+  book could count episodes live could never enter. Copying the logic into paper would drift; both now call
+  `carry_executor.precheck_open`, and paper feeds it the executor's inputs, not its own (the executor reads DB books
+  <= 60 s; paper's REST-fallback book does not count). Private inputs (account margin) are `unknown` on both sides and
+  never block. A parity test feeds both the same inputs and requires the same decision, reason and check statuses.
+- **2026-10-09 — Judge an entry check as of the entry, never from a later re-run.** "The executor would abort KAIA"
+  came from a dry-run four hours after the open: the borrow quote had risen ×1.96 since the signal. At the open the
+  quote was the one the signal priced 4 s earlier (×1.00). Tagging the position un-executable on that would drop an
+  episode on post-entry information, and since a rising borrow is a cost, bias the evidence up. Replays take every input
+  as of the decision time (`db_book(..., at=)`, `db_borrow_quote(..., at=)`); a post-entry move is a hold cost.

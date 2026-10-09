@@ -554,7 +554,8 @@ _CARRY_FILLS_SQL = (
     "       p.context->>'borrow_rate_hourly' AS borrow_rate_hourly, "
     "       p.context->>'borrow_charged_usd' AS borrow_charged_usd, "
     "       p.context->'book_close'->>'total_bps' AS book_close_bps, "
-    "       coalesce(p.context->>'is_shadow','false') = 'true' AS is_shadow "
+    "       coalesce(p.context->>'is_shadow','false') = 'true' AS is_shadow, "
+    "       p.context->'exec_precheck'->>'status' AS exec_precheck "
     "FROM paper_positions pp JOIN predictions p ON p.id = pp.prediction_id "
     "WHERE p.side = ANY(:carry) "
     "  AND p.generated_at >= now() - make_interval(secs => :secs) "
@@ -613,8 +614,12 @@ def carry_edge_rows(fills: list[dict]) -> tuple[list[dict], dict[tuple[str, str]
     episodes are not evidence yet (`n_open`). The t is clustered by the UTC day
     the episode opened (`t_day`); with fewer than CARRY_MIN_DAYS clusters `t`
     is 0 and p is 1.
+
+    Executable episodes only: a position the live executor would have aborted
+    at open (`exec_precheck = would_abort`) cannot confirm a strategy whose
+    capital goes through that executor (`n_would_abort`).
     """
-    from matrix_shared.shadow_tracker import clustered_t, decompose
+    from matrix_shared.shadow_tracker import clustered_t, decompose, executable
 
     by_key: dict[tuple[str, str], list[dict]] = {}
     for r in fills:
@@ -631,7 +636,7 @@ def carry_edge_rows(fills: list[dict]) -> tuple[list[dict], dict[tuple[str, str]
         # shadow wallet (neg_funding_carry) is judged on that.
         champion = [r for r in rs if not r.get("is_shadow")]
         arm = "champion" if champion else "shadow"
-        rs = champion or rs
+        rs, aborted = executable(champion or rs)
         eps = decompose(rs, components=())
         closed = [e for e in eps if e.closed and e.notional_usd]
         net = [float(e.net_bps) for e in closed]
@@ -660,6 +665,7 @@ def carry_edge_rows(fills: list[dict]) -> tuple[list[dict], dict[tuple[str, str]
             "n": n,
             "n_raw": len(rs),
             "n_open": len(eps) - len(closed),
+            "n_would_abort": len(aborted),
             "n_unscorable": 0,
             "n_days": n_days,
             "unit": SAMPLE_UNIT,

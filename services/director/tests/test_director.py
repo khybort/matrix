@@ -168,7 +168,8 @@ def test_render_brief_has_one_shadow_line_per_tracked_strategy():
     lines = [ln for ln in brief.splitlines() if ln.startswith("shadow ")]
     assert lines == [
         "shadow neg_funding_carry/crypto: COLLECTING — 0/20 closed ep, 0 open · band +100…+300, "
-        "floor +30 · last open never · 2 qualifying settlements/72h"
+        "floor +30 · executable only: 0 would-abort ep excluded, 0 executor refused · last open never · "
+        "2 qualifying settlements/72h"
     ]
     assert "shadow" in SystemDigest(now=now, shadow=[rep]).as_dict()
     assert "shadow tracker: no strategy has a registered band" in render_brief(SystemDigest(now=now, shadow=[]))

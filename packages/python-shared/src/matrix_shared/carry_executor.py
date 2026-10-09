@@ -144,17 +144,18 @@ def _parse_levels(raw) -> Levels:
 _DB_EXCHANGE = {("bybit", "linear"): "bybit", ("bybit", "spot"): "bybit-spot", ("binance", "spot"): "binance-spot"}
 
 
-async def db_book(venue: str, category: str, symbol: str) -> Book | None:
-    """Latest ingested book <= BOOK_MAX_AGE_S old. DB only: the paper loop
-    calls the mirror inline and must never wait on REST."""
+async def db_book(venue: str, category: str, symbol: str, at: datetime | None = None) -> Book | None:
+    """Latest ingested book <= BOOK_MAX_AGE_S old (as of `at`, default now).
+    DB only: the paper loop calls the mirror inline and must never wait on REST."""
     ex = _DB_EXCHANGE.get((venue, category))
     if ex is None:
         return None
+    t = at or datetime.now(UTC)
     async with local_session_scope() as session:
         row = (await session.execute(
             text("SELECT bids, asks FROM market_orderbook_snapshots WHERE exchange = :ex AND symbol = :s "
-                 "AND snapshot_ts > :since ORDER BY snapshot_ts DESC LIMIT 1"),
-            {"ex": ex, "s": symbol, "since": datetime.now(UTC) - timedelta(seconds=BOOK_MAX_AGE_S)},
+                 "AND snapshot_ts > :since AND snapshot_ts <= :at ORDER BY snapshot_ts DESC LIMIT 1"),
+            {"ex": ex, "s": symbol, "since": t - timedelta(seconds=BOOK_MAX_AGE_S), "at": t},
         )).first()
     if row is None:
         return None
@@ -203,14 +204,15 @@ class BorrowQuote:
     ts: datetime | None = None
 
 
-async def db_borrow_quote(venue: str, coin: str) -> BorrowQuote | None:
-    """Latest recorded public quote (ingestion.borrow_recorder, margin_borrow_rates)."""
+async def db_borrow_quote(venue: str, coin: str, at: datetime | None = None) -> BorrowQuote | None:
+    """Latest recorded public quote (ingestion.borrow_recorder, margin_borrow_rates),
+    as of `at` (default now)."""
     try:
         async with local_session_scope() as session:
             row = (await session.execute(
                 text("SELECT hourly_rate, max_borrow, borrowable, ts FROM margin_borrow_rates "
-                     "WHERE venue = :v AND coin = :c ORDER BY ts DESC LIMIT 1"),
-                {"v": venue, "c": coin},
+                     "WHERE venue = :v AND coin = :c AND ts <= :at ORDER BY ts DESC LIMIT 1"),
+                {"v": venue, "c": coin, "at": at or datetime.now(UTC)},
             )).first()
     except Exception as e:  # noqa: BLE001 — no table on a fresh node = no quote
         logger.debug(f"carry_exec: borrow quote {venue}/{coin} unavailable: {e}")
@@ -218,6 +220,97 @@ async def db_borrow_quote(venue: str, coin: str) -> BorrowQuote | None:
     if row is None:
         return None
     return BorrowQuote(Decimal(row[0]), Decimal(row[1]) if row[1] is not None else None, bool(row[2]), row[3])
+
+
+# ------------------------------------------------------------ pre-trade checks
+#
+# One implementation for the executor and the paper engine: paper must skip
+# exactly what live would skip on public information, or the shadow book
+# counts episodes live could never have entered (2026-10-09). Each check is
+# pass | fail | unknown | skipped; `unknown` (private data, or no recorded
+# quote) never blocks.
+
+PASS, FAIL, UNKNOWN, SKIPPED = "pass", "fail", "unknown", "skipped"
+PRECHECKS = ("books", "borrow_drift", "borrow_quota", "margin")
+PRECHECK_SKIPPED = "skipped"  # paper did not open: the executor would have aborted
+PRECHECK_WOULD_ABORT = "would_abort"  # paper opened, the executor would have aborted
+
+CheckFn = Callable[[Any, Decimal], Awaitable[tuple[bool | None, str]]]
+
+
+@dataclass(slots=True)
+class Precheck:
+    checks: dict[str, str] = field(default_factory=lambda: dict.fromkeys(PRECHECKS, SKIPPED))
+    detail: dict[str, str] = field(default_factory=dict)
+    reason: str | None = None  # the executor's abort reason for the first failing check
+
+    @property
+    def ok(self) -> bool:
+        return self.reason is None
+
+    def _set(self, name: str, ok: bool | None, why: str, abort: str) -> bool:
+        self.checks[name] = PASS if ok else (UNKNOWN if ok is None else FAIL)
+        self.detail[name] = why
+        if ok is False:
+            self.reason = abort
+        return ok is not False
+
+    def record(self, status: str | None = None, **extra: Any) -> dict:
+        return {"status": status or (PASS if self.ok else PRECHECK_WOULD_ABORT), "reason": self.reason,
+                "failed": next((k for k, v in self.checks.items() if v == FAIL), None),
+                "checks": dict(self.checks), "detail": dict(self.detail),
+                "ts": datetime.now(UTC).isoformat(), **extra}
+
+
+def quota_from_quote(quote: BorrowQuote | None, it: CarryIntent, qty: Decimal) -> tuple[bool | None, str]:
+    """Borrow quota on public data: the recorded `borrowable` flag and
+    `max_borrow` (borrow_recorder). The account's own quota is private."""
+    if quote is None:
+        return None, "no recorded quote"
+    if not quote.borrowable:
+        return False, f"{it.coin} not borrowable on {it.spot_venue}"
+    if quote.max_borrow is None:
+        return None, "max_borrow not recorded"
+    if quote.max_borrow < qty:
+        return False, f"max_borrow {dstr(quote.max_borrow)} < {dstr(qty)}"
+    return True, f"max_borrow {dstr(quote.max_borrow)} >= {dstr(qty)}"
+
+
+async def precheck_open(
+    it: CarryIntent,
+    *,
+    books: dict[str, Book | None],
+    quote: BorrowQuote | None,
+    qty: Decimal | None,
+    need_usd: Decimal | None,
+    quota: CheckFn | None = None,
+    margin: CheckFn | None = None,
+) -> Precheck:
+    """The executor's pre-trade checks, in its order, stopping at the first
+    failure: both books present; the borrow quote now <= BORROW_DRIFT_MAX x
+    the quote the signal priced; the borrow quota (`quota`, default the public
+    proxy `quota_from_quote`); available margin >= `need_usd` (`margin`,
+    default unknown: account data is private)."""
+    pc = Precheck()
+    missing = [k for k in ("perp", "spot") if books.get(k) is None]
+    if not pc._set("books", not missing, f"no {'/'.join(missing)} book" if missing else "both books",
+                   f"no {missing[0]} book" if missing else ""):
+        return pc
+    if quote is None or not it.borrow_hourly:
+        pc._set("borrow_drift", None, "no recorded quote" if quote is None else "signal priced no quote", "")
+    else:
+        ratio = quote.hourly / it.borrow_hourly
+        ok = ratio <= Decimal(str(BORROW_DRIFT_MAX))
+        if not pc._set("borrow_drift", ok, f"x{float(ratio):.2f} ({dstr(it.borrow_hourly)} -> {dstr(quote.hourly)}/h)",
+                       f"borrow quote moved {dstr(it.borrow_hourly)} -> {dstr(quote.hourly)}/h "
+                       f"(> x{BORROW_DRIFT_MAX:g})"):
+            return pc
+    ok, why = await quota(it, qty) if quota else quota_from_quote(quote, it, qty)
+    if not pc._set("borrow_quota", ok, why, f"borrow rejected: {why}"):
+        return pc
+    ok, why = await margin(it, need_usd) if margin else (None, "account data is private")
+    pc._set("margin", ok, why, f"margin insufficient: {why}")
+    return pc
 
 
 # --------------------------------------------------------------- persistence
@@ -326,6 +419,7 @@ class CarryResult:
     would_kill: bool = False
     sent: int = 0
     step: Decimal = Decimal("0")  # common qty step of both legs
+    precheck: dict = field(default_factory=dict)
 
     def finish(self, status: str, reason: str | None = None) -> CarryResult:
         self.status = status
@@ -352,6 +446,7 @@ class CarryResult:
                       "avg": f.avg_price, "mid": f.mid, "slip_bps": f.slippage_bps, "status": f.status,
                       "link": f.link_id} for f in self.legs],
             "gap_bps": self.gap_bps(), "reconcile": self.reconcile, "would_kill": self.would_kill,
+            "precheck": self.precheck,
             "n_requests": len(self.requests), "sent": self.sent, "ts": datetime.now(UTC).isoformat(),
         }
 
@@ -455,20 +550,13 @@ class _SimOps(_Ops):
         self.books, self.quote = books, quote
         self.used: dict[tuple[str, str], float] = {}
 
-    async def borrow_check(self, it: CarryIntent, qty: Decimal) -> tuple[bool, str]:
+    async def borrow_check(self, it: CarryIntent, qty: Decimal) -> tuple[bool | None, str]:
         self.borrow_check_req(it)
-        q = self.quote
-        if q is None:
-            return True, "no recorded quote (not simulated)"
-        if not q.borrowable:
-            return False, f"{it.coin} not borrowable on {it.spot_venue}"
-        if q.max_borrow is not None and q.max_borrow < qty:
-            return False, f"max_borrow {dstr(q.max_borrow)} < {dstr(qty)}"
-        return True, f"max_borrow {dstr(q.max_borrow) if q.max_borrow is not None else '?'}"
+        return quota_from_quote(self.quote, it, qty)
 
-    async def margin_check(self, it: CarryIntent, need_usd: Decimal) -> tuple[bool, str]:
+    async def margin_check(self, it: CarryIntent, need_usd: Decimal) -> tuple[bool | None, str]:
         self._req(self.bybit.wallet())
-        return True, "not simulated (no account in dry-run)"
+        return None, "account data is private"
 
     async def borrow(self, it: CarryIntent, qty: Decimal) -> tuple[bool, str]:
         self.borrow_req(it, qty)
@@ -722,8 +810,10 @@ class CarryExecutor:
         res.alerts.append(msg)
         await self.alert("warning", f"{res.action} {res.intent.perp_symbol} pred={res.intent.prediction_id}: {msg}")
 
-    async def _prepare(self, it: CarryIntent, res: CarryResult):
-        """Refusals that need no market data, then books and specs."""
+    async def _prepare(self, it: CarryIntent, res: CarryResult, *, allow_missing_books: bool = False):
+        """Refusals that need no market data, then books and specs. An open
+        passes a missing book through to `precheck_open` (one decision for
+        paper and the executor)."""
         if self.mode == TESTNET and not TESTNET_MARGIN.get(it.spot_venue, False):
             return res.finish("refused", f"{it.spot_venue} margin has no testnet; dry-run only")
         if self.mode == TESTNET and _KILL["halted"] and res.action == "open":
@@ -734,6 +824,8 @@ class CarryExecutor:
         perp_b = await self.books("bybit", "linear", it.perp_symbol)
         spot_b = await self.books(it.spot_venue, "spot", it.spot_symbol)
         if perp_b is None or spot_b is None:
+            if allow_missing_books:
+                return built, {"perp": perp_b, "spot": spot_b}, FALLBACK_SPEC, FALLBACK_SPEC
             return res.finish("aborted", f"no {'perp' if perp_b is None else 'spot'} book")
         ps = await self.specs("bybit", "linear", it.perp_symbol)
         ss = await self.specs(it.spot_venue, "spot", it.spot_symbol)
@@ -803,10 +895,14 @@ class CarryExecutor:
             if prior.get("status") == "in_flight":
                 await self._warn(res, "open record in_flight from an interrupted run: reconcile on the venue by hand")
             return res.finish("refused", f"already executed ({prior.get('status')}); idempotent no-op")
-        prep = await self._prepare(it, res)
+        prep = await self._prepare(it, res, allow_missing_books=True)
         if isinstance(prep, CarryResult):
             return prep
         built, books, ps, ss = prep
+        if books["perp"] is None or books["spot"] is None:
+            pc = await precheck_open(it, books=books, quote=None, qty=None, need_usd=None)
+            res.precheck = pc.record()
+            return res.finish("aborted", pc.reason)
         if not self._opens.try_take():
             return res.finish("refused", f"carry open rate limit ({MAX_OPENS_PER_HOUR:g}/h)")
         ticks = {"linear": ps.tick, "spot": ss.tick}
@@ -832,17 +928,13 @@ class CarryExecutor:
             return res.finish("refused", "live gate refused")
 
         quote = await self.borrow_quote(it.spot_venue, it.coin)
-        if quote and it.borrow_hourly and quote.hourly > it.borrow_hourly * Decimal(str(BORROW_DRIFT_MAX)):
-            return res.finish("aborted", f"borrow quote moved {dstr(it.borrow_hourly)} -> {dstr(quote.hourly)}/h "
-                                         f"(> x{BORROW_DRIFT_MAX:g})")
         ops = self._ops(built, res, books, quote)
-
-        ok, why = await ops.borrow_check(it, qty)
-        if not ok:
-            return res.finish("aborted", f"borrow rejected: {why}")
-        ok, why = await ops.margin_check(it, Decimal(str(res.combined_usd)) * MARGIN_BUFFER)
-        if not ok:
-            return res.finish("aborted", f"margin insufficient: {why}")
+        pc = await precheck_open(it, books=books, quote=quote, qty=qty,
+                                 need_usd=Decimal(str(res.combined_usd)) * MARGIN_BUFFER,
+                                 quota=ops.borrow_check, margin=ops.margin_check)
+        res.precheck = pc.record()
+        if not pc.ok:
+            return res.finish("aborted", pc.reason)
 
         if self.mode != DRY_RUN:
             # A crash from here on leaves venue state the next run must not
@@ -995,6 +1087,24 @@ def _intent(pred, wallet_id: UUID, notional: Decimal, paper: dict | None, confir
         borrow_hourly=Decimal(str(ctx["borrow_rate_hourly"])) if ctx.get("borrow_rate_hourly") else None,
         paper=paper,
     )
+
+
+async def paper_open_precheck(prediction, *, wallet_id: UUID, leg_usd: Decimal,
+                              at: datetime | None = None) -> Precheck:
+    """The executor's pre-trade checks for a paper carry open of `leg_usd` a
+    leg, on what live would see from public data: the executor's own DB books
+    (<= BOOK_MAX_AGE_S) and the recorded borrow quote, as of `at` (default
+    now; a past `at` replays an entry). Quota uses the public proxy, margin is
+    unknown. Same function, same order, same abort reasons as `open`."""
+    it = _intent(prediction, wallet_id, leg_usd, None, False)
+    books = {"perp": await db_book("bybit", "linear", it.perp_symbol, at),
+             "spot": await db_book(it.spot_venue, "spot", it.spot_symbol, at)}
+    quote = qty = None
+    if books["perp"] is not None and books["spot"] is not None:
+        quote = await db_borrow_quote(it.spot_venue, it.coin, at)
+        qty = Decimal(str(leg_usd)) / Decimal(str(books["perp"].mid))
+    return await precheck_open(it, books=books, quote=quote, qty=qty,
+                               need_usd=2 * Decimal(str(leg_usd)) * MARGIN_BUFFER)
 
 
 async def mirror_paper_open(*, prediction, wallet_id: UUID, notional: Decimal, book_open: dict | None) -> CarryResult | None:

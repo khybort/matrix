@@ -1,7 +1,7 @@
 ---
 title: Carry execution (two-leg path)
 updated: 2026-10-09
-sources: [packages/python-shared/src/matrix_shared/{carry_executor,carry_venues,live_gate}.py, services/execution/tests/test_carry_executor.py, services/backtest/src/backtest/paper_trade.py]
+sources: [packages/python-shared/src/matrix_shared/{carry_executor,carry_venues,live_gate}.py, services/execution/tests/{test_carry_executor,test_carry_precheck_parity}.py, services/backtest/src/backtest/{paper_trade,carry_precheck_replay}.py]
 status: current
 ---
 
@@ -44,7 +44,12 @@ dry-run, and there is no mainnet mode. See [[risk-gates]] and
   borrow quota (Bybit `/v5/order/spot-borrow-check` `maxTradeQty`, Binance
   `/sapi/v1/margin/maxBorrowable`); available margin ≥ combined notional ×
   `MATRIX_CARRY_EXEC_MARGIN_BUFFER` (1.0, unlevered); then the borrow itself.
-  If the borrow is rejected, the carry aborts before any trade.
+  If the borrow is rejected, the carry aborts before any trade. The four
+  checks (books, borrow drift, quota, margin) are **one function,
+  `precheck_open`**, which paper calls too (next section). Each check is
+  `pass | fail | unknown | skipped`; `unknown` (no recorded quote, private
+  data) never blocks. The result is recorded on every open
+  (`carry_exec_<mode>.open.precheck`).
 - **Caps on a two-leg position.** The gate is called with the **combined
   notional of both legs**. The per-leg size is the minimum of: the paper size,
   $500 until `confirmed`, and `max_position_pct × equity / 2`. Since
@@ -87,6 +92,46 @@ rarely overlap the illiquid coins the strategy trades. The mocked-venue tests
 cover the logic. Before the first testnet run, verify the
 `/v5/account/borrow` and `/v5/account/repay` body fields
 (`coin`, `amount`) against the current docs.
+
+## Paper applies the executor's pre-trade checks (2026-10-09)
+A dry-run on the open KAIA carry aborted (borrow quote ×1.96 since the
+signal) while paper had opened it, so the shadow book could count episodes
+live could never enter. Now `paper_trade` calls
+`carry_executor.paper_open_precheck` before every book-priced carry open: the
+same `precheck_open`, in the same order, with the same abort reasons, on what
+live would see from public data — the executor's own DB books (≤ 60 s; paper's
+REST fallback does not count), the recorded quote in `margin_borrow_rates`,
+quota from its recorded `max_borrow` / `borrowable`, margin `unknown`
+(account data is private; the dry-run executor says the same, so the two
+agree). The parity test (`services/execution/tests/test_carry_precheck_parity.py`,
+13 cases) feeds both the same inputs and requires the same decision, reason
+and per-check statuses.
+
+- **Fail** → no position; `predictions.context.exec_precheck =
+  {status: skipped, failed, reason, checks, detail, ts}`, written when the
+  decision changes. The signal is re-checked every tick until it opens or
+  expires (live would retry the same way).
+- **Pass** → the position's context carries `exec_precheck.status = pass`.
+- **Mirror aborts seconds later** → the position stays; `exec_precheck.status
+  = would_abort`, `source: mirror`.
+- The shadow tracker and the carry evidence (`edge_study.carry_edge_rows`)
+  drop `would_abort` positions ([[operations]] "Shadow tracker").
+- Not covered: the venue's lot/notional minimums (REST specs; paper legs are
+  ≈ $98, far above them) and the live gate itself (the certificate is the
+  point of the shadow).
+
+**Replay at entry vs now (2026-10-09 18:15 UTC,
+`python -m backtest.carry_precheck_replay --since 2026-10-09 --now`):** all
+3 NFC entries today pass **at their open time**; 0 refused, 0 tagged. KAIA
+opened 14:04 UTC, before the borrow recorder's first row (16:16), so drift and
+quota were `unknown` — but the signal priced the venue's public table 4 s
+before the open, so live would have seen the same quote (×1.00). Its quote
+then rose to ×1.50 at 17:02 and ×1.96 at 18:07: checked **now**, KAIA aborts
+(`borrow_drift`), SKL and API3 pass. The finding's abort was a re-run hours
+after entry. A quote that moves after entry is a hold cost (charged at close
+from the series), not an entry the executor would have refused; tagging KAIA
+on it would drop an episode on post-entry information and bias the evidence
+up.
 
 ## Hard limits in code
 - `HttpTransport` sends only to hosts in `carry_venues.SENDABLE_HOSTS` =

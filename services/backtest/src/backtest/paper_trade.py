@@ -13,6 +13,7 @@ See docs/TRADING.md for the risk rules this engine enforces.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 
@@ -32,7 +33,14 @@ from matrix_shared.allocation import (
     load_pair_edges,
     risk_multiplier,
 )
-from matrix_shared.carry_executor import mirror_paper_close, mirror_paper_open
+from matrix_shared.carry_executor import (
+    PRECHECK_SKIPPED,
+    PRECHECK_WOULD_ABORT,
+    Precheck,
+    mirror_paper_close,
+    mirror_paper_open,
+    paper_open_precheck,
+)
 from matrix_shared.exchange_shadow import shadow_close_position, shadow_open_position
 
 from backtest import carry_books
@@ -1264,7 +1272,7 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
         # A carry that names its spot leg is priced and sized on both books
         # (backtest.carry_books): no spot book means no hedge, so no position;
         # size only ever goes down from what the risk gate allowed.
-        book_open = None
+        book_open = exec_precheck = None
         if _is_carry(p.side) and carry_books.is_book_priced(p.context):
             perp_b, spot_b = await carry_books.legs(p.symbol, p.context)
             if perp_b is None or spot_b is None:
@@ -1282,10 +1290,20 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
                 continue
             notional = min(notional, Decimal(str(usd)).quantize(Decimal("0.01"), rounding=ROUND_DOWN))
             book_open["notional_usd"] = float(notional)
+            # Paper skips exactly what the live executor would abort on public
+            # data (the shared carry_executor.precheck_open): an episode live
+            # could never have entered is not shadow evidence. Re-checked every
+            # tick until the signal opens or expires.
+            pc = await paper_open_precheck(p, wallet_id=wallet.id, leg_usd=notional)
+            if not pc.ok:
+                await _note_precheck_skip(p, pc)
+                continue
+            exec_precheck = pc.record()
 
         try:
             booked = await _book_position(
-                p, notional=notional, entry=entry, shadow=shadow, book_open=book_open
+                p, notional=notional, entry=entry, shadow=shadow, book_open=book_open,
+                exec_precheck=exec_precheck,
             )
         except IntegrityError:
             # Another opener (a second engine tick, a test process) filled this
@@ -1320,7 +1338,11 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             # Dry-run the executable two-leg path beside paper (never sends):
             # its simulated fills minus book_open are the slippage gap paper
             # does not see (docs/wiki/carry-execution.md). Never raises.
-            await mirror_paper_open(prediction=p, wallet_id=wallet_id, notional=notional, book_open=book_open)
+            res = await mirror_paper_open(prediction=p, wallet_id=wallet_id, notional=notional, book_open=book_open)
+            # Seconds later the executor's own run can still see a moved
+            # quote: the position stays, tagged out of the shadow evidence.
+            if res is not None and res.precheck.get("status") == PRECHECK_WOULD_ABORT:
+                await set_exec_precheck(p.id, {**res.precheck, "source": "mirror"})
     if ev_floored:
         logger.info(
             f"ev_floor[{asset_class}{'/shadow' if shadow else ''}]: "
@@ -1330,8 +1352,27 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
     return opened
 
 
+async def set_exec_precheck(prediction_id, record: dict) -> None:
+    """`context.exec_precheck` in one jsonb merge (no read-modify-write)."""
+    async with shared_session_scope() as session:
+        await session.execute(
+            text("UPDATE predictions SET context = (COALESCE(context::jsonb, '{}'::jsonb) || "
+                 "jsonb_build_object('exec_precheck', CAST(:rec AS jsonb)))::json WHERE id = :id"),
+            {"rec": json.dumps(record, default=str), "id": prediction_id},
+        )
+
+
+async def _note_precheck_skip(p: Prediction, pc: Precheck) -> None:
+    prev = (p.context or {}).get("exec_precheck") or {}
+    if prev.get("status") == PRECHECK_SKIPPED and prev.get("reason") == pc.reason:
+        return  # unchanged since the last tick: one write per decision
+    logger.info(f"skip {p.id}: {p.symbol} carry — executor would abort: {pc.reason}")
+    await set_exec_precheck(p.id, pc.record(PRECHECK_SKIPPED))
+
+
 async def _book_position(
-    p: Prediction, *, notional: Decimal, entry: Decimal, shadow: bool, book_open: dict | None = None
+    p: Prediction, *, notional: Decimal, entry: Decimal, shadow: bool, book_open: dict | None = None,
+    exec_precheck: dict | None = None,
 ):
     """Debit the wallet and insert the position in one transaction. Returns the
     wallet id, or None when the wallet is missing/tripped/underfunded. Raises
@@ -1381,7 +1422,8 @@ async def _book_position(
             )
             if book_open is not None:
                 pred_db = await session.get(Prediction, p.id)
-                pred_db.context = {**(pred_db.context or {}), "book_open": book_open}
+                pred_db.context = {**(pred_db.context or {}), "book_open": book_open,
+                                   **({"exec_precheck": exec_precheck} if exec_precheck else {})}
             wallet_id = wallet.id
     return wallet_id
 

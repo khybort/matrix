@@ -25,6 +25,7 @@ TEST_SHARED_DSN = os.environ.get(
 os.environ.setdefault("LOCAL_DATABASE_URL", TEST_LOCAL_DSN)
 os.environ.setdefault("SHARED_DATABASE_URL", TEST_SHARED_DSN)
 
+import matrix_shared.carry_executor as CE  # noqa: E402
 from matrix_shared import local_session_scope, shared_session_scope  # noqa: E402
 from matrix_shared.models import MarketTrade, Outcome, PaperPosition, Prediction  # noqa: E402
 from matrix_shared.models.slot_config import StrategySlotConfig  # noqa: E402
@@ -205,6 +206,17 @@ def _legs(monkeypatch, perp, spot):
     async def fake(symbol, context, **_kw):
         return perp, spot
     monkeypatch.setattr(CB, "legs", fake)
+
+    # The executor's pre-trade check (carry_executor.paper_open_precheck)
+    # reads the same books; no recorded borrow quote = unknown, not blocking.
+    async def db_book(venue, category, symbol, at=None):
+        return perp if category == "linear" else spot
+
+    async def no_quote(venue, coin, at=None):
+        return None
+    monkeypatch.setattr(CE, "db_book", db_book)
+    monkeypatch.setattr(CE, "db_borrow_quote", no_quote)
+    monkeypatch.setenv("MATRIX_CARRY_MIRROR", "false")
 
 
 @pytest.mark.asyncio

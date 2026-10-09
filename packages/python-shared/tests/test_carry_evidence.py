@@ -234,3 +234,25 @@ async def test_carry_closes_under_the_old_funding_accounting_are_not_evidence(mo
     monkeypatch.setattr(E, "CARRY_EVIDENCE_SINCE", fix - 40 * h)
     kept = {r["symbol"] for r in await E._load_carry_fills(90, None)}
     assert {"OLDUSDT", "EDGEUSDT"} <= kept and "NFCAUSDT" not in kept
+
+
+def test_would_abort_episodes_never_confirm():
+    """Episodes the live executor would have aborted at open are dropped from
+    the evidence: a strategy whose good episodes were all un-executable has
+    no evidence, and the executable rest is scored alone."""
+    good = _fills(150.0, seed=3)
+    tagged = [{**r, "exec_precheck": "would_abort"} for r in good]
+    (row,), returns = E.carry_edge_rows(tagged)
+    assert row["n"] == 0 and row["n_would_abort"] == len(good)
+    assert returns[("neg_funding_carry", "crypto")] == []
+    E.apply_promotion_bar([row], returns, family=13, registry=Registry())
+    assert row["status"] != "confirmed"
+
+    mixed = _fills(0.0, seed=4) + [{**r, "exec_precheck": "would_abort", "symbol": "W" + r["symbol"]}
+                                    for r in _fills(400.0, seed=5)]
+    (m,), _ = E.carry_edge_rows(mixed)
+    (z,), _ = E.carry_edge_rows(_fills(0.0, seed=4))
+    assert m["n"] == z["n"] == 300 and m["edge_bps"] == z["edge_bps"] and m["n_would_abort"] == 300
+    # a passing or skipped precheck does not drop anything
+    (p,), _ = E.carry_edge_rows([{**r, "exec_precheck": "pass"} for r in good])
+    assert p["n"] == 300 and p["n_would_abort"] == 0

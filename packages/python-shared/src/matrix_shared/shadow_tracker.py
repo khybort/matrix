@@ -40,6 +40,14 @@ Once `revisit_series_episodes` closed episodes are `series`, `revisit` states
 which of the three revisit rules holds and the env change it implies; notify
 sends that once as `review_due`. The tracker never changes the env itself.
 
+Executable episodes only (2026-10-09). A position whose open the live
+executor would have aborted on public data (`context.exec_precheck.status =
+would_abort`, the shared `carry_executor.precheck_open`) is not evidence of
+what live could earn: it is left out of every statistic and the verdict, and
+reported as `would_abort`. Signals the paper engine did not open for the same
+reason (`exec_precheck.status = skipped`, no position) are counted as
+`refused` ("executor refused").
+
 `evaluate` is pure; `collect` does the I/O.
 """
 
@@ -321,16 +329,30 @@ def revisit(closed: list[Episode], band: dict[str, Any]) -> dict[str, Any] | Non
     return out
 
 
+WOULD_ABORT = "would_abort"
+
+
+def executable(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(executable rows, would-abort rows): a row the live executor would not
+    have opened (`exec_precheck = would_abort`) is not evidence."""
+    keep = [r for r in rows if r.get("exec_precheck") != WOULD_ABORT]
+    return keep, [r for r in rows if r.get("exec_precheck") == WOULD_ABORT]
+
+
 def evaluate(
     rows: list[dict],
     band: dict[str, Any],
     *,
     now: datetime,
     qualifying: int | None = None,
+    refused: dict[str, int] | None = None,
     strategy_id: str = "",
     asset_class: str = "",
 ) -> dict[str, Any]:
-    """Pure: the report and verdict for one strategy's filled rows."""
+    """Pure: the report and verdict for one strategy's filled rows, over
+    executable episodes only. `refused`: signals the paper engine skipped
+    because the executor's pre-trade checks would abort ({reason: n})."""
+    rows, aborted = executable(rows)
     eps = decompose(rows, band.get("components") or ())
     closed = [e for e in eps if e.closed]
     net = [e.net_bps for e in closed]
@@ -355,6 +377,10 @@ def evaluate(
         "pnl_usd": sum(e.pnl_usd for e in closed),
         "last_open_age_h": (now - last_open).total_seconds() / 3600 if last_open else None,
         "qualifying": qualifying,
+        "would_abort": len(one_per_episode(sorted(aborted, key=lambda r: r["generated_at"]))) if aborted else 0,
+        "would_abort_closed": sum(1 for r in aborted if r.get("closed_at") is not None),
+        "refused": sum((refused or {}).values()),
+        "refused_by": dict(refused or {}),
         "band": band,
         "reasons": [],
     }
@@ -455,6 +481,12 @@ def format_line(rep: dict[str, Any]) -> str:
             + " series/mixed/stressed" + (f" (+{src['unknown']['n']} unknown)" if "unknown" in src else "")
             + (f", review at {rv['series_n']}/{rv['need']} series" if (rv := rep.get("revisit")) else "")
         )
+    by = rep.get("refused_by") or {}
+    parts.append(
+        f"executable only: {rep.get('would_abort', 0)} would-abort ep excluded, "
+        f"{rep.get('refused', 0)} executor refused"
+        + (" (" + ", ".join(f"{k} {v}" for k, v in sorted(by.items())) + ")" if by else "")
+    )
     parts.append(f"last open {_age(rep['last_open_age_h'])}")
     if rep.get("qualifying") is not None:
         parts.append(f"{rep['qualifying']} qualifying settlements/{b.get('stale_hours', 72)}h")
@@ -536,10 +568,21 @@ _FILLS_SQL = (
     "       p.context->>'borrow_series_mean_hourly' AS borrow_series_mean_hourly, "
     "       p.context->'entry_filter'->>'flat_keep' AS flat_keep, "
     "       p.context->'entry_filter'->>'naive_keep' AS naive_keep, "
-    "       p.context->'entry_filter'->>'decay_keep' AS decay_keep "
+    "       p.context->'entry_filter'->>'decay_keep' AS decay_keep, "
+    "       p.context->'exec_precheck'->>'status' AS exec_precheck "
     "FROM paper_positions pp JOIN predictions p ON p.id = pp.prediction_id "
     "WHERE p.strategy_id = :sid AND p.asset_class = :ac AND p.generated_at >= :since "
     "ORDER BY p.generated_at"
+)
+
+
+# Signals the paper engine did not open because the executor would have aborted.
+_REFUSED_SQL = (
+    "SELECT coalesce(p.context->'exec_precheck'->>'failed', 'unknown') AS check_name, count(*) AS n "
+    "FROM predictions p WHERE p.strategy_id = :sid AND p.asset_class = :ac AND p.generated_at >= :since "
+    "AND p.context->'exec_precheck'->>'status' = 'skipped' "
+    "AND NOT EXISTS (SELECT 1 FROM paper_positions pp WHERE pp.prediction_id = p.id) "
+    "GROUP BY 1"
 )
 
 
@@ -600,10 +643,13 @@ async def collect(now: datetime | None = None) -> list[dict[str, Any]]:
             rows = [dict(r) for r in (await s.execute(
                 text(_FILLS_SQL), {"sid": sid, "ac": ac, "since": since}
             )).mappings().all()]
+            refused = {r["check_name"]: int(r["n"]) for r in (await s.execute(
+                text(_REFUSED_SQL), {"sid": sid, "ac": ac, "since": since}
+            )).mappings().all()}
         try:
             q = await _qualifying(band, now)
         except Exception as e:  # noqa: BLE001 — unknown opportunity count must not hide the rest
             logger.warning(f"shadow tracker: qualifying count for {sid} failed: {e}")
             q = None
-        reports.append(evaluate(rows, band, now=now, qualifying=q, strategy_id=sid, asset_class=ac))
+        reports.append(evaluate(rows, band, now=now, qualifying=q, refused=refused, strategy_id=sid, asset_class=ac))
     return reports

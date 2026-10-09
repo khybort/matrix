@@ -93,6 +93,14 @@ async def cap_wallet(monkeypatch):
         return DEEP, DEEP
 
     monkeypatch.setattr(CB, "legs", legs)
+
+    async def db_book(venue, category, symbol, at=None):  # the executor's pre-trade check
+        return DEEP
+
+    async def no_quote(venue, coin, at=None):
+        return None
+    monkeypatch.setattr(CE, "db_book", db_book)
+    monkeypatch.setattr(CE, "db_borrow_quote", no_quote)
     async with isolated_wallets() as (wallet_id, _shadow):
         async with shared_session_scope() as session:
             session.add(StrategySlotConfig(

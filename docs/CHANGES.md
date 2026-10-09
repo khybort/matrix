@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-10-09 — Paper, canlı yürütücünün açılış ön-kontrollerini aynı fonksiyonla uygular; shadow kanıtı yalnız yürütülebilir epizodlar
+- `matrix_shared.carry_executor.precheck_open` (tek uygulama): iki kitap (yürütücünün DB kitabı, ≤60 s), borç kotası şimdi ≤ 1,5 × sinyalin fiyatladığı kota, borç kotası (`max_borrow`/`borrowable`; kamu vekili `quota_from_quote`), marj (hesap verisi özel → `unknown`, engellemez). `CarryExecutor.open` ve `paper_open_precheck` aynı fonksiyonu aynı sırayla çağırır, aynı abort nedenini yazar.
+- `backtest.paper_trade`: book-priced carry açılmadan önce ön-kontrol; başarısızsa açmaz, `predictions.context.exec_precheck = {status: skipped, failed, reason, checks}` (karar değişince yazılır, her tick yeniden denenir); açılan pozisyona `status: pass` damgası; dry-run aynası saniyeler sonra abort ederse pozisyon kalır, `status: would_abort` (`source: mirror`).
+- `shadow_tracker` (verdict, band, revisit) ve `edge_study.carry_edge_rows` (`confirmed`) `would_abort` pozisyonlarını dışarıda bırakır; digest satırı `executable only: N would-abort ep excluded, M executor refused (check n…)`. Geçmiş girişler için `backtest.carry_precheck_replay` (`--tag`, `--now`).
+
 ## 2026-10-09 — Risk boyutlandırma: paper carry'nin iki bacağı birlikte işlem başı tavanın içinde (canlıyla aynı kural)
 - `backtest.paper_trade.carry_leg_cap`: her CARRY_SIDES pozisyonunda bacak notional'ı = min(mevcut bacak sınırları — risk çarpanı ya da Kelly, $500 confirmed-öncesi tavan, kitap etki tavanı —, `max_position_pct` × min(marklı equity, cash+locked) / 2). İki bacağın toplamı artık işlem başı tavanı aşamaz; bu `live_gate.should_submit_live` + `CarryExecutor`'ın combined-notional kuralıyla aynı → paper bacağı = canlı bacağı (ör. equity $9 841, %2: bacak $196.82 → $98.41). Paper carry dolar PnL'i yarıya iner, bps değişmez (shadow tracker / carry kanıtı etkilenmez). Yönlü boyutlandırma değişmedi; hiçbir tavan gevşetilmedi. Açık pozisyonlar eski boyutla bitene kadar koşar.
 

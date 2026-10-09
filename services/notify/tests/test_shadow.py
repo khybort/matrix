@@ -409,3 +409,43 @@ def test_band_without_revisit_has_none():
     assert "review at" not in st.format_line(rep)
     alerts, _ = detect_shadow_alerts({}, [rep], T0)
     assert alerts == []
+
+
+# -------------------------------------------- executable episodes only (2026-10-09)
+
+def _would_abort(r: dict) -> dict:
+    return {**r, "exec_precheck": "would_abort"}
+
+
+def test_would_abort_episodes_are_excluded_from_verdict_and_band():
+    """A position the live executor would have aborted at open is not evidence:
+    25 good executable episodes stay on track although 10 would-abort losers
+    ride along, and those 10 alone never make a verdict."""
+    good = closed_set(25, 150.0)
+    bad = [_would_abort(row(f"X{i}USDT", T0 - timedelta(days=3, minutes=i), net_bps=-400.0)) for i in range(10)]
+    rep = evaluate(good + bad)
+    assert rep["verdict"] == st.ON_TRACK and rep["closed"] == 25
+    assert rep["mean_bps"] == pytest.approx(evaluate(good)["mean_bps"])
+    assert rep["would_abort"] == 10 and rep["would_abort_closed"] == 10
+    only = evaluate(bad)
+    assert only["closed"] == 0 and only["verdict"] == st.COLLECTING and only["would_abort"] == 10
+
+
+def test_would_abort_reemissions_count_once_and_tagging_is_per_position():
+    a = _would_abort(row("KAIAUSDT", T0, net_bps=-50.0, notional=200.0))
+    b = _would_abort(row("KAIAUSDT", T0 + timedelta(hours=1), net_bps=-50.0, notional=200.0))
+    ok = row("SKLUSDT", T0, net_bps=120.0)
+    rep = evaluate([a, b, ok])
+    assert rep["would_abort"] == 1 and rep["closed"] == 1 and rep["mean_bps"] == pytest.approx(120.0)
+
+
+def test_digest_line_reports_would_abort_and_executor_refused():
+    rows = closed_set(3, 150.0) + [_would_abort(row("KAIAUSDT", T0, net_bps=None))]
+    rep = st.evaluate(rows, BAND, now=T0 + timedelta(days=1), qualifying=4,
+                      refused={"borrow_drift": 2, "books": 1},
+                      strategy_id="neg_funding_carry", asset_class="crypto")
+    assert rep["open_now"] == 0 and rep["refused"] == 3
+    line = st.format_line(rep)
+    assert "executable only: 1 would-abort ep excluded, 3 executor refused (books 1, borrow_drift 2)" in line
+    clean = st.format_line(evaluate(closed_set(3, 150.0)))
+    assert "executable only: 0 would-abort ep excluded, 0 executor refused" in clean
