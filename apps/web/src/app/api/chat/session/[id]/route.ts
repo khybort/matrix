@@ -9,10 +9,11 @@ const BRAIN_URL = process.env.BRAIN_URL ?? "http://brain:3032";
 
 export async function GET(
   _req: Request,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
+  const { id } = await params;
   try {
-    const res = await fetch(`${BRAIN_URL}/sessions/${params.id}`, {
+    const res = await fetch(`${BRAIN_URL}/sessions/${encodeURIComponent(id)}`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return new Response(null, { status: res.status });
