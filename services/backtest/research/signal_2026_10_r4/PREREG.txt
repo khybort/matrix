@@ -97,3 +97,22 @@ the main session routes it. If nothing survives, the negatives are written up.
 
 ------------------------------------------------------------------------------------------------------------------------
 LOG
+ 2026-10-09 17:05 UTC  data in, no return computed. Binance archive: 52 USD-M + 222 COIN-M dated contracts (1h klines + mark
+   klines), spot 1h for 10 coins, spot 1m on every expiry day. Deribit: 27 BTC + 27 ETH delivered quarterlies (2020-03 ..
+   2026-09) plus the live ones, delivery prices (5 106 rows). OKX USDT lending 2021-12-14 .. now (42 239 hourly rows). Books
+   16:59 UTC, 70 books. Binance's delivery-price endpoint serves only the last ~12-18 deliveries per pair: older expiries
+   (2021 .. mid-2022) settle at the futures' last 1h close instead (flagged "_nodelivery").
+ 2026-10-09 17:20 UTC  research harness landed (matrix_shared.research, docs/research/ledger.jsonl). The 66 cells were
+   registered in the ledger in 98bcd2d before any return was computed (m 105 -> 171; round 5 registered first). q comes from
+   Ledger.qvalues(); the "m = 157" above is superseded by the ledger's count.
+ 2026-10-09 17:28 UTC  two data fixes found in sanity checks before any cell statistic was computed (only settlement tracking
+   and book coverage were inspected): (1) Binance's delivery-price API stamps the delivery DATE (00:00 UTC), so matching on
+   the 08:00 timestamp found nothing — now matched by date; (2) Binance's averaging window changed over the years (published
+   prices match the 60-min spot TWAP in 2023, the 30-min TWAP in 2024-25): the spot TWAP uses the window closer to the
+   published price at each expiry (the rule in force, read off the venue's own number). Five COIN-M alts (ADA, BCH, DOT, LINK,
+   LTC) have no live quarterly today, so no book to price them: their tranches are excluded and counted (ALT = BNB, SOL, XRP).
+ 2026-10-09 17:52 UTC  (3) where Binance publishes no delivery price (2021 .. mid-2022), the measured tracking of the spot TWAP
+   against published prices is 1 +- 6 bps but the futures' last 1h close misses it by +-80 bps: missing delivery prices now
+   settle at the 30-min spot TWAP (tracking 0 for those 45 expiries). Still no cell statistic computed.
+ 2026-10-09 18:20 UTC  TRAIN verdicts written to the ledger: 52 of 66 cells pass (all 30 INV cells; LIN at 1x except
+   BTC Y5/Y8 HOLD and ETH Y5; LIN 2x only BTC Y12; no LIN 3x). Holdout opens for the 52 passers next, after this commit.

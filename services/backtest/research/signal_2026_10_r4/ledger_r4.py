@@ -45,7 +45,9 @@ def sel(df, g, Y, ex, L_, split):
     s = df[(df.group == g) & (df.excluded == "") & (df.b_net >= Y) & (df.exit == ex) & (df.L == L_)]
     s = s[(s.entry >= a) & (s.entry < b)]
     excl = df[(df.group == g) & (df.excluded != "") & (df.b_net >= Y) & (df.exit == ex) & (df.entry >= a) & (df.entry < b)]
-    return s, len(excl)
+    nobook = df[(df.group == g) & (df.excluded == "") & df.b_net.isna() & (df.exit == ex) & (df.L == L_)
+                & (df.entry >= a) & (df.entry < b)]  # alts with no live COIN-M quarterly today: no book to price
+    return s, len(excl) + len(nobook)
 
 
 def row(s, excl, cid, tag):

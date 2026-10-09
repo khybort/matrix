@@ -91,7 +91,7 @@ def contracts():
         coin = sym.split("USD")[0]
         exp = pd.Timestamp(f"20{sym[-6:-4]}-{sym[-4:-2]}-{sym[-2:]} 08:00", tz="UTC")
         pair = sym.split("_")[0]
-        dp = bdel[(bdel.pair == pair) & (bdel.t == exp)].deliveryPrice
+        dp = bdel[(bdel.pair == pair) & (bdel.t.dt.date == exp.date())].deliveryPrice  # API stamps the date, 00:00
         group = (f"LIN_{coin}" if mkt == "um" else (f"INVB_{coin}" if coin in ("BTC", "ETH") else f"INVB_ALT"))
         out.append(dict(group=group, coin=coin, venue="binance", struct="LIN" if mkt == "um" else "INV", symbol=sym,
                         expiry=exp, delivery=float(dp.iloc[0]) if len(dp) else np.nan, window=60,
@@ -117,17 +117,26 @@ def spot_bars():
     return s
 
 
-def settlement_twap(s1m, coin, expiry, window, spot_h):
-    w = s1m[(s1m.coin == coin) & (s1m.ts >= expiry - pd.Timedelta(minutes=window)) & (s1m.ts < expiry)]
-    if len(w) >= window * 0.8:
-        return float(w.close.mean()), "1m"
-    return float(spot_h.close.get(expiry, np.nan)), "1h"
+def settlement_twap(s1m, coin, expiry, window, spot_h, delivery=np.nan):
+    """Spot sold as a TWAP over the venue's averaging window. Binance's window changed over the years (60 -> 30 min;
+    the published delivery prices match one or the other): for Binance the window whose spot TWAP is closer to the
+    published delivery price is taken as the rule in force at that expiry."""
+    def tw(m):
+        w = s1m[(s1m.coin == coin) & (s1m.ts >= expiry - pd.Timedelta(minutes=m)) & (s1m.ts < expiry)]
+        return float(w.close.mean()) if len(w) >= m * 0.8 else np.nan
+    cands = [tw(window)] if window == 30 else [tw(30), tw(60)]
+    cands = [c for c in cands if not math.isnan(c)]
+    if not cands:
+        return float(spot_h.close.get(expiry, np.nan)), "1h"
+    if math.isnan(delivery):
+        return cands[-1], "1m"
+    return min(cands, key=lambda c: abs(c - delivery)), "1m"
 
 
 def rf_series():
     o = pd.read_pickle(D / "okx_usdt_lending.pkl").set_index("ts").lendingRate.sort_index()
     first = o[: o.index[0] + pd.Timedelta(days=30)].mean()
-    idx = pd.date_range("2020-06-01", DATA_END, freq="h", tz="UTC")
+    idx = pd.date_range(pd.Timestamp("2020-06-01", tz="UTC"), DATA_END, freq="h")
     r = o.reindex(idx.union(o.index)).sort_index().ffill().reindex(idx).fillna(first)
     return r, o.index[0]
 
@@ -160,7 +169,7 @@ def build(size, walks, cons, spot, s1m, rf, walks_dec):
         cost_hold_exit = FEE_SPOT + FEE_FUT + sp_twap          # delivery charged as taker; TWAP slices walked
         cost_early_exit = FEE_SPOT + FEE_FUT + sp_sell + f_buy
         days = pd.date_range(max(TRAIN[0], min(c["bars"].index.min() for c in cs).ceil("D")), DATA_END.floor("D"),
-                             freq="D", tz="UTC")
+                             freq="D")
         for day in days:
             t_dec, t_ex = day + pd.Timedelta(hours=8), day + pd.Timedelta(hours=9)
             if t_ex > DATA_END or t_dec not in spc or t_ex not in spc:
@@ -195,8 +204,11 @@ def build(size, walks, cons, spot, s1m, rf, walks_dec):
                         break
             delivered = c["expiry"] <= DATA_END
             if delivered:
-                twap, twap_src = settlement_twap(s1m, coin, c["expiry"], c["window"], sp)
-                Dp = c["delivery"] if not math.isnan(c["delivery"]) else float(cl.get(c["expiry"], np.nan))
+                twap, twap_src = settlement_twap(s1m, coin, c["expiry"], c["window"], sp, c["delivery"])
+                twap_src += "" if not math.isnan(c["delivery"]) else "_nodelivery"
+                # no published price (Binance API keeps ~12-18 deliveries): settle at the 30-min spot TWAP, the measured
+                # tracking where prices exist is 1 +- 6 bps; the futures' last 1h close is a far worse proxy (+-80 bps)
+                Dp = c["delivery"] if not math.isnan(c["delivery"]) else settlement_twap(s1m, coin, c["expiry"], 30, sp)[0]
             for exit_rule in ("HOLD", "EARLY"):
                 if exit_rule == "EARLY" and early is not None:
                     t_out, F1, S1, cx, how = early, cl[early], spc[early], cost_early_exit, "early"
