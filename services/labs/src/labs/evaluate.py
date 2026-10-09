@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from agent.features import extract_symbol_features
+from agent.features import PERP_VENUE, extract_symbol_features
 from loguru import logger
 from sqlalchemy import func, select
 
@@ -202,6 +202,24 @@ def compute_fitness(*, n: int, mean: Decimal, std: Decimal) -> Decimal:
     return ((mean - penalty) * sample_factor).quantize(Decimal("0.000001"))
 
 
+async def fresh_symbols(symbols: list[str], now: datetime) -> list[str]:
+    """The symbols whose traded perp feed ticked within ENTRY_FRESHNESS_S.
+
+    Pinned to the perp venue: the ticker table also holds `binance`
+    funding-poller and `bybit-spot`/`binance-spot` rows under the same symbol,
+    and a fresh one of those says nothing about the bybit feed the features
+    read (agent.features.PERP_VENUE)."""
+    async with local_session_scope() as session:
+        last_tick = dict((await session.execute(
+            select(TickerSnapshot.symbol, func.max(TickerSnapshot.snapshot_ts))
+            .where(TickerSnapshot.symbol.in_(symbols))
+            .where(TickerSnapshot.exchange == PERP_VENUE)
+            .where(TickerSnapshot.snapshot_ts >= now - timedelta(seconds=ENTRY_FRESHNESS_S))
+            .group_by(TickerSnapshot.symbol)
+        )).all())
+    return [s for s in symbols if s in last_tick]
+
+
 async def emit_signals(symbols: list[str], asset_class: str = "crypto") -> int:
     """For each active experiment × symbol (filtered by asset_class), emit
     at most one fresh evaluation per pair — and none while that pair still
@@ -228,15 +246,7 @@ async def emit_signals(symbols: list[str], asset_class: str = "crypto") -> int:
     if not experiments:
         return 0
 
-    now = datetime.now(UTC)
-    async with local_session_scope() as session:
-        last_tick = dict((await session.execute(
-            select(TickerSnapshot.symbol, func.max(TickerSnapshot.snapshot_ts))
-            .where(TickerSnapshot.symbol.in_(symbols))
-            .where(TickerSnapshot.snapshot_ts >= now - timedelta(seconds=ENTRY_FRESHNESS_S))
-            .group_by(TickerSnapshot.symbol)
-        )).all())
-    symbols = [s for s in symbols if s in last_tick]
+    symbols = await fresh_symbols(symbols, datetime.now(UTC))
     if not symbols:
         return 0
 

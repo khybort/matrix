@@ -45,6 +45,8 @@ async def _closes_1h(session, symbol: str, asset_class: str, since) -> list[floa
 TREND_PCT = float(os.environ.get("MATRIX_REGIME_TREND_PCT", "0.015"))
 FUNDING_NEUTRAL = float(os.environ.get("MATRIX_REGIME_FUNDING_NEUTRAL", "0.0001"))
 REGIME_TTL_S = float(os.environ.get("MATRIX_REGIME_TTL_S", "300"))
+# Venue whose perp funding the regime reads (the traded venue; see agent.features).
+PERP_VENUE = "bybit"
 
 UNKNOWN = "unknown"
 
@@ -123,10 +125,14 @@ async def current_regime(asset_class: str = "crypto", *, symbol: str | None = No
                         break
             funding = None
             if asset_class == "crypto":
+                # The traded perp venue only: the table also holds `binance`
+                # funding-poller and `bybit-spot`/`binance-spot` rows under the
+                # same symbol (spot rows carry funding 0).
                 fr = (await session.execute(text(
                     "SELECT funding_rate FROM market_ticker_snapshots WHERE symbol = :s "
+                    "AND exchange = :venue "
                     "AND funding_rate IS NOT NULL ORDER BY snapshot_ts DESC LIMIT 1"
-                ), {"s": ref})).scalar()
+                ), {"s": ref, "venue": PERP_VENUE})).scalar()
                 funding = float(fr) if fr is not None else None
         regime = classify(closes, funding)
     except Exception as e:  # noqa: BLE001 — regime is advisory, never blocks a tick

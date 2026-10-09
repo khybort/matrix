@@ -60,6 +60,11 @@ from backtest.historical import (
 
 # ----------------------------------------------------------------- features
 
+# Mirror of agent.features.PERP_VENUE: the ticker and book tables also hold
+# `binance` (funding poller, no OI), `bybit-spot` and `binance-spot` rows under
+# the same symbol, and "latest row for the symbol" would replay one of those.
+PERP_VENUE = "bybit"
+
 
 @dataclass(slots=True)
 class SymbolFeatures:
@@ -121,6 +126,7 @@ async def _features_at(symbol: str, now: datetime) -> SymbolFeatures:
         ob_stmt = (
             select(OrderBookSnapshot)
             .where(OrderBookSnapshot.symbol == symbol)
+            .where(OrderBookSnapshot.exchange == PERP_VENUE)
             .where(OrderBookSnapshot.snapshot_ts <= now)
             .order_by(desc(OrderBookSnapshot.snapshot_ts))
             .limit(1)
@@ -144,6 +150,7 @@ async def _features_at(symbol: str, now: datetime) -> SymbolFeatures:
         tk_stmt = (
             select(TickerSnapshot)
             .where(TickerSnapshot.symbol == symbol)
+            .where(TickerSnapshot.exchange == PERP_VENUE)
             .where(TickerSnapshot.snapshot_ts <= now)
             .order_by(desc(TickerSnapshot.snapshot_ts))
             .limit(1)
@@ -157,6 +164,7 @@ async def _features_at(symbol: str, now: datetime) -> SymbolFeatures:
                 older_stmt = (
                     select(TickerSnapshot.open_interest)
                     .where(TickerSnapshot.symbol == symbol)
+                    .where(TickerSnapshot.exchange == PERP_VENUE)
                     .where(TickerSnapshot.snapshot_ts <= older)
                     .order_by(desc(TickerSnapshot.snapshot_ts))
                     .limit(1)
