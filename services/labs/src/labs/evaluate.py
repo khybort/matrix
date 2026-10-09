@@ -58,17 +58,8 @@ class EpisodeStats:
     fitness: Decimal
 
 
-def episode_stats(rows: list[dict]) -> EpisodeStats:
-    """Fitness inputs over episodes, not rows.
-
-    `rows` are scored evaluations of ONE experiment (experiment_id, asset_class,
-    symbol, side, generated_at, close_at, score, pnl_pct), any order. Before
-    2026-09-13 the 20 s tick opened a new evaluation per (experiment, symbol)
-    every tick while one was still open, so 88 % of all lab rows were copies of
-    a bet already being scored; the counters summed them as samples (one
-    promoted genome: 129 wins of 152). The episode definition is the edge
-    study's (`one_per_episode`); the first evaluation of an episode is the bet.
-    """
+def _episodes(rows: list[dict]) -> list[dict]:
+    """The bets among one experiment's scored evaluations, in time order."""
     items = sorted(
         (
             {
@@ -85,14 +76,28 @@ def episode_stats(rows: list[dict]) -> EpisodeStats:
         ),
         key=lambda r: r["generated_at"],
     )
-    eps = one_per_episode(items)
+    return one_per_episode(items)
+
+
+def episode_stats(rows: list[dict]) -> EpisodeStats:
+    """Fitness inputs over episodes, not rows.
+
+    `rows` are scored evaluations of ONE experiment (experiment_id, asset_class,
+    symbol, side, generated_at, close_at, score, pnl_pct), any order. Before
+    2026-09-13 the 20 s tick opened a new evaluation per (experiment, symbol)
+    every tick while one was still open, so 88 % of all lab rows were copies of
+    a bet already being scored; the counters summed them as samples (one
+    promoted genome: 129 wins of 152). The episode definition is the edge
+    study's (`one_per_episode`); the first evaluation of an episode is the bet.
+    """
+    eps = _episodes(rows)
     n = len(eps)
     scores = [e["score"] for e in eps]
     total = sum(scores, Decimal("0"))
     std = Decimal(str(statistics.stdev(float(x) for x in scores))) if n > 1 else Decimal("0")
     return EpisodeStats(
         n=n,
-        n_raw=len(items),
+        n_raw=len(rows),
         n_wins=sum(1 for e in eps if e["pnl_pct"] > 0),
         total_score=total,
         std=std,
@@ -129,6 +134,38 @@ async def episode_counts(experiment_ids: list[uuid.UUID]) -> dict[uuid.UUID, tup
             .group_by(LabEvaluation.experiment_id)
         )).all())
     return {eid: (episode_stats(scored[eid]), int(stale.get(eid, 0))) for eid in experiment_ids}
+
+
+# Genomes whose episodes inform the empirical-Bayes prior and the hour-bucket
+# baseline: everything of the asset class scored in this window.
+POPULATION_WINDOW = timedelta(days=7)
+
+
+async def population_episodes(
+    asset_class: str, *, since: datetime | None = None
+) -> dict[uuid.UUID, list[tuple[datetime, float]]]:
+    """(generated_at, score) of every episode, per experiment, for each
+    experiment of `asset_class` with a scored evaluation since `since`
+    (default: POPULATION_WINDOW ago). Whole histories, time-ordered."""
+    since = since or datetime.now(UTC) - POPULATION_WINDOW
+    async with shared_session_scope() as session:
+        recent = (
+            select(LabEvaluation.experiment_id)
+            .where(LabEvaluation.asset_class == asset_class)
+            .where(LabEvaluation.status == "scored")
+            .where(LabEvaluation.generated_at >= since)
+            .distinct()
+        )
+        ids = list((await session.execute(recent)).scalars())
+        scored = await _scored_rows(session, ids)
+    return {
+        eid: [(e["generated_at"], float(e["score"])) for e in _episodes(rows)]
+        for eid, rows in scored.items()
+    }
+
+
+def hour_bucket(ts: datetime) -> int:
+    return int(ts.timestamp()) // 3600
 
 
 async def refresh_fitness(experiment_ids: list[uuid.UUID]) -> int:

@@ -40,6 +40,8 @@ from matrix_shared.models import LabExperiment, MutationProposal, StrategyConfig
 from matrix_shared.models.slot_config import StrategySlotConfig
 
 from labs.evaluate import episode_counts
+from labs.evolve import population_evidence
+from labs.selection import PROMOTE_CHECKPOINTS, PromotionCheck, promotion_check
 
 # Eligibility thresholds — promotion is *consequential*, so defaults are strict.
 MIN_EVAL_FOR_PROMOTION = 30
@@ -219,21 +221,40 @@ async def scan_for_promotions(
     if min_fitness is None:
         min_fitness = _default_fit
 
+    # The rule (labs.selection.promotion_check): on its first K episodes (K a
+    # pre-registered checkpoint), the genome beats its contemporaries on the
+    # EB-shrunk excess lower bound, made money on day-clustered evidence, and
+    # its mean clears min_fitness. The stored counters and fitness_score are
+    # never trusted: they ranked raw means, and before 2026-10-09 summed rows.
+    pop = await population_evidence(asset_class)
+    checkpoints = tuple(k for k in PROMOTE_CHECKPOINTS if k >= min_eval) or (min_eval,)
     async with shared_session_scope() as session:
-        # Best eligible lab candidate
-        cand_stmt = (
+        actives = list((await session.execute(
             select(LabExperiment)
             .where(LabExperiment.status == "active")
             .where(LabExperiment.asset_class == asset_class)
-            .where(LabExperiment.n_evaluations >= min_eval)
-            .where(LabExperiment.fitness_score >= min_fitness)
-            .order_by(desc(LabExperiment.fitness_score))
-            .limit(1)
+        )).scalars())
+    passing: list[tuple[LabExperiment, PromotionCheck]] = []
+    for e in actives:
+        eps = pop.raw.get(e.id) or []
+        if len(eps) < checkpoints[0]:
+            continue
+        chk = promotion_check(
+            [ts.date() for ts, _ in eps], [v for _, v in eps], pop.excess.get(e.id, []), pop.prior,
+            min_fitness=float(min_fitness), checkpoints=checkpoints,
         )
-        candidate = (await session.execute(cand_stmt)).scalar_one_or_none()
-        if candidate is None:
-            return None
+        logger.info(
+            f"promote scan: lab {str(e.id)[:8]} k={chk.k} mean={chk.raw_mean:.4f} "
+            f"day_lo={chk.day_lower:.4f}/{chk.n_days}d excess_post={chk.excess_post_mean:.4f} "
+            f"excess_lo={chk.excess_lower:.4f} → {chk.reason}"
+        )
+        if chk.ok:
+            passing.append((e, chk))
+    if not passing:
+        return None
+    candidate, chk = max(passing, key=lambda p: p[1].excess_lower)
 
+    async with shared_session_scope() as session:
         # Skip if a pending lab_promotion proposal already exists for this
         # strategy (don't queue up duplicates while one is awaiting review).
         existing_stmt = select(
@@ -273,26 +294,15 @@ async def scan_for_promotions(
 
         after_params = _scrub_forbidden(_enrich_lab_params(candidate.params or {}))
 
-        # Gate on what the episodes say, not on the stored counters: those were
-        # summed per row before 2026-10-09 and a genome that has not been
-        # rescored since would otherwise promote on re-emitted copies.
         st, n_unscorable = (await episode_counts([candidate.id]))[candidate.id]
-        if st.n < min_eval or st.fitness < min_fitness:
-            logger.info(
-                f"promote scan: lab {str(candidate.id)[:8]} fails on episodes "
-                f"(n={st.n} of {st.n_raw} rows, fitness={st.fitness}); skipping"
-            )
-            return None
-        win_rate = Decimal(st.n_wins) / Decimal(st.n) if st.n else Decimal("0")
         rationale = (
             f"Lab promotion: experiment {str(candidate.id)[:8]} "
-            f"(gen {candidate.generation}). "
-            f"fitness={st.fitness:.4f}, "
-            f"n={st.n} episodes (n_raw={st.n_raw}, n_unscorable={n_unscorable}), "
-            f"n_wins={st.n_wins}, win_rate={win_rate:.3f}. "
-            f"Beats min_fitness={min_fitness}, min_eval={min_eval}."
+            f"(gen {candidate.generation}). First {chk.k} episodes: mean={chk.raw_mean:.4f} "
+            f"(>= {min_fitness}), day-clustered lower bound {chk.day_lower:.4f} over "
+            f"{chk.n_days} days, EB excess over contemporaries {chk.excess_post_mean:.4f} "
+            f"(lower bound {chk.excess_lower:.4f}). {st.n} episodes in all "
+            f"(n_raw={st.n_raw}, n_unscorable={n_unscorable})."
         )
-
         proposal = MutationProposal(
             strategy_id=strategy_id,
             asset_class=asset_class,
@@ -304,15 +314,22 @@ async def scan_for_promotions(
             metrics_window={
                 "lab_experiment_id": str(candidate.id),
                 "lab_generation": candidate.generation,
-                "fitness_score": str(st.fitness),
+                # the tested mean of the first k episodes; apply-safe gates on it
+                "fitness_score": str(round(chk.raw_mean, 6)),
+                "raw_fitness": str(st.fitness),
                 "promotion_min_fitness": str(min_fitness),
+                "rule": "labs.selection.promotion_check",
+                "k": chk.k,
+                "day_lower": round(chk.day_lower, 6),
+                "n_days": chk.n_days,
+                "excess_post_mean": round(chk.excess_post_mean, 6),
+                "excess_lower": round(chk.excess_lower, 6),
                 "n_evaluations": st.n,
                 "n": st.n,
                 "n_raw": st.n_raw,
                 "n_unscorable": n_unscorable,
                 "unit": "episode",
                 "n_wins": st.n_wins,
-                "win_rate": str(win_rate),
             },
             rationale=rationale,
             status="pending",
@@ -325,7 +342,8 @@ async def scan_for_promotions(
 
     logger.info(
         f"promote scan: proposal {str(proposal_id)[:8]} created from "
-        f"lab {str(candidate.id)[:8]} (fitness={st.fitness:.4f}, n={st.n} episodes)"
+        f"lab {str(candidate.id)[:8]} (k={chk.k}, mean={chk.raw_mean:.4f}, "
+        f"excess_lo={chk.excess_lower:.4f})"
     )
     return proposal_id
 

@@ -27,11 +27,13 @@ from loguru import logger
 from sqlalchemy import desc, select
 
 from matrix_shared import shared_session_scope
+from matrix_shared.evidence import MeanEvidence
 from matrix_shared.markets.crypto import crypto_universe_async
 from matrix_shared.models import LabEvaluation, LabExperiment
 
 from labs.evaluate import emit_signals, episode_counts, refresh_fitness, score_due_evaluations
-from labs.evolve import seed_initial_population, run_evolution_cycle
+from labs.evolve import population_evidence, run_evolution_cycle, seed_initial_population
+from labs.selection import posterior
 from labs.promote import (
     apply_best_pending,
     apply_best_pending_safe,
@@ -81,18 +83,24 @@ async def _leaderboard(limit: int = 15, asset_class: str | None = None) -> None:
     # n = independent episodes (a re-emitted bet counts once), n_raw = scored
     # rows, unsc = evaluations that could not be scored (no mark price).
     counts = await episode_counts([e.id for e in rows])
+    # ex_post = EB-shrunk excess over contemporaries (the evolution rank key),
+    # ex_n = episodes with a contemporary; fitness = the raw pre-2026-10-09 key.
+    pops = {ac: await population_evidence(ac) for ac in {e.asset_class for e in rows}}
     print(f"{'id':>6} {'cls':>6} {'gen':>4} {'n':>5} {'n_raw':>6} {'unsc':>5} {'n_sig':>6} "
-          f"{'win%':>5} {'fitness':>9} {'thr':>6} {'hor':>4}")
+          f"{'win%':>5} {'fitness':>9} {'ex_n':>5} {'ex_post':>8} {'thr':>6} {'hor':>4}")
     for e in rows:
         params = e.params or {}
         thr = params.get("signal_threshold", "")
         hor = params.get("horizon_seconds", "")
         st, unsc = counts[e.id]
         win = f"{100 * st.n_wins / st.n:.0f}" if st.n else "-"
+        pop = pops[e.asset_class]
+        ev = pop.evidence.get(e.id, MeanEvidence(0, 0.0, 0.0))
+        ex_post = posterior(ev, pop.prior)[0] if ev.n else float("nan")
         print(
             f"{str(e.id)[:6]:>6} {e.asset_class:>6} {e.generation:>4} "
             f"{st.n:>5} {st.n_raw:>6} {unsc:>5} {e.n_signals:>6} {win:>5} "
-            f"{st.fitness:>9.4f} {str(thr)[:6]:>6} {str(hor):>4}"
+            f"{st.fitness:>9.4f} {ev.n:>5} {ex_post:>8.4f} {str(thr)[:6]:>6} {str(hor):>4}"
         )
 
     top = rows[0]

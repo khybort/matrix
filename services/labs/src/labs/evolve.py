@@ -1,12 +1,14 @@
 """Selection + reproduction.
 
-Each evolution tick:
-    - Pick experiments with status='active' and n_evaluations >= MIN_EVAL_PER_GEN
-    - Rank by fitness_score (highest = best)
-    - ELITE_FRAC of top → carried over (already alive)
-    - For the remaining target population size, breed offspring from elites via
-      crossover + mutation
-    - Retire the worst CULL_FRAC of active experiments (status='retired')
+Each evolution tick (rule: `labs.selection`, 2026-10-09):
+    - Score every active genome on its episodes' excess over the rest of the
+      population in the same hour, shrunk toward the population
+      (empirical Bayes over the genomes scored in the last 7 days)
+    - Rank genomes with >= MIN_EVAL_PER_GEN such episodes by posterior mean
+    - Retire the worst CULL_FRAC of the ranked (status='retired')
+    - Breed the free places from the top ELITE_FRAC of genomes with
+      >= selection.MIN_BREED_EPISODES; with fewer than two of those, fill them
+      with random immigrants instead
 
 Population stays at TARGET_POPULATION between cycles.
 
@@ -18,20 +20,37 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
-
 from loguru import logger
 from sqlalchemy import desc, select
 
 from matrix_shared import shared_session_scope
+from matrix_shared.evidence import EBPrior, MeanEvidence
 from matrix_shared.models import LabExperiment
 
+from labs.evaluate import hour_bucket, population_episodes
 from labs.genome import Genome, crossover, mutate, random_genome
+from labs.selection import excess_values, fit_prior, plan_generation, rank
 
 TARGET_POPULATION = 20
 MIN_EVAL_PER_GEN = 5  # need >= this many scored evals to be ranked
 ELITE_FRAC = 0.25  # top 25% survive as-is
 CULL_FRAC = 0.40  # bottom 40% retired
+
+
+@dataclass(slots=True)
+class PopulationEvidence:
+    raw: dict  # experiment id → [(generated_at, score)] per episode, time order
+    excess: dict  # experiment id → [excess over contemporaries] per episode
+    evidence: dict  # experiment id → MeanEvidence of its excess
+    prior: EBPrior | None
+
+
+async def population_evidence(asset_class: str) -> PopulationEvidence:
+    """Episodes, excess and the empirical-Bayes prior of one asset class."""
+    raw = await population_episodes(asset_class)
+    excess = excess_values({eid: [(hour_bucket(ts), v) for ts, v in eps] for eid, eps in raw.items()})
+    evidence = {eid: MeanEvidence.from_values(xs) for eid, xs in excess.items()}
+    return PopulationEvidence(raw, excess, evidence, fit_prior(evidence.values()))
 
 
 @dataclass(slots=True)
@@ -108,7 +127,12 @@ async def run_evolution_cycle(
         await seed_initial_population(asset_class=asset_class)
         return GenerationReport(new_generation=0, elites=0, born=TARGET_POPULATION, retired=0)
 
-    ranked = [e for e in actives if e.n_evaluations >= min_eval_per_gen]
+    pop = await population_evidence(asset_class)
+    by_id = {e.id: e for e in actives}
+    ranked = rank(
+        {e.id: pop.evidence.get(e.id, MeanEvidence(0, 0.0, 0.0)) for e in actives},
+        pop.prior, min_rank=min_eval_per_gen, salt=rng.getrandbits(32),
+    )
     if len(ranked) < max(4, int(TARGET_POPULATION * ELITE_FRAC)):
         logger.info(
             f"evolution: only {len(ranked)} ranked candidates (need ~"
@@ -116,61 +140,54 @@ async def run_evolution_cycle(
         )
         return GenerationReport(new_generation=-1, elites=0, born=0, retired=0)
 
-    ranked.sort(key=lambda e: Decimal(e.fitness_score), reverse=True)
-
-    n_elite = max(2, int(len(ranked) * ELITE_FRAC))
-    elites = ranked[:n_elite]
+    parents, culled = plan_generation(ranked, elite_frac=ELITE_FRAC, cull_frac=CULL_FRAC)
+    elites = [by_id[p.id] for p in parents]
     elite_genomes = [Genome.from_dict(e.params) for e in elites]
     new_gen = await _next_generation_number(asset_class)
 
-    # Retire bottom CULL_FRAC of ranked
-    n_cull = int(len(ranked) * CULL_FRAC)
-    losers = ranked[-n_cull:] if n_cull > 0 else []
     retired_count = 0
-    if losers:
-        loser_ids = [e.id for e in losers]
+    if culled:
         async with shared_session_scope() as session:
-            for lid in loser_ids:
-                e_db = await session.get(LabExperiment, lid)
+            for r in culled:
+                e_db = await session.get(LabExperiment, r.id)
                 if e_db is None:
                     continue
                 e_db.status = "retired"
                 e_db.retired_at = datetime.now(UTC)
                 retired_count += 1
 
-    # Birth new offspring to bring population back to TARGET_POPULATION
-    actives_after = [e for e in actives if e.id not in {l.id for l in losers}]
-    deficit = max(0, TARGET_POPULATION - len(actives_after))
+    # Refill to TARGET_POPULATION: offspring of two breedable elites, or a
+    # random immigrant when fewer than two genomes have earned breeding.
+    loser_ids = {r.id for r in culled}
+    deficit = max(0, TARGET_POPULATION - sum(1 for e in actives if e.id not in loser_ids))
     born = 0
-    if deficit > 0 and elite_genomes:
-        for _ in range(deficit):
-            a, b = rng.sample(elite_genomes, 2) if len(elite_genomes) >= 2 else (
-                elite_genomes[0],
-                elite_genomes[0],
-            )
-            child = mutate(crossover(a, b, rng), rng)
+    for _ in range(deficit):
+        if len(elites) >= 2:
+            ia, ib = rng.sample(range(len(elites)), 2)
+            child = mutate(crossover(elite_genomes[ia], elite_genomes[ib], rng), rng)
+            parent_a, parent_b = elites[ia].id, elites[ib].id
             rationale = (
-                f"gen {new_gen}: crossover of two top-{n_elite} elites, "
-                f"weights normalized, gaussian mutation"
+                f"gen {new_gen}: crossover of two of {len(elites)} breedable elites "
+                f"(EB posterior excess), gaussian mutation"
             )
-            async with shared_session_scope() as session:
-                # Find lineage IDs (find which experiments these elite_genomes came from)
-                # Cheap approach: just record any two elite IDs for provenance
-                parent_a = elites[rng.randrange(len(elites))].id
-                parent_b = elites[rng.randrange(len(elites))].id
-                session.add(
-                    LabExperiment(
-                        asset_class=asset_class,
-                        generation=new_gen,
-                        parent_a_id=parent_a,
-                        parent_b_id=parent_b,
-                        params=child.to_dict(),
-                        rationale=rationale,
-                        status="active",
-                    )
+        else:
+            child, parent_a, parent_b = random_genome(rng), None, None
+            rationale = f"gen {new_gen}: random immigrant (fewer than two breedable genomes)"
+        async with shared_session_scope() as session:
+            session.add(
+                LabExperiment(
+                    asset_class=asset_class,
+                    generation=new_gen,
+                    parent_a_id=parent_a,
+                    parent_b_id=parent_b,
+                    params=child.to_dict(),
+                    rationale=rationale,
+                    status="active",
                 )
-            born += 1
+            )
+        born += 1
 
+    n_elite = len(elites)
     logger.info(
         f"evolution gen={new_gen}: elites={n_elite} retired={retired_count} born={born}"
     )
