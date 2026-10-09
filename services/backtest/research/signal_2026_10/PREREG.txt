@@ -1,0 +1,52 @@
+Pre-registration — signal research 2026-10 (written 2026-10-09 ~12:40 UTC, before any return was computed)
+
+Data: Bybit public API, 2025-10-01 -> 2026-10-09, every USDT linear perp trading on 2026-10-09 (791):
+funding settlements, 1h klines (close, turnover), 1h premium-index klines. Survivorship: delisted
+coins absent (flatters longs in small caps).
+
+Split by time. TRAIN 2025-10-01 .. 2026-05-31. HOLDOUT 2026-06-01 .. 2026-10-09.
+Holdout is evaluated once, only for hypotheses that pass train, with the rule frozen.
+
+Universe at each rebalance: top 100 by trailing-7d turnover, listed >= 30 days before. Entry at the
+close of the last fully closed 1h bar at/after the decision time; nothing after the decision is used.
+
+Costs: directional leg 15 bps per round trip (7.5 per entry or exit), charged on actual turnover.
+Funding is booked at each settlement held, on the side held. Carry (4 legs) 30 bps + borrow.
+
+Pass in train: net mean > 0 and t >= 2.0 over non-overlapping holding periods.
+Survive in holdout: net mean > 0 and one-sided p < 0.05 / k (k = hypotheses sent to holdout).
+
+Family (m counted for the deflated bar):
+ H1  inverse_carry, rule as coded (settled funding <= -0.08%/8h equiv, enter after that settlement,
+     hold 48h, collect later settlements + premium change, minus 30 bps, minus borrow), executable
+     coins only (Bybit margin-borrowable or Binance margin). Borrow: today's published VIP0 rate x1
+     and x3 (stress) — historical rates are not public.
+ H2a funding cross-section: at 00/08/16 UTC rank by last settled funding (per-8h normalised), long
+     bottom decile, short top decile, hold 24h (non-overlapping 24h rebalance).
+ H2b same, hold 72h.
+ H3  premium cross-section: rank by 24h mean premium index, long most discounted decile, short most
+     premium decile, hold 24h.
+ H4  OI-conditioned reversal: NOT TESTABLE on 1y (no OI history fetched in this pass) -> tested only
+     if OI history is fetched; otherwise reported as untested.
+ H5  24h cross-sectional reversal: long bottom decile of 24h return, short top decile, hold 24h.
+ H6  7d cross-sectional momentum: long top decile of return t-8d..t-1d, short bottom, hold 7d.
+ H7  day-of-week (7) and hour-of-day (24) effects on the equal-weight top-20 basket, long-only,
+     cost 15 bps per entry+exit: 31 hypotheses.
+ H8  large-trade / liquidation imbalance: needs trade-level history; local market_trades holds ~17
+     clean days -> exploratory only, not counted toward a promotion.
+m = 1 + 2 + 1 + 1 + 1 + 31 = 37 (H4 adds 1 if run).
+
+Addendum 2026-10-09 ~12:50 UTC (still before any return computed):
+ - OI history fetched (1h, top 200 by current turnover) -> H4 is run: daily at 00 UTC, among the
+   universe names with OI data, take the top quintile of 24h log-OI change; within it long the
+   bottom half by 24h return, short the top half; hold 24h. m = 38.
+ - Entry clarification: signal uses data up to decision time T; entry price is the close of the 1h
+   bar ending at T+1h (one bar skipped) for the directional families H2-H6 — stricter than entering at T.
+   H1 enters at the price at T (carry is delta-neutral; the basis term uses premium at T).
+ - H7 correction: the side (long or short the basket) is chosen by the sign of the train mean; holdout trades that frozen side.
+
+Train verdict 2026-10-09 ~13:55 UTC (before holdout): only H1 passes (exec net +104.2 bps, t=20.0, n=3464;
+x3 borrow +49.6, t=9.4). H2a t=1.16, H2b 0.82, H3 1.47, H5 -0.70, H6 0.88, H7 all |t|<2 net. H4 pending OI.
+Holdout k=1 (H1), criterion: exec 'net' (x1 borrow) mean > 0 and t > 1.645; reported also at x3 borrow.
+H4 train: net -41.0, t=-1.39, n=212 -> rejected. H1 holdout: +135.0 t=10.18 n=1105 -> SURVIVES.
+Holdout of rejected hypotheses computed afterwards for the record only; decisions above are frozen.

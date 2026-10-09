@@ -211,3 +211,14 @@
   sonrası giriş deliğin öncesindeki ticker, çıkış canlı işlemdi. Bir sabiti tanımlarken kullanıldığı satırı da `grep` ile
   gör. Üçüncü: `test_auto_apply_safe` konteyner içinde canlı paylaşılan DB'ye bağlanıp `apply_best_pending_safe()` ile
   **bütün** bekleyen önerileri tarıyordu; artık `LABS_TEST_SHARED_DSN` yoksa atlanır. Kaynak: `docs/wiki/edge-study.md`.
+
+- **2026-10-09 — Fonlama tilt'i hedge'siz para kazandırmaz; carry hedge'li ve kısa bacağı yapılabilir olmalı.** 1 yıllık Bybit
+  geçmişinde fonlama kesit L/S (H2/H3) dönem başına +120…+300 bps fonlama topluyor, fiyat bacağı hepsini geri veriyor (holdout
+  brüt −148). Aynı fonlamayı spot short ile hedge'leyen negatif-fonlama carry'si holdout'ta +135 bps/epizod (t=10.2, n=1 105,
+  borç ve 30 bps dahil). Ama inverse_carry'nin Eylül sinyallerinin çoğu Bybit'te spot marjini OLMAYAN coin'lerdeydi: kısa
+  bacak açılamıyorsa carry çıplak long perp'tür. Kural: carry sinyali üretmeden önce borç tablosunda (Bybit/Binance public)
+  coin'i ara; borç maliyetini model'e koy. Ayrıca `entry_price_ref`'i modül değil dispatcher damgalar (dca 3,3 günlük trade
+  fiyatı yazıyordu) ve paper engine aynı (strateji, sembol, yön) bahsini ikinci kez açmaz (funding_reversion 2 016/3 101).
+- **2026-10-09 — Yalnız `shadow` satırı olan strateji hiç koşmuyordu.** Dispatcher aktif satırı olmayan stratejiyi atlıyordu,
+  shadow satırına hiç bakmadan; yeni bir sinyali "shadow olarak kaydet" demek sessizce hiçbir şey yapmamaktı. Artık shadow-only
+  strateji shadow cüzdanında challenger olarak koşar; şampiyonu olmadığı için efficacy onu terfi ettiremez — statü kanıttan gelir.

@@ -25,6 +25,7 @@ working".
 - [pnl-reality](pnl-reality.md) — measured economics: why it loses money
 - [edge-study](edge-study.md) — controlled test of entry timing vs random entry
 - [strategy-scoreboard](strategy-scoreboard.md) — every emitting strategy on clean signals, net of cost (2026-10-09: none pays)
+- [signal-research-2026-10](signal-research-2026-10.md) — 38 pre-registered hypotheses on 1y Bybit history; only hedged negative-funding carry survives the holdout
 - [market-cadence-study](market-cadence-study.md) — BIST/US vs their cost (pause both) and 15 s vs 60 s vs 300 s decisions (speed earns nothing)
 - [methods](methods.md) — quant methodology applied, with why
 - [research-backlog](research-backlog.md) — methods not yet applied, each with its decisive test

@@ -44,6 +44,9 @@ for why the books showed 0 % wins.
 
 ## Claims
 - **No strategy in the book has a measured edge after cost** (2026-10-09).
+  The one candidate found outside the book is `neg_funding_carry` (shadow,
+  2026-10-09, [[signal-research-2026-10]]): historical edge, zero paper
+  episodes so far.
   The best net figure is funding_reversion at +6 bps on 32 episodes, t=0.13 —
   indistinguishable from zero. The EV floor that skips every candidate is
   right; loosening it would buy the costs above.
@@ -72,5 +75,11 @@ for why the books showed 0 % wins.
 ## Open questions
 - Is there edge in a *subset* of these signals that a different filter would
   find? The EV ranker is not it ([[open-questions]]: Spearman −0.06).
-- inverse_carry with honest accounting: does +15 bps net survive spot-borrow
-  cost (not modelled; short spot on alts can cost tens of bps over 48 h)?
+- ~~inverse_carry with honest accounting: does +15 bps net survive spot-borrow
+  cost?~~ Answered 2026-10-09 in [[signal-research-2026-10]]: on a year of
+  Bybit settlements, entering *after* a settlement ≤ −0.08 % on coins with a
+  published borrow rate nets +104 bps/episode in train (t=20, n=3 464) and
+  +135 in the holdout (t=10.2, n=1 105) after 30 bps fees and today's borrow
+  (+65, t=4.9 at 3x borrow). inverse_carry itself mostly fired on coins with
+  no Bybit spot margin. New shadow strategy `neg_funding_carry` carries the
+  surviving rule; it has no paper evidence yet and nothing is promoted.
