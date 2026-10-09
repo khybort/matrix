@@ -551,3 +551,15 @@
   series even if the shadow book missed a day; (3) state the power in the pre-registration: at round 5's per-episode SD (718 bps) a true
   +125 bps gives E[t] ≈ 1.35 at n = 60, so a fail there is weak evidence and must not be "fixed" by re-running a bigger n under the same id.
   Harness: a new `Spec` field enters `to_dict()` only when non-default, otherwise every committed spec block stops matching.
+- **2026-10-09 — Under the rollback fixture, a lazy import inside a function binds the test's patched session scope for good.**
+  `db_writes_rolled_back` swaps `local_session_scope`/`shared_session_scope` in every module loaded *at fixture entry*, and
+  patches `matrix_shared.db` itself. A module first imported during a test (`from matrix_shared.live_gate import ...`
+  inside `CarryExecutor._gate`) copies the patched scope from `matrix_shared.db` and keeps it after the restore, so the
+  next test runs on a closed connection: `ResourceClosedError: This Connection is closed` on every test but the first.
+  It passed inside the full suite only because another test module had imported `live_gate` earlier. Import at module
+  top; to check a new suite, run its file alone (`PYTEST_ARGS="tests/test_x.py" scripts/test_all.sh <suite>`).
+- **2026-10-09 — A two-leg position is gated on its combined notional, so live legs are half the paper legs.**
+  The paper engine books a carry's per-leg notional against `max_position_pct`; the carry executor sends both legs'
+  sum to `should_submit_live`, so at the 2 % cap a $196.82 paper KAIA carry executes $98.41 a leg. Bps compare;
+  dollars do not. Any live-vs-paper comparison of carries must state which size it uses
+  (`docs/wiki/carry-execution.md`).

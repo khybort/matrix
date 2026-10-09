@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-10-09 — İki bacaklı carry yürütme yolu (`CarryExecutor`), varsayılan dry-run; paper carry'lerin dry-run aynası
+- `matrix_shared.carry_executor` + `matrix_shared.carry_venues` (execution facade: `execution.carry`): ödünç → spot sat → perp al (kapanış: spot al → perp sat → geri öde), Limit-IOC fiyat bandı, ikinci bacak düşerse ilk bacak hemen geri alınır, geri alma da düşerse alarm + kill switch (süreç kilidi + cüzdanın `circuit_tripped_at`'i). Her emir `live_gate.should_submit_live`'dan **iki bacağın toplam notional'ıyla** geçer → canlı bacak = paper bacağının yarısı. Modlar: `MATRIX_CARRY_EXEC_MODE=dry_run` (varsayılan, `NeverSend`) | `testnet` (yalnız `api-testnet.bybit.com`; Binance margin'in testnet'i yok → reddedilir). Mainnet modu yok.
+- `backtest.paper_trade`: book-priced carry açılış/kapanışından sonra `mirror_paper_open/close` (hep dry-run, 5 s, asla raise etmez) → log satırı `carry_exec[dry_run] …` + `predictions.context.carry_exec_dry_run.{open,close}` (bacak dolumları, `gap_bps`). Kapatma: `MATRIX_CARRY_MIRROR=false`.
+- dev_agent `FORBIDDEN_PATHS` += `live_gate.py`, `carry_executor.py`, `carry_venues.py`. Tasarım: `docs/wiki/carry-execution.md`.
+
 ## 2026-10-09 — r5f ileri testi: Deribit IV term kaydedici (0043), `iv_inversion` shadow modülü, harness forward modu
 - `matrix_shared.research`: `Spec(forward_n=N)` = ileri test (train yok; `forward_status` yalnız sayar, `open_forward` ilk N epizot kapanınca bir kez karar verir; ledger forward testte train satırını, ikinci açılışı, karardan önce final'i reddeder). Klasik spec'lerin hash'i değişmedi (`forward_n` yalnız >0 iken spec bloğunda).
 - `matrix_shared.iv_term`: tur 5 D.3 kuralının tek tanımı (TERM, 365 g persentil, pencere başına tek epizot); kaydedici, modül ve r5f builder aynı kodu koşar. Tur 5'in 118 girişini birebir üretir.

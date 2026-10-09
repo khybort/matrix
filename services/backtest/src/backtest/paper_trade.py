@@ -32,6 +32,7 @@ from matrix_shared.allocation import (
     load_pair_edges,
     risk_multiplier,
 )
+from matrix_shared.carry_executor import mirror_paper_close, mirror_paper_open
 from matrix_shared.exchange_shadow import shadow_close_position, shadow_open_position
 
 from backtest import carry_books
@@ -1297,6 +1298,11 @@ async def _open_for_market(asset_class: str, *, shadow: bool = False) -> int:
             )
         except Exception as e:  # noqa: BLE001 — shadow must not break paper
             logger.warning(f"shadow open error pred={p.id}: {e}")
+        if book_open is not None:
+            # Dry-run the executable two-leg path beside paper (never sends):
+            # its simulated fills minus book_open are the slippage gap paper
+            # does not see (docs/wiki/carry-execution.md). Never raises.
+            await mirror_paper_open(prediction=p, wallet_id=wallet_id, notional=notional, book_open=book_open)
     if ev_floored:
         logger.info(
             f"ev_floor[{asset_class}{'/shadow' if shadow else ''}]: "
@@ -1539,6 +1545,8 @@ async def _close_position(
         await shadow_close_position(prediction=pred, position=pos)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"shadow close error pos={pos.id}: {e}")
+    if context_patch.get("book_close") is not None:
+        await mirror_paper_close(prediction=pred, position=pos, book_close=context_patch["book_close"])
     # Reasoning overlay: Prediction -[RESULTED_IN]-> Outcome (best-effort index).
     await link_outcome_node(
         pred_id=str(pred.id), outcome_id=str(outcome_id), score=str(score),

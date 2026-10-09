@@ -16,12 +16,16 @@ from dev_agent.safety import check_tool_call
 
 
 def test_forbidden_paths_protect_only_live_capital_gates():
-    """Policy invariant (2026-09-12): exactly the three live-capital gate
-    files are closed; everything else is open."""
+    """Policy invariant (2026-09-12, widened 2026-10-09): exactly the
+    live-capital gate files and the code that can build and send orders are
+    closed; everything else is open."""
     assert FORBIDDEN_PATHS == (
         "packages/python-shared/src/matrix_shared/trading_safety.py",
         "packages/python-shared/src/matrix_shared/exchange_shadow.py",
         "services/execution/src/execution/safety.py",
+        "packages/python-shared/src/matrix_shared/live_gate.py",
+        "packages/python-shared/src/matrix_shared/carry_executor.py",
+        "packages/python-shared/src/matrix_shared/carry_venues.py",
     )
 
 

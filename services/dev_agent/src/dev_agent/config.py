@@ -18,10 +18,17 @@ from dataclasses import dataclass
 # the agent and execution adapters, but NOT the three files that stand
 # between the paper engine and real money. Those change only via a human
 # commit. Everything else in the worktree is open.
+# 2026-10-09: + the composite gate itself (live_gate.py, which the other two
+# delegate to and which had been left open) and the two-leg carry executor
+# (carry_executor.py, carry_venues.py: the only other code that can build and
+# send orders).
 FORBIDDEN_PATHS: tuple[str, ...] = (
     "packages/python-shared/src/matrix_shared/trading_safety.py",
     "packages/python-shared/src/matrix_shared/exchange_shadow.py",
     "services/execution/src/execution/safety.py",
+    "packages/python-shared/src/matrix_shared/live_gate.py",
+    "packages/python-shared/src/matrix_shared/carry_executor.py",
+    "packages/python-shared/src/matrix_shared/carry_venues.py",
 )
 
 
