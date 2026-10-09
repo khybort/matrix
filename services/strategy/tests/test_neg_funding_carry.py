@@ -42,6 +42,30 @@ def _borrow(monkeypatch, table):
     monkeypatch.setattr(M, "borrow_rates", fake)
 
 
+def _flat_book(mid: float, half_spread_bps: float, usd_per_level: float, n: int = 20,
+               step_bps: float = 2.0) -> M.Book:
+    """Symmetric ladder: best quotes `half_spread_bps` off mid, then `step_bps`
+    apart, `usd_per_level` notional at each level."""
+    bids, asks = [], []
+    for i in range(n):
+        off = (half_spread_bps + i * step_bps) / 1e4
+        bp, ap = mid * (1 - off), mid * (1 + off)
+        bids.append((bp, usd_per_level / bp))
+        asks.append((ap, usd_per_level / ap))
+    return M.Book(bids, asks, "test")
+
+
+def _books(monkeypatch, perp: M.Book | None, spot: M.Book | None, seen: list | None = None):
+    async def fake(venue, category, symbol, session=None):
+        if seen is not None:
+            seen.append((venue, category, symbol))
+        return perp if category == "linear" else spot
+    monkeypatch.setattr(M, "fetch_book", fake)
+
+
+DEEP = _flat_book(2.0, 1.0, 5_000)  # ~1 bp off mid, $5k per level
+
+
 async def _settled(rate: str, minutes_ago: int = 20) -> None:
     now = datetime.now(UTC)
     s = now - timedelta(minutes=minutes_ago)
@@ -72,13 +96,85 @@ def test_parse_borrow_takes_cheapest_lending_venue():
 
 async def test_settled_negative_rate_on_borrowable_coin_emits(clean, monkeypatch):
     _borrow(monkeypatch, {"NFCTEST": (Decimal("0.00001"), "binance")})
-    await _settled("-0.0012")
+    seen: list = []
+    _books(monkeypatch, DEEP, DEEP, seen)
+    await _settled("-0.0040")
     drafts = await M.NegFundingCarry(symbols=[SYM]).generate()
     assert len(drafts) == 1
     d = drafts[0]
     assert d.side == "inverse_carry" and d.horizon_seconds == 172800
-    assert d.context["funding_rate_8h"] == "-0.0012000000"
+    assert d.context["funding_rate_8h"] == "-0.0040000000"
     assert d.context["borrow_rate_hourly"] == "0.00001"
+    # the hedge leg is the borrow venue's spot pair
+    assert ("binance", "spot", "NFCTESTUSDT") in seen
+    assert d.context["spot_venue"] == "binance" and d.context["spot_symbol"] == "NFCTESTUSDT"
+    f = d.context["entry_filter"]
+    # 8 h interval -> 6 settlements in 48 h at 40 bps
+    assert f["interval_h"] == 8 and f["expected_funding_bps"] == pytest.approx(240.0)
+    assert f["borrow_stressed_bps"] == pytest.approx(0.1 * 48 * M.BORROW_STRESS)
+    assert f["leg_notional_usd"] == M.MAX_LEG_USD  # deep book: the $500 ceiling binds
+    assert f["book_cost"]["fees_bps"] == pytest.approx(31.0)
+    assert f["cost_share"] < M.MAX_COST_SHARE
+
+
+async def test_missing_spot_book_never_emits(clean, monkeypatch):
+    """No spot book -> no hedge -> no signal (never a naked long perp)."""
+    _borrow(monkeypatch, {"NFCTEST": (Decimal("0.00001"), "bybit")})
+    _books(monkeypatch, DEEP, None)
+    await _settled("-0.0050")
+    assert await M.NegFundingCarry(symbols=[SYM]).generate() == []
+
+
+async def test_costly_book_or_borrow_skips(clean, monkeypatch):
+    # 25 bps/8h = 150 bps over 48 h; a third is 50. Deep books: 31 fees + 4
+    # impact + 14.4 borrow x3 = 49.4 -> trades. A 16 bps spot spread -> 63 -> not.
+    _borrow(monkeypatch, {"NFCTEST": (Decimal("0.00001"), "bybit")})
+    await _settled("-0.0025")
+    _books(monkeypatch, DEEP, DEEP)
+    assert len(await M.NegFundingCarry(symbols=[SYM]).generate()) == 1
+    _books(monkeypatch, DEEP, _flat_book(2.0, 8.0, 5_000))
+    assert await M.NegFundingCarry(symbols=[SYM]).generate() == []
+    # 40 bps/8h, cheap books, but borrow of 2 bps/h x 48 x 3 = 288 bps
+    await _settled("-0.0040")
+    _borrow(monkeypatch, {"NFCTEST": (Decimal("0.0002"), "bybit")})
+    _books(monkeypatch, DEEP, DEEP)
+    assert await M.NegFundingCarry(symbols=[SYM]).generate() == []
+
+
+def test_walk_and_cap_on_a_known_ladder():
+    b = _flat_book(100.0, 1.0, 1_000, step_bps=2.0)  # levels at 1, 3, 5, 7 ... bps
+    assert M.walk_bps(b.asks, b.mid, 1_000) == pytest.approx(1.0, rel=1e-6)
+    assert M.walk_bps(b.asks, b.mid, 2_000) == pytest.approx(2.0, rel=1e-3)
+    assert M.walk_bps(b.asks, b.mid, 1e9) is None  # deeper than the book
+    cap = M.max_usd_within(b.asks, b.mid, 4.0)
+    assert M.walk_bps(b.asks, b.mid, cap) == pytest.approx(4.0, rel=1e-3)
+    # half-spread alone above the limit -> nothing can be done within it
+    wide = _flat_book(100.0, 12.0, 1_000)
+    assert M.max_usd_within(wide.bids, wide.mid, 10.0) == 0.0
+    assert M.leg_cap_usd(b, wide) == 0.0
+
+
+def test_entry_verdict_threshold_is_a_third_of_expected_funding():
+    cost = {"total_bps": 40.0, "fees_bps": 31.0}
+    kw = dict(interval_h=8, hourly_borrow=Decimal("0.00001"), horizon_h=48, cost=cost,
+              leg_usd=500, stress=3.0, max_share=1 / 3)
+    # borrow 0.1 bps/h x 48 x 3 = 14.4; + 40 = 54.4 -> needs expected >= 163.2
+    ok, inp = M.entry_verdict(rate=Decimal("-0.0028"), **kw)  # 168 bps
+    assert ok and inp["cost_share"] == pytest.approx(54.4 / 168, rel=1e-4)
+    ok, inp = M.entry_verdict(rate=Decimal("-0.0027"), **kw)  # 162 bps
+    assert not ok and inp["skip"] == "cost_share"
+    # 1 h interval: the same settled rate pays 48 times
+    ok, inp = M.entry_verdict(rate=Decimal("-0.0008"), **{**kw, "interval_h": 1})
+    assert ok and inp["expected_funding_bps"] == pytest.approx(384.0)
+    ok, inp = M.entry_verdict(rate=Decimal("-0.0100"), **{**kw, "leg_usd": 10})
+    assert not ok and inp["skip"] == "book_too_thin"
+
+
+def test_interval_from_next_settlement():
+    t = datetime(2026, 10, 9, 8, tzinfo=UTC)
+    assert M.interval_hours(t, t + timedelta(hours=1)) == 1
+    assert M.interval_hours(t, t + timedelta(hours=4, minutes=1)) == 4
+    assert M.interval_hours(t, None) == 8
 
 
 async def test_unborrowable_coin_never_emits(clean, monkeypatch):
