@@ -6,6 +6,11 @@ a persisting `broken` at most once per `SHADOW_REALERT_S`. A first sighting
 (fresh process, new band) alerts only for `broken` / `below_band`, so a
 restart does not replay "collecting".
 
+`review_due` is sent once per strategy, the first time its closed episodes
+with `borrow_source=series` reach the band's revisit threshold: it states
+which pre-registered revisit rule holds and the env change it implies. The
+env is the main session's to change; nothing here applies it.
+
 The last verdict per strategy is kept in a small JSON file: watchfiles
 restarts the process on every shared-package save, and an in-memory map
 would re-send `broken` on each of them.
@@ -21,7 +26,7 @@ from typing import Any
 
 from loguru import logger
 
-from matrix_shared.shadow_tracker import BELOW_BAND, BROKEN, format_alert
+from matrix_shared.shadow_tracker import BELOW_BAND, BROKEN, format_alert, format_review
 
 from notify.health import ALERT_INFO, ALERT_WARNING
 
@@ -44,7 +49,7 @@ def detect_shadow_alerts(
     *,
     realert_s: float = SHADOW_REALERT_S,
 ) -> tuple[list[tuple[str, str]], dict[str, dict[str, Any]]]:
-    """Pure: (alerts, new_state). State: key → {sig, verdict, alerted_at (epoch s)}."""
+    """Pure: (alerts, new_state). State: key → {sig, verdict, alerted_at (epoch s), review_sent}."""
     alerts: list[tuple[str, str]] = []
     state = dict(prev)
     ts = now.timestamp()
@@ -61,9 +66,14 @@ def detect_shadow_alerts(
         if fire:
             level = ALERT_WARNING if v in _LOUD else ALERT_INFO
             alerts.append((level, format_alert(rep, old["verdict"] if old else None)))
+        review_sent = bool((old or {}).get("review_sent"))
+        if (rep.get("revisit") or {}).get("due") and not review_sent:
+            alerts.append((ALERT_WARNING, format_review(rep)))
+            review_sent = True
         state[key] = {
             "sig": sig, "verdict": v,
             "alerted_at": ts if fire else (old or {}).get("alerted_at", 0.0),
+            "review_sent": review_sent,
         }
     return alerts, state
 

@@ -29,6 +29,15 @@ funding = pnl + book + borrow. Verdicts, most severe first:
   below_band  mean net ≤ `floor_bps`
   on_track    otherwise
 
+Two pre-registered A/B comparisons ride on the same episodes (signal-research-2026-10.md,
+"Borrow measurement" and "Live path and funding decay"): the borrow source of
+each close (`series` measures quoted borrow; `stressed_entry` and `mixed` do
+not, or only partly) and the entry-rule arms recorded on every signal
+(`flat_keep`: the old quote x 3 rule; `decay_keep`: the funding-decay gate).
+Once `revisit_series_episodes` closed episodes are `series`, `revisit` states
+which of the three revisit rules holds and the env change it implies; notify
+sends that once as `review_due`. The tracker never changes the env itself.
+
 `evaluate` is pure; `collect` does the I/O.
 """
 
@@ -69,6 +78,11 @@ DEFAULT_BANDS: dict[tuple[str, str], dict[str, Any]] = {
         "components": ["funding", "borrow", "book"],
         "expected_per_week": 50,
         "source": "docs/wiki/signal-research-2026-10.md#shadow-book-hardening",
+        # Borrow measurement / funding decay revisit rules (2026-10-09).
+        "revisit_series_episodes": 30,
+        "revisit_hold_stress_env": "MATRIX_NFC_BORROW_HOLD_STRESS",
+        "revisit_borrow_model_env": "MATRIX_NFC_BORROW_MODEL",
+        "revisit_expected_model_env": "MATRIX_NFC_EXPECTED_MODEL",
     },
 }
 
@@ -90,6 +104,14 @@ class Episode:
     borrow_usd: float | None = None
     book_usd: float | None = None
     anomalies: list[str] = field(default_factory=list)
+    # series | stressed_entry | mixed (re-emissions disagreeing also = mixed) | unknown
+    borrow_source: str = "unknown"
+    # notional-weighted hold-mean series borrow / entry quote, over rows with a series mean
+    borrow_ratio: float | None = None
+    # entry-rule verdicts recorded on the bet (first signal); None = not recorded
+    flat_keep: bool | None = None
+    naive_keep: bool | None = None
+    decay_keep: bool | None = None
 
     def bps(self, usd: float | None) -> float | None:
         if usd is None or not self.notional_usd:
@@ -107,6 +129,31 @@ def _f(v: Any) -> float | None:
     return float(v)
 
 
+def _b(v: Any) -> bool | None:
+    if v is None or v == "":
+        return None
+    if isinstance(v, bool):
+        return v
+    return str(v).lower() == "true"
+
+
+def _source(g: list[dict]) -> str:
+    srcs = {r.get("borrow_source") or "unknown" for r in g}
+    return srcs.pop() if len(srcs) == 1 else "mixed"
+
+
+def _ratio(g: list[dict]) -> float | None:
+    num = den = 0.0
+    for r in g:
+        mean, quote = _f(r.get("borrow_series_mean_hourly")), _f(r.get("borrow_rate_hourly"))
+        if mean is None or not quote:
+            continue
+        w = float(r["notional_usd"])
+        num += w * mean / quote
+        den += w
+    return num / den if den else None
+
+
 def _utc(ts: datetime) -> datetime:
     return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
 
@@ -121,11 +168,14 @@ def decompose(rows: list[dict], components: Iterable[str] = ("funding", "borrow"
     for g in episode_groups(sorted(rows, key=lambda r: r["generated_at"])):
         closed = all(r.get("closed_at") is not None for r in g)
         ep = Episode(symbol=g[0]["symbol"], opened_at=_utc(min(r["opened_at"] for r in g)), closed=closed)
+        ep.flat_keep, ep.naive_keep, ep.decay_keep = (_b(g[0].get(k)) for k in ("flat_keep", "naive_keep", "decay_keep"))
         ep.notional_usd = sum(float(r["notional_usd"]) for r in g)
         if not closed:
             out.append(ep)
             continue
         ep.pnl_usd = sum(float(r["pnl_usd"] or 0) for r in g)
+        ep.borrow_source = _source(g)
+        ep.borrow_ratio = _ratio(g)
         ep.held_h = max((_utc(r["closed_at"]) - _utc(r["opened_at"])).total_seconds() for r in g) / 3600
         borrow = book = 0.0
         borrow_ok = book_ok = True
@@ -178,6 +228,61 @@ def clustered_t(values: list[float], clusters: list[Any]) -> float | None:
 
 def _mean(xs: list[float]) -> float | None:
     return sum(xs) / len(xs) if xs else None
+
+
+BORROW_SOURCES = ("series", "mixed", "stressed_entry", "unknown")
+
+
+def arm_stats(eps: list[Episode]) -> dict[str, Any]:
+    """n, mean / median net bps and day-clustered t of closed episodes."""
+    net = [e.net_bps for e in eps]
+    return {
+        "n": len(net), "mean_bps": _mean(net),
+        "median_bps": statistics.median(net) if net else None,
+        "t_day": clustered_t(net, [e.opened_at.date().isoformat() for e in eps]),
+    }
+
+
+def _p90(xs: list[float]) -> float | None:
+    if not xs:
+        return None
+    if len(xs) == 1:
+        return xs[0]
+    return statistics.quantiles(xs, n=10, method="inclusive")[8]
+
+
+def revisit(closed: list[Episode], band: dict[str, Any]) -> dict[str, Any] | None:
+    """The pre-registered revisit rules over closed `series` episodes only
+    (stressed_entry / mixed closes charged an assumed borrow and cannot judge
+    it). None when the band registers no revisit. Each rule:
+    {rule, holds, env, value, text}; `due` once the series count reaches the
+    threshold."""
+    need = band.get("revisit_series_episodes")
+    if not need:
+        return None
+    series = [e for e in closed if e.borrow_source == "series"]
+    out: dict[str, Any] = {"series_n": len(series), "need": int(need), "due": len(series) >= int(need), "rules": []}
+    ratios = [e.borrow_ratio for e in series if e.borrow_ratio is not None]
+    p90 = _p90(ratios)
+    env = band.get("revisit_hold_stress_env", "MATRIX_NFC_BORROW_HOLD_STRESS")
+    value = f"{math.ceil(round(p90 * 100, 6)) / 100:.2f}" if p90 is not None and p90 > 1.0 else None
+    out["rules"].append({
+        "rule": "hold_stress", "holds": value is not None, "env": env, "value": value,
+        "p90": p90, "n": len(ratios), "median": statistics.median(ratios) if ratios else None,
+    })
+    for rule, key, env_key, default_env, target in (
+        ("borrow_model", "flat_keep", "revisit_borrow_model_env", "MATRIX_NFC_BORROW_MODEL", "flat"),
+        ("expected_model", "decay_keep", "revisit_expected_model_env", "MATRIX_NFC_EXPECTED_MODEL", "decay"),
+    ):
+        # flat_keep=false: kept only by the depth borrow model.
+        # decay_keep=false (naive kept): kept only by the naive expectation.
+        arm = [e for e in series if getattr(e, key) is False and e.naive_keep is not False]
+        st = arm_stats(arm)
+        out["rules"].append({
+            "rule": rule, "holds": st["n"] > 0 and st["mean_bps"] <= 0.0,
+            "env": band.get(env_key, default_env), "value": target, "arm": f"{key}=false", **st,
+        })
+    return out
 
 
 def evaluate(
@@ -241,6 +346,16 @@ def evaluate(
         v = ON_TRACK
     rep["verdict"] = v
     rep["reasons"] = reasons
+    rep["by_borrow_source"] = {
+        src: {"n": len(xs), "mean_bps": _mean([e.net_bps for e in xs])}
+        for src in BORROW_SOURCES
+        if (xs := [e for e in closed if e.borrow_source == src])
+    }
+    rep["arms"] = {
+        key: {str(val).lower(): arm_stats([e for e in closed if getattr(e, key) is val]) for val in (True, False)}
+        for key in ("flat_keep", "decay_keep")
+    }
+    rep["revisit"] = revisit(closed, band)
     return rep
 
 
@@ -297,6 +412,13 @@ def format_line(rep: dict[str, Any]) -> str:
         f"band {b.get('expected_bps_low', 0):+.0f}…{b.get('expected_bps_high', 0):+.0f}, "
         f"floor {b.get('floor_bps', 0):+.0f}"
     )
+    if rep["closed"]:
+        src = rep.get("by_borrow_source") or {}
+        parts.append(
+            "borrow src " + "/".join(str(src.get(k, {}).get("n", 0)) for k in ("series", "mixed", "stressed_entry"))
+            + " series/mixed/stressed" + (f" (+{src['unknown']['n']} unknown)" if "unknown" in src else "")
+            + (f", review at {rv['series_n']}/{rv['need']} series" if (rv := rep.get("revisit")) else "")
+        )
     parts.append(f"last open {_age(rep['last_open_age_h'])}")
     if rep.get("qualifying") is not None:
         parts.append(f"{rep['qualifying']} qualifying settlements/{b.get('stale_hours', 72)}h")
@@ -332,6 +454,40 @@ def format_alert(rep: dict[str, Any], prev: str | None) -> str:
     return "\n".join(lines)
 
 
+def _arm_text(s: dict[str, Any]) -> str:
+    t = f"{s['t_day']:.1f}" if s.get("t_day") is not None else "n/a"
+    return f"n {s['n']}, mean {_bps(s['mean_bps'])}, median {_bps(s['median_bps'])} bps, t_day {t}"
+
+
+def format_review(rep: dict[str, Any]) -> str:
+    """Telegram text for the one-time `review_due`: which revisit rule holds,
+    its numbers, and the env change it implies (never applied here)."""
+    rv = rep["revisit"]
+    name = f"{rep['strategy_id']}/{rep['asset_class']}"
+    lines = [f"🔁 review_due {name}: {rv['series_n']} closed episodes with borrow_source=series (≥ {rv['need']})"]
+    src = rep.get("by_borrow_source") or {}
+    lines.append("  borrow source: " + ", ".join(
+        f"{k} n {v['n']} mean {_bps(v['mean_bps'])}" for k, v in src.items()))
+    holding = []
+    for r in rv["rules"]:
+        if r["rule"] == "hold_stress":
+            nums = (f"p90 series-mean/entry-quote {r['p90']:.2f} (median {r['median']:.2f}, n {r['n']})"
+                    if r["p90"] is not None else "no series-mean/entry-quote ratio recorded")
+            cond = "p90 > 1.0"
+        else:
+            nums = f"{r['arm']} series episodes: " + _arm_text(r)
+            cond = "mean ≤ 0" + (" (thin arm, n < 10)" if 0 < r["n"] < 10 else "")
+        mark = "HOLDS" if r["holds"] else "does not hold"
+        lines.append(f"  ({r['rule']}) {cond}: {mark} — {nums}")
+        if r["holds"]:
+            holding.append(f"{r['env']}={r['value']}")
+    if holding:
+        lines.append("  implied env change (main session decides; nothing applied): " + " ".join(holding))
+    else:
+        lines.append("  no revisit rule holds: keep the current env.")
+    return "\n".join(lines)
+
+
 # ----------------------------------------------------------------------- I/O
 
 _FILLS_SQL = (
@@ -339,7 +495,12 @@ _FILLS_SQL = (
     "       pp.notional_usd, pp.opened_at, pp.closed_at, pp.pnl_usd, "
     "       p.context->>'borrow_rate_hourly' AS borrow_rate_hourly, "
     "       p.context->>'borrow_charged_usd' AS borrow_charged_usd, "
-    "       p.context->'book_close'->>'total_bps' AS book_close_bps "
+    "       p.context->'book_close'->>'total_bps' AS book_close_bps, "
+    "       p.context->>'borrow_source' AS borrow_source, "
+    "       p.context->>'borrow_series_mean_hourly' AS borrow_series_mean_hourly, "
+    "       p.context->'entry_filter'->>'flat_keep' AS flat_keep, "
+    "       p.context->'entry_filter'->>'naive_keep' AS naive_keep, "
+    "       p.context->'entry_filter'->>'decay_keep' AS decay_keep "
     "FROM paper_positions pp JOIN predictions p ON p.id = pp.prediction_id "
     "WHERE p.strategy_id = :sid AND p.asset_class = :ac AND p.generated_at >= :since "
     "ORDER BY p.generated_at"

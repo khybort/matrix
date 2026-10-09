@@ -17,10 +17,14 @@ BAND = {**st.DEFAULT_BANDS[("neg_funding_carry", "crypto")], "since": "2026-10-0
 
 def row(sym: str, opened: datetime, *, net_bps: float | None = 150.0, notional: float = 400.0,
         hold_h: float = 48.0, book_bps: float | None = 50.0, borrow_usd: str | None = "1.2",
-        borrow_rate: str | None = "0.00002", generated: datetime | None = None) -> dict:
-    """One filled carry. `net_bps` None = still open."""
+        borrow_rate: str | None = "0.00002", generated: datetime | None = None,
+        source: str | None = None, series_mean: str | None = None,
+        flat_keep: str | None = None, naive_keep: str | None = None, decay_keep: str | None = None) -> dict:
+    """One filled carry. `net_bps` None = still open. Keeps are json text ("true"/"false")."""
     closed = net_bps is not None
     return {
+        "borrow_source": source if closed else None, "borrow_series_mean_hourly": series_mean if closed else None,
+        "flat_keep": flat_keep, "naive_keep": naive_keep, "decay_keep": decay_keep,
         "strategy_id": "neg_funding_carry", "asset_class": "crypto", "symbol": sym, "side": "inverse_carry",
         "generated_at": generated or opened, "horizon_seconds": 172800,
         "notional_usd": notional, "opened_at": opened,
@@ -192,3 +196,110 @@ def test_state_roundtrip(tmp_path):
     save_state(state, p)
     assert load_state(p) == state
     assert load_state(tmp_path / "missing.json") == {}
+
+
+# --------------------------------------------- borrow source / entry-rule arms
+
+def series_set(n: int, net: float, *, ratio: float = 0.8, flat_keep: str = "true", decay_keep: str = "true",
+               source: str = "series", days: int = 5, prefix: str = "S") -> list[dict]:
+    start = T0 - timedelta(days=12)
+    return [row(f"{prefix}{i}USDT", start + timedelta(days=i % days, minutes=i), net_bps=net + (i % 3 - 1) * 20,
+                source=source, series_mean=str(0.00002 * ratio), flat_keep=flat_keep, naive_keep="true",
+                decay_keep=decay_keep)
+            for i in range(n)]
+
+
+def test_splits_by_borrow_source_and_entry_arms():
+    rows = (series_set(6, 100.0, flat_keep="true", decay_keep="true")
+            + series_set(4, -50.0, flat_keep="false", decay_keep="false", prefix="F")
+            + series_set(3, 200.0, source="stressed_entry", prefix="X")
+            + [row("OLDUSDT", T0 - timedelta(days=2))])  # closed before the recorder: no source, no keeps
+    rep = evaluate(rows)
+    src = rep["by_borrow_source"]
+    assert src["series"]["n"] == 10 and src["stressed_entry"]["n"] == 3 and src["unknown"]["n"] == 1
+    assert src["series"]["mean_bps"] == pytest.approx((600.0 - 220.0) / 10)
+    flat = rep["arms"]["flat_keep"]
+    assert flat["true"]["n"] == 9 and flat["false"]["n"] == 4  # stressed_entry counted in the display arms
+    assert flat["false"]["mean_bps"] == pytest.approx(-50.0, abs=10)
+    assert flat["false"]["median_bps"] is not None and flat["false"]["t_day"] is not None
+    assert rep["arms"]["decay_keep"]["false"]["n"] == 4
+    line = st.format_line(rep)
+    assert "borrow src 10/0/3 series/mixed/stressed (+1 unknown), review at 10/30 series" in line
+
+
+def test_reemissions_with_different_sources_are_mixed():
+    a = row("KAIAUSDT", T0, source="series", series_mean="0.00002")
+    b = row("KAIAUSDT", T0 + timedelta(hours=1), source="stressed_entry")
+    (ep,) = st.decompose([a, b])
+    assert ep.borrow_source == "mixed"
+    assert ep.borrow_ratio == pytest.approx(1.0)  # only the row with a series mean
+
+
+def test_revisit_not_due_below_threshold():
+    rv = evaluate(series_set(29, 100.0))["revisit"]
+    assert rv["series_n"] == 29 and rv["due"] is False
+
+
+def test_stressed_and_mixed_episodes_are_excluded_from_the_borrow_verdict():
+    # 30 series episodes that win, plus losing flat_keep=false episodes and
+    # high-ratio ones charged at an assumed borrow: those must not move the rules.
+    rows = (series_set(30, 100.0, ratio=0.7)
+            + series_set(20, -300.0, ratio=3.0, flat_keep="false", decay_keep="false",
+                         source="stressed_entry", prefix="X")
+            + series_set(5, -300.0, ratio=3.0, flat_keep="false", decay_keep="false", source="mixed", prefix="M"))
+    rv = evaluate(rows)["revisit"]
+    assert rv["due"] and rv["series_n"] == 30
+    rules = {r["rule"]: r for r in rv["rules"]}
+    assert rules["hold_stress"]["holds"] is False and rules["hold_stress"]["p90"] == pytest.approx(0.7)
+    assert rules["borrow_model"]["n"] == 0 and rules["borrow_model"]["holds"] is False
+    assert rules["expected_model"]["n"] == 0 and rules["expected_model"]["holds"] is False
+
+
+def test_revisit_rules_hold_with_the_implied_env():
+    rows = (series_set(20, 120.0, ratio=0.9)
+            + series_set(10, -40.0, ratio=1.4, flat_keep="false", decay_keep="false", prefix="F"))
+    rv = evaluate(rows)["revisit"]
+    rules = {r["rule"]: r for r in rv["rules"]}
+    assert rules["hold_stress"]["holds"] and rules["hold_stress"]["value"] == "1.40"
+    assert rules["borrow_model"]["holds"] and rules["borrow_model"]["env"] == "MATRIX_NFC_BORROW_MODEL"
+    assert rules["expected_model"]["holds"] and rules["expected_model"]["value"] == "decay"
+
+
+def test_review_due_fires_exactly_once():
+    rows = (series_set(20, 120.0, ratio=0.9)
+            + series_set(10, -40.0, ratio=1.4, flat_keep="false", decay_keep="true", prefix="F"))
+    early = evaluate(rows[:29])
+    alerts, state = detect_shadow_alerts({}, [early], T0)
+    assert not any("review_due" in a[1] for a in alerts)
+
+    rep = evaluate(rows)
+    alerts, state = detect_shadow_alerts(state, [rep], T0 + timedelta(minutes=15))
+    reviews = [a for a in alerts if "review_due" in a[1]]
+    assert len(reviews) == 1 and reviews[0][0] == ALERT_WARNING
+    text = reviews[0][1]
+    assert text.startswith("🔁 review_due neg_funding_carry/crypto: 30 closed episodes with borrow_source=series")
+    assert "(hold_stress) p90 > 1.0: HOLDS" in text
+    assert "(borrow_model) mean ≤ 0: HOLDS" in text
+    assert "(expected_model) mean ≤ 0: does not hold" in text
+    assert "MATRIX_NFC_BORROW_HOLD_STRESS=1.40 MATRIX_NFC_BORROW_MODEL=flat" in text
+
+    for k in range(1, 4):  # later ticks, more episodes, a restart from the saved state: never again
+        more = evaluate(rows + series_set(k, 50.0, prefix=f"N{k}_"))
+        alerts, state = detect_shadow_alerts(state, [more], T0 + timedelta(hours=k))
+        assert not any("review_due" in a[1] for a in alerts)
+
+
+def test_review_due_with_no_rule_holding_says_keep():
+    rep = evaluate(series_set(30, 100.0))
+    alerts, _ = detect_shadow_alerts({}, [rep], T0)
+    (text,) = [a[1] for a in alerts if "review_due" in a[1]]
+    assert "no revisit rule holds: keep the current env." in text
+
+
+def test_band_without_revisit_has_none():
+    band = {k: v for k, v in BAND.items() if k != "revisit_series_episodes"}
+    rep = evaluate(series_set(40, 100.0), band=band)
+    assert rep["revisit"] is None
+    assert "review at" not in st.format_line(rep)
+    alerts, _ = detect_shadow_alerts({}, [rep], T0)
+    assert alerts == []
