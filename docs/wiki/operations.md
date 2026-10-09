@@ -372,7 +372,11 @@ engine, so the script stops the `backtest` container for that suite and
 restarts it from a trap (also on failure or Ctrl-C). The director, reflection,
 strategy, execution and labs suites run every async test inside
 `matrix_shared.testing.db_writes_rolled_back()` (outer transaction, always
-rolled back), because they call global passes on live tables.
+rolled back), because they call global passes on live tables. That fixture
+has ONE connection per tier: it serialises sessions across tasks and cancels
+tasks spawned under it, because background work (edge_study's refresh task)
+interleaving savepoints made `test_auto_cut_on_consecutive_losses` fail ~1 in 30
+(fixed 2026-10-09; the reflection conftest also stubs that refresh).
 `test_auto_apply_safe` still needs `LABS_TEST_SHARED_DSN`; `bulletin` is
 skipped unless its phase6 image is built.
 

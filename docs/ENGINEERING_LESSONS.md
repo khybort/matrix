@@ -525,3 +525,12 @@
   size. (2) A long cell must beat the drift (BTC +48…+68 bps unconditional per 7 d), not zero. Report that benchmark next to it.
   Tooling: `python3 -I` drops user site-packages (no pandas on the host). `pgrep -f "<pattern>"` inside a waiting shell matches the waiting shell
   itself and never exits; match on the pid list instead. Scripts: `services/backtest/research/signal_2026_10_r5/`.
+- **2026-10-09 — A rollback fixture with one connection is single-tasked; code that spawns tasks breaks it.**
+  `test_auto_cut_on_consecutive_losses` failed ~1 run in 30 with `savepoint "sa_savepoint_20" does not exist`. Not the
+  live reflection service and not a foreign loop: `score_strategy_slots` → `edge_study.strategy_edge` fires an
+  `asyncio.create_task` refresh on a cache miss, and that task opened a session on the fixture's only connection while the
+  scorer's session was open; whichever RELEASE ran first destroyed the other's savepoint. The task also ran full studies
+  and wrote TEST_* rows into the live `edge_cache.json`. `db_writes_rolled_back` now serialises sessions per connection
+  (re-entrant within a task) and cancels tasks spawned under it before the rollback; the reflection conftest stubs the
+  refresh. Flakes that "pass on rerun" under a shared-connection fixture: look for `create_task`/`gather` in the call
+  path before blaming the live service. Regression test: `packages/python-shared/tests/test_testing_rollback.py`.

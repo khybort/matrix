@@ -43,6 +43,25 @@ async def _db_writes_never_commit(request):
         yield
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _no_background_edge_study(monkeypatch):
+    """`score_strategy_slots` asks `edge_study.strategy_edge` for every live
+    slot row; a cache miss spawns a background study task. Under the rollback
+    fixture that task shared the test's single connection and interleaved its
+    savepoints with the scorer's (test_auto_cut_on_consecutive_losses failed
+    ~1 in 30), ran full studies against live data, and wrote TEST_* rows into
+    the live edge_cache.json. Tests that need an edge answer monkeypatch
+    `strategy_edge` / `_entry_edge_verdict` themselves."""
+    import matrix_shared.edge_study as E
+
+    async def no_refresh(key, days):
+        E._refreshing.discard(key)
+
+    monkeypatch.setattr(E, "_refresh_edge", no_refresh)
+    monkeypatch.setattr(E, "_save_disk_cache", lambda: None)
+    yield
+
+
 @pytest_asyncio.fixture
 async def cert_cleanup():
     """Collector for (strategy_id, asset_class, version) triples that the
