@@ -19,6 +19,8 @@ Topics:
     orderbook.50.<SYMBOL>      — top-50 book, snapshot + deltas
     tickers.<SYMBOL>           — last/mark/index/funding/OI/volume snapshots
     kline.1.<SYMBOL>           — 1m candles (spot leg); persisted when confirmed
+    allLiquidation.<SYMBOL>    — every liquidation (ingestion.liquidation_recorder
+                                 runs its own connector with only this topic)
 """
 
 from __future__ import annotations
@@ -112,7 +114,19 @@ class BarEvent:
     asset_class: str = "crypto_spot"
 
 
-MarketEvent = TradePrint | OrderBookEvent | TickerEvent | BarEvent
+@dataclass(slots=True)
+class LiquidationEvent:
+    """One liquidation from `allLiquidation`. `side` is the POSITION that was
+    liquidated: Bybit "Buy" = a long (the forced order sells), "Sell" = a short."""
+    exchange: str
+    symbol: str
+    ts: datetime
+    side: str  # long | short
+    size: Decimal
+    price: Decimal  # bankruptcy price
+
+
+MarketEvent = TradePrint | OrderBookEvent | TickerEvent | BarEvent | LiquidationEvent
 
 
 def topic_symbol(topic: str) -> str:
@@ -176,11 +190,12 @@ class BybitConnector:
         category: str = "linear",
         ticker_interval_s: float = TICKER_PERSIST_INTERVAL_S,
         book_interval_s: float = ORDERBOOK_PERSIST_INTERVAL_S,
+        topics: tuple[str, ...] | None = None,
     ) -> None:
         self.symbols = list(symbols)
         self.testnet = testnet
         self.category = category
-        self.topics = LINEAR_TOPICS if category == "linear" else SPOT_TOPICS
+        self.topics = topics or (LINEAR_TOPICS if category == "linear" else SPOT_TOPICS)
         host = "stream-testnet.bybit.com" if testnet else "stream.bybit.com"
         self.url = f"wss://{host}/v5/public/{category}"
         venue = "bybit" if category == "linear" else f"bybit-{category}"
@@ -190,6 +205,11 @@ class BybitConnector:
         self._books: dict[str, _BookState] = {s: _BookState() for s in self.symbols}
         self._tickers: dict[str, _TickerCarry] = {s: _TickerCarry() for s in self.symbols}
         self._ws: websockets.ClientConnection | None = None
+        # wall-clock seconds when the current session subscribed; None while
+        # disconnected. A reader that needs "the feed was up for all of minute M"
+        # (liquidation coverage) checks session_started <= M and not stale.
+        self.session_started: float | None = None
+        self._last_rx = time.monotonic()
         self._has_symbols = asyncio.Event()
         if self.symbols:
             self._has_symbols.set()
@@ -251,6 +271,7 @@ class BybitConnector:
             await self._subscribe(ws)
 
             self._last_rx = time.monotonic()
+            self.session_started = time.time()
             tasks = [
                 asyncio.create_task(self._reader(ws, queue), name="bybit-reader"),
                 asyncio.create_task(self._book_ticker(queue), name="bybit-book-ticker"),
@@ -265,6 +286,7 @@ class BybitConnector:
                     yield event
             finally:
                 self._ws = None
+                self.session_started = None
                 for t in tasks:
                     t.cancel()
                 # let cancellation propagate cleanly
@@ -371,6 +393,9 @@ class BybitConnector:
             ev = self._handle_ticker(topic, msg)
             return [ev] if ev is not None else []
 
+        if topic.startswith("allLiquidation."):
+            return list(self._parse_liquidations(msg))
+
         return []
 
     def _parse_trades(self, topic: str, msg: dict) -> Iterable[TradePrint]:
@@ -388,6 +413,28 @@ class BybitConnector:
                 )
             except (KeyError, ValueError) as e:
                 logger.warning(f"bybit malformed trade: {e}; raw={d}")
+
+    def _parse_liquidations(self, msg: dict) -> Iterable[LiquidationEvent]:
+        for d in msg.get("data") or []:
+            side = {"Buy": "long", "Sell": "short"}.get(d.get("S"))
+            try:
+                if side is None:
+                    raise ValueError(f"side {d.get('S')!r}")
+                yield LiquidationEvent(
+                    exchange=self._exchange,
+                    symbol=str(d["s"]),
+                    ts=datetime.fromtimestamp(int(d["T"]) / 1000.0, tz=UTC),
+                    side=side,
+                    size=Decimal(str(d["v"])),
+                    price=Decimal(str(d["p"])),
+                )
+            except (KeyError, ValueError, ArithmeticError) as e:
+                logger.warning(f"bybit malformed liquidation: {e}; raw={d}")
+
+    def is_up(self, stale_after_s: float = STALE_AFTER_S) -> bool:
+        """Connected, subscribed and a frame (data or pong) within stale_after_s."""
+        return (self.session_started is not None
+                and not is_stale(self._last_rx, time.monotonic(), stale_after_s))
 
     def _parse_klines(self, topic: str, msg: dict) -> Iterable[BarEvent]:
         symbol = topic_symbol(topic)

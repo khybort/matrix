@@ -95,6 +95,12 @@ async def run(market_names: list[str], cfg: _IngestCfg) -> None:
         from ingestion.iv_term_recorder import run as run_iv_term_recorder
         tasks.append(asyncio.create_task(run_iv_term_recorder(), name="iv-term-recorder"))
 
+    # Every Bybit USDT-perp liquidation (public WS), for the r2f forward test and
+    # the liq_cascade_fade shadow module. Gated by LIQ_RECORDER_ENABLED.
+    if "crypto" in market_names:
+        from ingestion.liquidation_recorder import run as run_liquidation_recorder
+        tasks.append(asyncio.create_task(run_liquidation_recorder(), name="liquidation-recorder"))
+
     if not tasks:
         logger.warning("no markets to ingest; exiting")
         return

@@ -581,6 +581,16 @@
   quote was the one the signal priced 4 s earlier (×1.00). Tagging the position un-executable on that would drop an
   episode on post-entry information, and since a rising borrow is a cost, bias the evidence up. Replays take every input
   as of the decision time (`db_book(..., at=)`, `db_borrow_quote(..., at=)`); a post-entry move is a hold cost.
+- **2026-10-09 — A recorder of sporadic events must also record when it was listening; absence is not quiet.**
+  Liquidations arrive a few per minute across 791 perps and are zero for most (symbol, minute) pairs, so "no row" is
+  ambiguous: quiet market or dead socket. `ingestion.liquidation_recorder` writes `bybit_liquidation_minutes` — one row per
+  minute only if every socket was subscribed before it began and was live when it ended, after that minute's events
+  were flushed — and the r2f rule refuses any window touching an uncovered minute and needs 6 covered days for its p99.
+  The shadow module stands down when the newest covered minute is > 180 s old (and resumes from the present, never
+  replaying the gap). Two more things the rule had to state: a percentile over a zero-inflated series needs nearest rank
+  with the zeros counted explicitly plus an absolute floor ($25k), or on a quiet coin p99 = 0 and any liquidation
+  "fires"; and Bybit `allLiquidation` `S` is the POSITION side (`Buy` = a long was liquidated, the forced order sells).
+  Every `ingestion-market` restart (any shared-package save) leaves an honest coverage hole — batch shared edits.
 - **2026-10-09 — A carry's return is on TOTAL capital against a real rate; and a locked-yield trade's t lives in contracts, not weeks.**
   Round 4 (dated-futures basis): the same basis that pays +3…+9 %/yr over USDT lending coin-margined (spot = collateral,
   capital N, liquidation impossible by construction: coin equity = C/P_t) is negative USDT-margined at 1× (capital N + N

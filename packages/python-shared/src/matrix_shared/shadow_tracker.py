@@ -111,6 +111,23 @@ DEFAULT_BANDS: dict[tuple[str, str], dict[str, Any]] = {
         "evaluation": "harness r5f.D.3 at n=60 (services/backtest/research/signal_2026_10_r5f), not earlier",
         "source": "docs/wiki/signal-research-2026-10.md#forward-test-r5f",
     },
+    # Forward test r2f (2026-10-09, signal-research-2026-10.md, "Forward test r2f
+    # (liquidations)"): round 2 H8b-5m-60 net +32.0 train / +18.1 holdout per
+    # episode on the proxy; the shadow trades the 60 min cell on streamed symbols
+    # only. The tracker reports; the harness decides each cell once at n = 1000.
+    ("liq_cascade_fade", "crypto"): {
+        "since": "2026-10-17T00:00:00+00:00",  # first forward signal (Q needs 6 covered days)
+        "expected_bps_low": 18.0,
+        "expected_bps_high": 32.0,
+        "floor_bps": 0.0,
+        "min_episodes": 1000,
+        "stale_hours": 504,  # 3 weeks with a live feed and no cascade on a streamed coin = look
+        "min_qualifying": 0,
+        "components": [],
+        "expected_per_week": 10,
+        "evaluation": "harness r2f.L5.60 / r2f.L5.240 at n=1000 (services/backtest/research/signal_2026_10_r2f), not earlier",
+        "source": "docs/wiki/signal-research-2026-10.md#forward-test-r2f-liquidations",
+    },
 }
 
 # A carry that crossed no settlement books no funding legitimately; 9 h covers

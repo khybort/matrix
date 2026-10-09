@@ -198,6 +198,27 @@ trades (missing by the rule). Read by the `iv_inversion` shadow module and the r
 `iv_inversion: BTC <day>: TERM … pct … -> no_signal|wait|enter|missed` in `strategy` once per change.
 `IV_TERM_RECORDER_ENABLED=false` turns it off.
 
+### Liquidation recorder (r2f)
+`services/ingestion/src/ingestion/liquidation_recorder.py`, a task in `ingestion-market` (crypto only): Bybit's public
+WS topic `allLiquidation.<symbol>` for **every** trading USDT perp (791 on 2026-10-09; universe re-read hourly from
+`instruments-info`), through `BybitConnector(topics=("allLiquidation",))`, ≤ 400 topics per socket (2 sockets). Writes
+`bybit_liquidations` (local DB, migration 0044; `side` = position liquidated, Bybit `Buy` = long; `notional_usd` = size ×
+bankruptcy price), flushed every second, and one `bybit_liquidation_minutes` row per UTC minute during which every
+socket was subscribed since before the minute and still receiving frames. A minute without a row is unknown, not quiet:
+any restart of `ingestion-market` (a shared-package save restarts it) leaves a hole, by design. 180 days kept, pruned
+hourly through the `ts` / `minute` indexes (verified 2026-10-09: a 200-day row deleted, a 179-day row kept; plans are
+index scans). Volume (2026-10-09, two probes of all 791 topics, quiet evening): 84 events / 15 min and 99 / 10 min ≈
+8 000–14 000 rows/day, $46–74k notional per probe, 11 KB of WS payload per 10–15 min; one dominant coin per probe
+(MAGIC, US). CPU: 0.42 CPU-s per 10 min for the socket handling (0.07 % of a core), 35 MB RSS. Logs: `liquidation recorder: last hour N
+events, M/60 minutes covered` on the hour. Read by the `liq_cascade_fade` shadow module (strategy; logs `liquidation
+feed live|stale … standing down` once per change and one line per candidate window ≥ $25k) and the r2f evaluation
+(`services/backtest/research/signal_2026_10_r2f/forward.py status`; export commands in its docstring).
+`LIQ_RECORDER_ENABLED=false` turns it off. Check:
+```sql
+SELECT count(*), max(ts) FROM bybit_liquidations WHERE ts > now() - interval '1 hour';
+SELECT count(*) FROM bybit_liquidation_minutes WHERE minute > now() - interval '1 hour';  -- 60 when healthy
+```
+
 ## Shadow tracker — is the only bet working?
 
 `matrix_shared/shadow_tracker.py` compares every shadow strategy that carries a

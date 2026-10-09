@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-10-09 — r2f ileri testi: Bybit tasfiye kaydedici (0044), `liq_cascade_fade` shadow modülü
+- Göç **0044** (lokal): `bybit_liquidations` (her olay; `side` = tasfiye edilen pozisyon, Bybit `Buy` = long) + `bybit_liquidation_minutes` (beslemenin kesintisiz ayakta olduğu her UTC dakikası; satır yoksa dakika "bilinmiyor", sessiz değil). 180 gün, saatlik prune (indeks planı doğrulandı).
+- `ingestion.liquidation_recorder` (ingestion-market): `allLiquidation.<sym>` tüm işlem gören USDT perp'ler (791), `BybitConnector(topics=...)` ile soket başına ≤ 400 topic; `LiquidationEvent` connector'a eklendi (`LIQ_RECORDER_ENABLED`).
+- `matrix_shared.liq_cascade`: r2f kuralının tek tanımı (5 dk tek taraflı tasfiye ≥ max(7 g p99, $25k) + tur 2 H8b-5m yer değiştirme bacağı, fade); modül ve r2f builder aynı kodu koşar.
+- `strategy_configs` (shared): `liq_cascade_fade` crypto v1 **shadow** (60 dk hücre, yalnız akan semboller; besleme 180 s'den eskiyse durur), `shadow_band` +18…+32, floor 0, n 1000; `DEFAULT_BANDS`'e de eklendi. Ön-kayıt 599acb3, ledger m = 174.
+
 ## 2026-10-09 — Paper, canlı yürütücünün açılış ön-kontrollerini aynı fonksiyonla uygular; shadow kanıtı yalnız yürütülebilir epizodlar
 - `matrix_shared.carry_executor.precheck_open` (tek uygulama): iki kitap (yürütücünün DB kitabı, ≤60 s), borç kotası şimdi ≤ 1,5 × sinyalin fiyatladığı kota, borç kotası (`max_borrow`/`borrowable`; kamu vekili `quota_from_quote`), marj (hesap verisi özel → `unknown`, engellemez). `CarryExecutor.open` ve `paper_open_precheck` aynı fonksiyonu aynı sırayla çağırır, aynı abort nedenini yazar.
 - `backtest.paper_trade`: book-priced carry açılmadan önce ön-kontrol; başarısızsa açmaz, `predictions.context.exec_precheck = {status: skipped, failed, reason, checks}` (karar değişince yazılır, her tick yeniden denenir); açılan pozisyona `status: pass` damgası; dry-run aynası saniyeler sonra abort ederse pozisyon kalır, `status: would_abort` (`source: mirror`).
