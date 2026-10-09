@@ -37,6 +37,7 @@ PARAM_ALIASES: dict[str, str] = {
 _IGNORED_KEYS: frozenset[str] = frozenset({
     "weights", "signal_threshold", "explore_epsilon",  # matrix_agent-only
     "symbols",  # dispatcher-owned
+    "shadow_band",  # read by matrix_shared.shadow_tracker, not the strategy
 })
 
 _warned: set[tuple[str, str]] = set()
