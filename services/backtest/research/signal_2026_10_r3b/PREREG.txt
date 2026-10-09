@@ -1,0 +1,98 @@
+Pre-registration — signal research 2026-10, round 3b: H1 with a perp-perp hedge ("H1-perp-hedge")
+Written 2026-10-09 15:35 UTC (date -u), before any return was computed and before any hedge-venue price,
+funding history or order book for this round was fetched. Only endpoint availability was probed (below).
+Round 1: ../signal_2026_10/PREREG.txt. Round 2: ../signal_2026_10_r2/PREREG.txt. Round 3: ../signal_2026_10_r3/.
+
+QUESTION. H1 (long Bybit perp + short spot after a Bybit settlement <= threshold, 48 h) survived round 1 but
+its edge depends on spot borrow that is least available on squeezed coins. Replace the borrowed spot short
+with a SHORT PERP ON ANOTHER VENUE (no borrow). P&L = Bybit funding received - hedge-venue funding paid
+(or + received) + cross-venue perp basis change - costs. Does it pay out of sample?
+
+------------------------------------------------------------------------------------------------
+DATA
+ Bybit: round 1's year (2025-10-01 .. 2026-10-09) of public history, 791 USDT linear perps trading on
+ 2026-10-09: settled funding with actual timestamps, 1h klines (OHLC). Reused, not refetched.
+ Hedge venues (USDT-margined linear perps, public endpoints only), fetched after this file is committed,
+ for every coin with at least one Bybit settlement <= -0.08 % in the year:
+   Binance fapi  /fapi/v1/fundingRate (full year available), /fapi/v1/klines 1h
+   Gate          /api/v4/futures/usdt/funding_rate (API serves only the last 180 days), candlesticks 1h
+   OKX           /api/v5/public/funding-rate-history (API serves only the last ~3 months), history-candles 1H
+   Bitget        /api/v2/mix/market/history-fund-rate (API serves ~270 settlements), history-candles 1H
+ Coin mapping: base coin with any 1000/10000/100000/1000000 (and Binance/Bitget/Gate "1000"-style) prefix
+ removed on every venue; returns are used, never price levels, so multipliers cancel.
+ POINT-IN-TIME VENUE SET. A venue is eligible for an episode only if, at entry E, it has (a) a 1h kline
+ ending at E and (b) a settled funding record within the 9 h before E in the fetched history. Because of the
+ API history limits, train is in practice Binance(+Gate from ~2026-04) only, holdout adds OKX/Bitget from
+ ~2026-07. This is a data limit, not a choice made on returns; it can only make train harder. Reported:
+ the venue mix per split and a Binance-only reference (not counted in m).
+ Order books: full public depth today, one fetch per (coin, venue) for Bybit linear and each hedge venue
+ that hedges at least one episode, applied to every past episode (method of round 1's check / shb).
+ Survivorship: delisted Bybit perps absent (as rounds 1-3); coins delisted from a hedge venue are absent
+ from that venue's eligibility (they have no history) — excluded and counted.
+
+SPLIT BY TIME: TRAIN 2025-10-01 .. 2026-05-31, HOLDOUT 2026-06-01 .. 2026-10-09 (by Bybit settlement time).
+ Holdout evaluated once, only for cells that pass train, rule frozen. Holdouts of train failures may be
+ computed afterwards for the record only.
+
+EPISODE RULE (per cell, per Bybit symbol, no new entry before the previous exit)
+ Signal: Bybit settlement S with raw settled rate <= X (rate per settlement, as H1 used it).
+   X in {-0.08 %, -0.15 %}.
+ Entry E = S + 1h. Long Bybit perp at the close of the 1h bar ending at E; short the hedge-venue perp at the
+   close of its 1h bar ending at E; equal USD notional.
+ Hedge venue: among eligible venues, the one whose last settled rate at or before E, normalised per 8 h
+   (rate x 8 / that venue's current interval = gap between its last two settlements, clipped to [1, 8] h),
+   is highest (least negative / most positive). Ties: Binance, OKX, Bitget, Gate. No eligible venue = no
+   episode (counted).
+ Exit (3 rules):
+   F24  fixed: exit at E + 24 h.
+   F48  fixed: exit at E + 48 h.
+   CONV convergence: at each Bybit settlement t in (E, E + 96 h], compare Bybit's settled rate per 8 h with
+        the hedge venue's last settled rate (<= t) per 8 h; at the first t where Bybit's is HIGHER, exit at
+        the close of the bars ending at ceil_hour(t) + 1 h; else exit at E + 96 h.
+ => 2 thresholds x 3 exits = 6 cells. m for this round = 6.
+
+P&L per episode (bps of ONE leg's notional N)
+ funding  = - sum of Bybit settled rates over Bybit settlements in (E, X]
+            + sum of hedge-venue settled rates over hedge settlements in (E, X],
+            each times that venue's price at the settlement (close of the 1h bar ending at ceil_hour(t)) /
+            that venue's entry price (mark-to-market notional). Each venue's own timestamps and own
+            interval; every raw settlement counted once; interval changes handled by summing raw rates.
+ basis    = (Bybit exit/Bybit entry - 1) - (hedge exit/hedge entry - 1).
+ cost     = 4 perp taker fees at VIP0: Bybit 5.5 bps x2 + hedge venue x2 (Binance 5.0, OKX 5.0,
+            Bitget 6.0, Gate 5.0 bps), plus the four walked fills against mid on today's books at $500
+            per leg (Bybit buy + sell, hedge sell + buy). Missing book on either side = excluded, counted.
+ net      = funding + basis - cost. No borrow. No financing charge on margin.
+
+CAPITAL (reported for every cell; decision on the first item below)
+ - Unlevered: collateral N on each venue, capital 2N -> return on capital = net / 2.
+ - Leverage L in {3, 5} per leg, isolated margin N/L on each venue, capital 2N/L ->
+   return on capital = net_L x L / 2, where net_L is the liquidation-adjusted net:
+   a leg is liquidated at the first hour in which its adverse move from entry (Bybit long: 1h low;
+   hedge short: 1h high) reaches 1/L - 1 % (maintenance margin 1 %). Then: that leg loses its whole
+   margin (-1/L of N), the other leg is closed at that hour's close (with its exit walk and fee), funding
+   counts only settlements up to that hour, the episode ends. No top-ups.
+
+STATISTICS
+ Per cell: n, mean net, median, 5 %-trimmed mean, t clustered by ISO week (primary) and by day.
+ Train pass: mean net > 0 and week-clustered t >= 2.
+ Holdout success requires ALL of:
+   (1) mean net > 0 and week-clustered t >= 2;
+   (2) Benjamini-Yekutieli q <= 0.05 over the whole programme: m = 38 (round 1) + 29 (round 2) + 18
+       (round 3) + 6 (this round) = 91. One-sided holdout p from the week-clustered t (Student t, G-1 df).
+       Prior rounds' p-values: H1 holdout p as reported, every other prior hypothesis p = 1;
+   (3) mean liquidation-adjusted net at 3x leverage > 0 (the design must be deployable at 3x).
+ Reported for every cell (not decision rules): excluding the top 5 % of episodes, cost at $5k per leg,
+ fees x2, top-5-coin / top-10-day share of PnL, holdout by month, hedge-venue mix, funding vs basis split.
+
+BASIS / SQUEEZE RISK (descriptive, every episode)
+ - entry basis = Bybit/hedge price ratio at E (prefix-normalised), Bybit premium index at S;
+ - within the hold, hourly: worst basis mark (min over hours of the basis P&L on closes), worst intrabar
+   bound ((Bybit low/entry - 1) - (hedge high/entry - 1)), worst position mark (basis + funding accrued);
+ - share of episodes in which either leg would be liquidated at 3x / 5x (rule above), and per leg.
+
+IMPLEMENTATION RULE. If a cell survives, no new module: the result is mapped onto parameter/universe
+changes of the existing xexch_funding_arb (services/strategy/src/strategy/modules/crypto/), routed by the
+main session. If nothing survives, the negatives are written up.
+
+------------------------------------------------------------------------------------------------
+LOG
